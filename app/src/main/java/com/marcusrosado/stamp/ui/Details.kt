@@ -91,7 +91,7 @@ class DetailActions(
     /** Flies the map to a city or pin, close enough to see its outline. */
     val onShowOnMap: (lat: Double, lon: Double) -> Unit,
     val onStopDates: (tripId: String, place: String, arrived: PartialDate?, left: PartialDate?) -> Unit,
-    val onMoveStop: (tripId: String, place: String, by: Int) -> Unit,
+    val onStopOrder: (tripId: String, cities: List<String>) -> Unit,
     val onLeg: (tripId: String, from: String, to: String, steps: List<com.marcusrosado.stamp.data.Step>, around: Boolean) -> Unit,
     val onTripStart: (tripId: String, place: String?) -> Unit = { _, _ -> },
     val onAddDayPlace: (tripId: String, stop: String, place: String) -> Unit = { _, _, _ -> },

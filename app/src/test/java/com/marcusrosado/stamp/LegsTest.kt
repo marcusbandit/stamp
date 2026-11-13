@@ -47,7 +47,7 @@ class LegsTest {
         for (c in listOf("tokyo", "osaka", "kyoto")) s.addCity("JPN", id, c)
         s.setLeg(id, "tokyo", "osaka", listOf(Step(Travel.Train)))
         s.setLeg(id, "osaka", "kyoto", listOf(Step(Travel.Walk)))
-        s.moveStop(id, "kyoto", -1) // tokyo, kyoto, osaka
+        s.setStopOrder(id, listOf("tokyo", "kyoto", "osaka"))
         val t = trip(store())
         assertTrue(t.legs.isEmpty())
     }

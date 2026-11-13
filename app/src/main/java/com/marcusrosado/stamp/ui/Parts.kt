@@ -256,7 +256,7 @@ fun CountryDetail(
             actions = TimelineActions(
                 onDates = { actions.onUpdateTrip(it) },
                 onStopDates = { p, a, l -> actions.onStopDates(tripId, p, a, l) },
-                onMove = { p, by -> actions.onMoveStop(tripId, p, by) },
+                onStopOrder = { actions.onStopOrder(tripId, it) },
                 onLeg = { from, to, steps, around -> actions.onLeg(tripId, from, to, steps, around) },
                 onStart = { actions.onTripStart(tripId, it) },
                 onEnd = { actions.onTripEnd(tripId, it) },

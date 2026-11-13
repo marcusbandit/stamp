@@ -18,6 +18,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -50,11 +51,9 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Hotel
-import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.SubdirectoryArrowRight
 import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.AddAPhoto
@@ -120,7 +119,8 @@ import java.time.ZoneId
 class TimelineActions(
     val onDates: (Trip) -> Unit,
     val onStopDates: (place: String, arrived: PartialDate?, left: PartialDate?) -> Unit,
-    val onMove: (place: String, by: Int) -> Unit,
+    /** Puts the trip's stops in a new order. */
+    val onStopOrder: (cities: List<String>) -> Unit,
     /** Sets how the user went from one stop to the next, and a flight's airports; no ways clears it. */
     val onLeg: (from: String, to: String, steps: List<com.marcusrosado.stamp.data.Step>, around: Boolean) -> Unit,
     /** Sets where the trip set out from, a city or pin id; null is home. */
@@ -197,6 +197,9 @@ fun VisitTimeline(
     var leg by remember { mutableStateOf<Pair<String, String>?>(null) }
     // Where the trip set out from or went back to, being picked: true for the start.
     var pickingEnd by remember { mutableStateOf<Boolean?>(null) }
+    // The stops being put in order.
+    var ordering by remember { mutableStateOf(false) }
+    val haptics = androidx.compose.ui.platform.LocalHapticFeedback.current
     val journey = LocalJourney.current
     // A visit is a journey from somewhere and back; a stay is where the user lived.
     val journeyed = !lived
@@ -306,7 +309,14 @@ fun VisitTimeline(
                             val bed = trip.bedOf(place)
                             val own = placeIdOf(place)
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Column(Modifier.weight(1f).clip(RoundedCornerShape(12.dp)).clickable { actions.onOpenPlace(place) }) {
+                                // Pressed and held, a trip's stop lifts into the list that puts them in order.
+                                val canOrder = !lived && trip.cities.size > 1
+                                Column(
+                                    Modifier.weight(1f).clip(RoundedCornerShape(12.dp)).combinedClickable(
+                                        onClick = { actions.onOpenPlace(place) },
+                                        onLongClick = if (canOrder) ({ haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress); ordering = true }) else null,
+                                    ),
+                                ) {
                                     Text(
                                         info?.name ?: "Unknown place",
                                         style = MaterialTheme.typography.titleLarge,
@@ -319,12 +329,10 @@ fun VisitTimeline(
                                 // Where the user slept, once the stop has other places to choose from.
                                 if (days.isNotEmpty()) BedButton(slept = bed == own, onClick = { actions.onSlept(place, own) })
                                 // Homes keep the order they were moved into; only a trip's stops move.
-                                if (!lived && trip.cities.size > 1) {
-                                    StopMenu(
-                                        canEarlier = i > 0,
-                                        canLater = i < trip.cities.size - 1,
-                                        onMove = { by -> actions.onMove(place, by) },
-                                    )
+                                if (canOrder) {
+                                    IconButton(onClick = { ordering = true }, modifier = Modifier.size(40.dp)) {
+                                        Icon(Icons.Filled.DragHandle, contentDescription = "Reorder stops", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
                                 }
                             }
                             days.forEach { d ->
@@ -476,6 +484,14 @@ fun VisitTimeline(
                 onDismiss = { leg = null },
                 fromHome = from == com.marcusrosado.stamp.data.Leg.START && trip.start == null && journey.homeFor(trip) != null,
                 toHome = to == com.marcusrosado.stamp.data.Leg.END && trip.end == null && journey.homeAtEnd(trip) != null,
+            )
+        }
+        if (ordering) {
+            val cities = trip.cities
+            StopOrderDialog(
+                names = cities.map { placeOf(it, visit, places)?.name ?: journey.place(it)?.name ?: "Unknown place" },
+                onDone = { order -> actions.onStopOrder(order.map { cities[it] }); ordering = false },
+                onDismiss = { ordering = false },
             )
         }
         pickingEnd?.let { start ->
@@ -697,28 +713,6 @@ private fun BedButton(slept: Boolean, onClick: () -> Unit) {
 }
 
 /** Moving a stop earlier or later, kept in a menu so the stops themselves stay calm. */
-@Composable
-private fun StopMenu(canEarlier: Boolean, canLater: Boolean, onMove: (Int) -> Unit) {
-    var open by remember { mutableStateOf(false) }
-    Box {
-        IconButton(onClick = { open = true }, modifier = Modifier.size(36.dp)) {
-            Icon(Icons.Filled.MoreVert, contentDescription = "Move this stop", tint = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        androidx.compose.material3.DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            androidx.compose.material3.DropdownMenuItem(
-                text = { Text("Move earlier") }, enabled = canEarlier,
-                leadingIcon = { Icon(Icons.Filled.KeyboardArrowUp, contentDescription = null) },
-                onClick = { open = false; onMove(-1) },
-            )
-            androidx.compose.material3.DropdownMenuItem(
-                text = { Text("Move later") }, enabled = canLater,
-                leadingIcon = { Icon(Icons.Filled.KeyboardArrowDown, contentDescription = null) },
-                onClick = { open = false; onMove(1) },
-            )
-        }
-    }
-}
-
 /** The small things a stop can still take, as quiet chips rather than empty tiles. */
 @Composable
 private fun QuietActions(memory: (() -> Unit)?, dayTrip: (() -> Unit)?) {
