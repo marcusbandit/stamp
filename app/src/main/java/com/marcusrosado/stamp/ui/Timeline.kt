@@ -88,6 +88,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -269,7 +271,7 @@ fun VisitTimeline(
                         icon = { Icon(if (lived) Icons.Outlined.Home else Icons.Outlined.Flight, contentDescription = null, modifier = Modifier.size(18.dp)) },
                         first = true,
                         last = false,
-                        lit = reachedAt >= 0,
+                        lit = reachedAt >= 1,
                     ) {
                         if (journeyed) {
                             PlaceLine(
@@ -278,14 +280,19 @@ fun VisitTimeline(
                                 onClick = { pickingEnd = true },
                             )
                         }
-                        DateLine(
-                            label = if (lived) trip.date?.let { "Moved here · ${it.label}" } ?: "When did you move here?"
-                                else trip.date?.let { "Arrived in ${country.name} · ${it.label}" } ?: "When did you get there?",
-                            muted = trip.date == null,
-                            onClick = { editingDates = true },
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            DateLine(
+                                label = if (lived) trip.date?.let { "Moved here · ${it.label}" } ?: "When did you move here?"
+                                    else trip.date?.let { "Arrived in ${country.name} · ${it.label}" } ?: "When did you get there?",
+                                muted = trip.date == null,
+                                onClick = { editingDates = true },
+                            )
+                            if (loose.isEmpty()) {
+                                Spacer(Modifier.width(8.dp))
+                                Bubble(Icons.Outlined.AddAPhoto, "Add a memory") { adding = "" }
+                            }
+                        }
                         MemoryRow(loose, onOpen = { viewing = it }, onAdd = { adding = "" })
-                        if (loose.isEmpty()) QuietActions(memory = { adding = "" }, dayTrip = null)
                     }
                 }
                 if (journeyed && trip.cities.isNotEmpty()) {
@@ -303,7 +310,8 @@ fun VisitTimeline(
                             first = false,
                             last = false,
                             accent = true,
-                            lit = reachedAt >= i + 1,
+                            lit = reachedAt >= i + 2,
+                            reached = reachedAt >= i + 1,
                         ) {
                             val days = trip.dayPlaces[place].orEmpty()
                             val bed = trip.bedOf(place)
@@ -344,14 +352,16 @@ fun VisitTimeline(
                                     onRemove = { actions.onRemoveDayPlace(place, d) },
                                 )
                             }
-                            Spacer(Modifier.height(8.dp))
-                            StopDatesPill(from, to, onClick = { stopDates = place })
+                            Spacer(Modifier.height(6.dp))
                             val kept = trip.memories.filter { it.place == place }
+                            // The dates, and beside them what the stop can still take, so a stop
+                            // with nothing more said is three short lines.
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                StopDatesPill(from, to, onClick = { stopDates = place })
+                                if (kept.isEmpty()) Bubble(Icons.Outlined.AddAPhoto, "Add a memory") { adding = place }
+                                if (!lived) Bubble(Icons.Filled.SubdirectoryArrowRight, "Add a day trip") { actions.onAddDayPlace(place) }
+                            }
                             MemoryRow(kept, onOpen = { viewing = it }, onAdd = { adding = place })
-                            QuietActions(
-                                memory = if (kept.isEmpty()) ({ adding = place }) else null,
-                                dayTrip = if (!lived) ({ actions.onAddDayPlace(place) }) else null,
-                            )
                         }
                     }
                     if (!lived) stops.getOrNull(i + 1)?.let { next ->
@@ -385,6 +395,7 @@ fun VisitTimeline(
                         icon = { Icon(Icons.Outlined.Home, contentDescription = null, modifier = Modifier.size(18.dp)) },
                         first = false,
                         last = true,
+                        reached = reachedAt >= order.size - 1,
                     ) {
                         if (journeyed) {
                             PlaceLine(
@@ -615,36 +626,35 @@ private fun Node(
     faint: Boolean = false,
     /** The journey has passed this node: the line on to the next one takes the accent. */
     lit: Boolean = false,
+    /** The journey has come this far: the line in from above takes the accent down to the node. */
+    reached: Boolean = lit,
     content: @Composable () -> Unit,
 ) {
     val line = MaterialTheme.colorScheme.outlineVariant
-    // Reached, the line on to the next stop draws in from the node downward.
-    val drawn by androidx.compose.animation.core.animateFloatAsState(
-        if (lit) 1f else 0f, androidx.compose.animation.core.tween(520, easing = androidx.compose.animation.core.FastOutSlowInEasing), label = "line",
-    )
+    // The accent draws on downward as the journey reaches the node and passes it, in step
+    // with the legs between, so it reads as one line from the start to where the user is.
+    val spec = androidx.compose.animation.core.tween<Float>(420, easing = androidx.compose.animation.core.FastOutSlowInEasing)
+    val inDrawn by androidx.compose.animation.core.animateFloatAsState(if (reached) 1f else 0f, spec, label = "in")
+    val outDrawn by androidx.compose.animation.core.animateFloatAsState(if (lit) 1f else 0f, spec, label = "out")
     val primary = MaterialTheme.colorScheme.primary
+    val dot = if (accent) 32.dp else 28.dp
     Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min).padding(start = 20.dp, end = 16.dp)) {
-        Box(Modifier.width(40.dp).fillMaxHeight(), contentAlignment = Alignment.TopCenter) {
-            Box(
-                Modifier
-                    .padding(top = if (first) 22.dp else 0.dp)
-                    .width(2.dp)
-                    .fillMaxHeight(if (last) 0.05f else 1f)
-                    .background(line),
-            )
-            if (drawn > 0f && !last) {
-                Box(
-                    Modifier
-                        .padding(top = if (first) 22.dp else 0.dp)
-                        .width(3.dp)
-                        .fillMaxHeight(drawn)
-                        .background(primary),
-                )
-            }
+        Box(
+            Modifier.width(40.dp).fillMaxHeight().drawBehind {
+                val x = size.width / 2
+                val center = 8.dp.toPx() + dot.toPx() / 2
+                val top = if (first) center else 0f
+                val bottom = if (last) center else size.height
+                drawLine(line, Offset(x, top), Offset(x, bottom), strokeWidth = 2.dp.toPx())
+                if (!first && inDrawn > 0f) drawLine(primary, Offset(x, 0f), Offset(x, center * inDrawn), strokeWidth = 3.dp.toPx())
+                if (!last && outDrawn > 0f) drawLine(primary, Offset(x, center), Offset(x, center + (size.height - center) * outDrawn), strokeWidth = 3.dp.toPx())
+            },
+            contentAlignment = Alignment.TopCenter,
+        ) {
             Box(
                 Modifier
                     .padding(top = 8.dp)
-                    .size(if (accent) 32.dp else 28.dp)
+                    .size(dot)
                     .clip(CircleShape)
                     .background(if (accent) primary else MaterialTheme.colorScheme.surfaceContainerHighest)
                     .border(2.dp, if (faint) line else MaterialTheme.colorScheme.surface, CircleShape),
@@ -657,7 +667,7 @@ private fun Node(
             }
         }
         Spacer(Modifier.width(12.dp))
-        Column(Modifier.weight(1f).padding(top = 8.dp, bottom = 20.dp)) { content() }
+        Column(Modifier.weight(1f).padding(top = 8.dp, bottom = 14.dp)) { content() }
     }
 }
 
@@ -715,26 +725,16 @@ private fun BedButton(slept: Boolean, onClick: () -> Unit) {
 /** Moving a stop earlier or later, kept in a menu so the stops themselves stay calm. */
 /** The small things a stop can still take, as quiet chips rather than empty tiles. */
 @Composable
-private fun QuietActions(memory: (() -> Unit)?, dayTrip: (() -> Unit)?) {
-    if (memory == null && dayTrip == null) return
-    Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        memory?.let { QuietChip(Icons.Outlined.AddAPhoto, "Memory", it) }
-        dayTrip?.let { QuietChip(Icons.Filled.SubdirectoryArrowRight, "Day trip", it) }
-    }
-}
-
-@Composable
-private fun QuietChip(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit) {
+private fun Bubble(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit) {
     Surface(
         onClick = onClick,
-        shape = RoundedCornerShape(50),
+        shape = CircleShape,
         color = MaterialTheme.colorScheme.surface,
         border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        modifier = Modifier.size(36.dp),
     ) {
-        Row(Modifier.padding(horizontal = 12.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(icon, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
-            Spacer(Modifier.width(6.dp))
-            Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface)
+        Box(contentAlignment = Alignment.Center) {
+            Icon(icon, contentDescription = label, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
         }
     }
 }

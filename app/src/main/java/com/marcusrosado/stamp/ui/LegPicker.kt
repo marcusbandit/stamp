@@ -8,10 +8,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -63,14 +61,22 @@ import com.marcusrosado.stamp.data.Travel
  */
 @Composable
 fun LegLine(leg: Leg?, stops: List<String?>, question: String, where: String, lit: Boolean, onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min).padding(start = 20.dp, end = 16.dp)) {
-        Box(Modifier.width(40.dp).fillMaxHeight(), contentAlignment = Alignment.TopCenter) {
-            Box(
-                Modifier.width(if (lit) 3.dp else 2.dp).fillMaxHeight()
-                    .background(if (lit) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant),
-            )
-        }
-        Spacer(Modifier.width(12.dp))
+    // Drawn down from the stop above as the journey reaches the stop below, like the stops' own lines.
+    val drawn by androidx.compose.animation.core.animateFloatAsState(
+        if (lit) 1f else 0f,
+        androidx.compose.animation.core.tween(420, easing = androidx.compose.animation.core.FastOutSlowInEasing),
+        label = "leg",
+    )
+    val line = MaterialTheme.colorScheme.outlineVariant
+    val primary = MaterialTheme.colorScheme.primary
+    Row(
+        Modifier.fillMaxWidth().padding(start = 20.dp, end = 16.dp).drawBehind {
+            val x = 20.dp.toPx()
+            drawLine(line, Offset(x, 0f), Offset(x, size.height), strokeWidth = 2.dp.toPx())
+            if (drawn > 0f) drawLine(primary, Offset(x, 0f), Offset(x, size.height * drawn), strokeWidth = 3.dp.toPx())
+        },
+    ) {
+        Spacer(Modifier.width(52.dp))
         Column(
             Modifier.weight(1f).padding(bottom = 12.dp).clip(RoundedCornerShape(12.dp)).clickable(onClick = onClick)
                 .padding(horizontal = 8.dp, vertical = 6.dp),
