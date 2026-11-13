@@ -93,8 +93,11 @@ fun WorldMap(
      */
     coveredEnd: androidx.compose.ui.unit.Dp = androidx.compose.ui.unit.Dp(0f),
     coveredBottom: androidx.compose.ui.unit.Dp = androidx.compose.ui.unit.Dp(0f),
-    /** Opens the trips on a tapped line; null leaves lines to taps on the country under them. */
-    onRoute: ((List<String>) -> Unit)? = null,
+    /**
+     * Opens what a tapped line is: each trip on it with the leg it draws, as trip id and the
+     * leg's two ends; null leaves lines to taps on the country under them.
+     */
+    onRoute: ((List<Triple<String, String, String>>) -> Unit)? = null,
     /** False while a page covers the whole map: its icons stop gliding until it shows again. */
     animate: Boolean = true,
 ) {
@@ -125,7 +128,7 @@ fun WorldMap(
             var beforeTap: String? = null
             // Trips on a line just tapped, opened once the tap is sure not to be the first of a
             // double tap, which means zoom.
-            var tappedTrips: List<String>? = null
+            var tappedTrips: List<Triple<String, String, String>>? = null
             val taps = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
                 override fun onDown(e: MotionEvent): Boolean {
                     // A finger that stops a fling or a fly-to is not choosing a country.
@@ -145,7 +148,8 @@ fun WorldMap(
                         val box = android.graphics.RectF(e.x - slack, e.y - slack, e.x + slack, e.y + slack)
                         val trips = m.queryRenderedFeatures(box, *ROUTE_LAYERS.filter { it != "route-icons" }.toTypedArray())
                             .flatMap { f -> f.getStringProperty("trips")?.split(',').orEmpty() }
-                            .filter { it.isNotEmpty() }.distinct()
+                            .mapNotNull { e -> e.split('|').takeIf { it.size == 3 && it[0].isNotEmpty() }?.let { Triple(it[0], it[1], it[2]) } }
+                            .distinct()
                         if (trips.isNotEmpty()) { tappedTrips = trips; return false }
                     }
                     // Both fills, since only one of them draws away from the switch-over zoom.

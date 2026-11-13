@@ -450,19 +450,27 @@ private fun StampMap(
     animate: Boolean = true,
 ) {
     val selected = state.selected
-    // Several trips on the tapped line, such as every trip out of the home town: a short list.
-    var choosing by remember { mutableStateOf<List<String>?>(null) }
-    choosing?.let { ids ->
+    // A tapped line opens the picker for the leg it draws, right over the map: no country
+    // picked, no trip opened, and closing it leaves the map as it was. A line several trips
+    // share, such as the way out of the home town, asks which trip first.
+    var choosing by remember { mutableStateOf<List<Triple<String, String, String>>?>(null) }
+    var editing by remember { mutableStateOf<Triple<String, String, String>?>(null) }
+    val journey = LocalJourney.current
+    fun open(entry: Triple<String, String, String>) {
+        if (entry.second.isEmpty()) state.onOpenTrip(entry.first) else editing = entry
+    }
+    choosing?.let { entries ->
         SeamAlertDialog(
             onDismissRequest = { choosing = null },
             title = { Text("Which trip?") },
             text = {
                 Column {
-                    ids.mapNotNull { id -> state.trips.firstOrNull { it.id == id } }.forEach { t ->
+                    entries.forEach { e ->
+                        val t = state.trips.firstOrNull { it.id == e.first } ?: return@forEach
                         val where = t.lands.mapNotNull { state.atlas.byId[it]?.name }.distinct().joinToString("  →  ")
                         Row(
                             Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
-                                .clickable { choosing = null; state.onOpenTrip(t.id) }.padding(vertical = 10.dp, horizontal = 4.dp),
+                                .clickable { choosing = null; open(e) }.padding(vertical = 10.dp, horizontal = 4.dp),
                         ) {
                             Column {
                                 Text(where.ifEmpty { "A trip" }, style = MaterialTheme.typography.bodyLarge)
@@ -477,9 +485,34 @@ private fun StampMap(
             confirmButton = { androidx.compose.material3.TextButton(onClick = { choosing = null }) { Text("Cancel") } },
         )
     }
+    editing?.let { (tripId, from, to) ->
+        val visit = journey.visits.values.firstOrNull { v -> v.trips.any { it.id == tripId } }
+        val trip = visit?.trips?.firstOrNull { it.id == tripId }
+        if (trip == null) { editing = null; return@let }
+        val leg = trip.legBetween(from, to)
+        val a = journey.endPoint(trip, visit, from)
+        val b = journey.endPoint(trip, visit, to)
+        LegPicker(
+            fromName = a?.name ?: "Home",
+            toName = b?.name ?: "Home",
+            from = a?.let { it.lat to it.lon },
+            to = b?.let { it.lat to it.lon },
+            initial = leg?.ways.orEmpty(),
+            initialVia = leg?.via.orEmpty(),
+            airports = journey.airports,
+            onDone = { ways, via, around -> state.details.onLeg(tripId, from, to, ways, via, around); editing = null },
+            onDismiss = { editing = null },
+            fromHome = from == com.marcusrosado.stamp.data.Leg.START && trip.start == null && journey.homeFor(trip) != null,
+            toHome = to == com.marcusrosado.stamp.data.Leg.END && trip.end == null && journey.homeAtEnd(trip) != null,
+            initialAround = leg?.around == true,
+        )
+    }
     WorldMap(
         animate = animate,
-        onRoute = if (selectable) { trips -> if (trips.size == 1) state.onOpenTrip(trips[0]) else choosing = trips } else null,
+        onRoute = if (selectable) { entries ->
+            // One line, one trip: straight to its leg. Several trips on it: ask which.
+            if (entries.map { it.first }.distinct().size == 1) open(entries.first()) else choosing = entries.distinctBy { it.first }
+        } else null,
         atlas = state.atlas,
         visits = state.visits,
         showRoutes = state.routes,
