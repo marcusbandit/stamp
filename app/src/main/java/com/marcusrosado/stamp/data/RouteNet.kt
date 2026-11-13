@@ -55,7 +55,9 @@ class RouteNet private constructor(
         cache[key]?.let { return it.ifEmpty { null } }
         // A way far longer than the stops are apart is a detour to some distant line, not the
         // line the user took: the leg stays straight.
-        val found = route(kind, from, to)?.takeIf { line ->
+        // A network too big for the memory left, or anything else gone wrong, leaves the leg
+        // straight rather than taking the app down.
+        val found = runCatching { route(kind, from, to) }.getOrNull()?.takeIf { line ->
             val crow = Distance.km(from, to)
             var along = 0.0
             for (i in 1 until line.size) along += Distance.km(line[i - 1], line[i])
@@ -116,49 +118,71 @@ class RouteNet private constructor(
     private fun transfers(kind: Byte): Triple<IntArray, IntArray, FloatArray> = transferCache.getOrPut(kind) {
         // Roads join up through their own slip roads; only rail needs changes of line.
         if (kind != RAIL) return@getOrPut Triple(IntArray(nodeLat.size + 1), IntArray(0), FloatArray(0))
+        // Only between pieces of track the data leaves apart, and to the nearest junction of
+        // each other piece: a station, not every pair of points along two parallel lines.
+        val base = lines(kind)
         val cell = 1_000 // 0.01 degrees, about a kilometre
         fun key(y: Int, x: Int) = (y.toLong() shl 32) or (x.toLong() and 0xFFFFFFFFL)
-        val grid = HashMap<Long, MutableList<Int>>()
-        for (i in nodeLat.indices) if (on(kind, i)) grid.getOrPut(key(nodeLat[i] / cell, nodeLon[i] / cell)) { ArrayList() } += i
-        val pairs = ArrayList<Long>()
-        val costs = ArrayList<Float>()
+        val grid = HashMap<Long, IntArray>()
+        run {
+            val lists = HashMap<Long, MutableList<Int>>()
+            for (i in nodeLat.indices) if (on(kind, i)) lists.getOrPut(key(nodeLat[i] / cell, nodeLon[i] / cell)) { ArrayList() } += i
+            for ((k, v) in lists) grid[k] = v.toIntArray()
+        }
+        var from = IntArray(1024); var to = IntArray(1024); var cost = FloatArray(1024); var count = 0
+        val nearestOf = HashMap<Int, Int>()
         for (i in nodeLat.indices) {
             if (!on(kind, i)) continue
+            nearestOf.clear()
             val cy = nodeLat[i] / cell
             val cx = nodeLon[i] / cell
-            // A degree of longitude shrinks towards the poles: look as many cells sideways as
-            // the same distance takes.
             val wide = lonCells(1, nodeLat[i])
             for (dy in -1..1) for (dx in -wide..wide) {
                 val list = grid[key(cy + dy, cx + dx)] ?: continue
                 for (j in list) {
-                    if (j == i || linked(kind, i, j)) continue
+                    if (base[j] == base[i]) continue
                     val d = km(nodeLat[i], nodeLon[i], nodeLat[j], nodeLon[j])
-                    if (d < 0.8) { pairs += (i.toLong() shl 32) or j.toLong(); costs += (d * 2 + 0.5).toFloat() }
+                    if (d >= 0.8) continue
+                    val had = nearestOf[base[j]]
+                    if (had == null || d < km(nodeLat[i], nodeLon[i], nodeLat[had], nodeLon[had])) nearestOf[base[j]] = j
                 }
+            }
+            for (j in nearestOf.values) {
+                if (count == from.size) { from = from.copyOf(count * 2); to = to.copyOf(count * 2); cost = cost.copyOf(count * 2) }
+                from[count] = i; to[count] = j
+                cost[count] = (km(nodeLat[i], nodeLon[i], nodeLat[j], nodeLon[j]) * 2 + 0.5).toFloat()
+                count++
             }
         }
         val start = IntArray(nodeLat.size + 1)
-        for (p in pairs) start[(p ushr 32).toInt() + 1]++
+        for (k in 0 until count) start[from[k] + 1]++
         for (i in 1 until start.size) start[i] += start[i - 1]
-        val to = IntArray(pairs.size)
-        val cost = FloatArray(pairs.size)
+        val outTo = IntArray(count)
+        val outCost = FloatArray(count)
         val fill = start.copyOf()
-        pairs.forEachIndexed { k, p ->
-            val at = fill[(p ushr 32).toInt()]++
-            to[at] = (p and 0xFFFFFFFFL).toInt()
-            cost[at] = costs[k]
+        for (k in 0 until count) {
+            val at = fill[from[k]]++
+            outTo[at] = to[k]; outCost[at] = cost[k]
         }
-        Triple(start, to, cost)
+        Triple(start, outTo, outCost)
     }
 
-    /** Whether one segment of [kind] runs straight between junctions [i] and [j]. */
-    private fun linked(kind: Byte, i: Int, j: Int): Boolean {
-        for (k in adjStart[i] until adjStart[i + 1]) {
-            val s = adj[k]
-            if (segKind[s] == kind && (segA[s] == j || segB[s] == j)) return true
+    /** Each junction's piece of track joined by segments alone, before any change of line. */
+    private val lineCache = HashMap<Byte, IntArray>()
+
+    private fun lines(kind: Byte): IntArray = lineCache.getOrPut(kind) {
+        val up = IntArray(nodeLat.size) { it }
+        fun find(i: Int): Int {
+            var r = i
+            while (up[r] != r) { up[r] = up[up[r]]; r = up[r] }
+            return r
         }
-        return false
+        for (s in segA.indices) {
+            if (segKind[s] != kind) continue
+            val ra = find(segA[s]); val rb = find(segB[s])
+            if (ra != rb) up[ra] = rb
+        }
+        IntArray(nodeLat.size) { find(it) }
     }
 
     /**
