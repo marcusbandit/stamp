@@ -1,6 +1,7 @@
 package com.marcusrosado.stamp
 
 import com.marcusrosado.stamp.data.Leg
+import com.marcusrosado.stamp.data.Step
 import com.marcusrosado.stamp.data.Travel
 import com.marcusrosado.stamp.data.TravelState
 import com.marcusrosado.stamp.data.VisitStore
@@ -25,8 +26,8 @@ class StopsTest {
         assertEquals(4, stops.size)
         assertEquals(listOf("tokyo", "sapporo", "sendai", "tokyo"), stops.map(::placeIdOf))
         val back = stops.last()
-        s.setLeg(id, "sendai", back, listOf(Travel.Train))
-        s.setLeg(id, back, Leg.END, listOf(Travel.Plane))
+        s.setLeg(id, "sendai", back, listOf(Step(Travel.Train)))
+        s.setLeg(id, back, Leg.END, listOf(Step(Travel.Plane)))
         val t = trip(store())
         assertEquals(stops, t.cities)
         assertEquals(listOf(Travel.Train), t.waysBetween("sendai", back))

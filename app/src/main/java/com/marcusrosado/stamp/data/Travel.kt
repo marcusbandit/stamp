@@ -23,28 +23,74 @@ enum class Travel(val key: String, val label: String) {
 }
 
 /**
- * How the user got from stop [from] to stop [to] of a trip. Only a leg between two stops that
- * follow each other counts; one left behind by a reorder is dropped when the trip is saved.
- * [from] is [START] for the way there from where the trip set out, and [to] is [END] for the
- * way home.
+ * One stretch of a leg: how it went, or null when the user has not said, and where it ended. [to]
+ * is an airport as "apt:" and its code, or a city or pin id; null is the leg's own end, or, for
+ * a step inside a leg saved before stops could be named, somewhere along the way.
+ */
+data class Step(val way: Travel?, val to: String? = null) {
+    companion object {
+        const val AIRPORT = "apt:"
+        fun airport(code: String) = AIRPORT + code.uppercase()
+        /** The IATA code of an airport stop, or null for any other stop. */
+        fun codeOf(stop: String?): String? = stop?.takeIf { it.startsWith(AIRPORT) }?.removePrefix(AIRPORT)
+    }
+}
+
+/**
+ * How the user got from stop [from] to stop [to] of a trip, as the [steps] it took in order:
+ * a train to the airport, a flight to another, a train on to the town. Only a leg between two
+ * stops that follow each other counts; one left behind by a reorder is dropped when the trip is
+ * saved. [from] is [START] for the way there from where the trip set out, and [to] is [END] for
+ * the way home.
  */
 data class Leg(
     val from: String,
     val to: String,
-    val ways: List<Travel>,
-    /**
-     * The airports a flight went through, by IATA code: where it took off, any layovers, and
-     * where it landed. Ghost points: they draw the line and mark nothing.
-     */
-    val via: List<String> = emptyList(),
-    /** The flight went the long way round the globe, as said where it could have gone either way. */
+    val steps: List<Step>,
+    /** The longest flight went the long way round the globe, as said where it could have gone either way. */
     val around: Boolean = false,
 ) {
+    /** Every way the leg was taken, once each, in the order first taken. */
+    val ways: List<Travel> get() = steps.mapNotNull { it.way }.distinct()
+
+    /** The ways in order as told, a way taken twice in a row once. */
+    val told: List<Travel> get() = steps.mapNotNull { it.way }.fold(emptyList()) { acc, w -> if (acc.lastOrNull() == w) acc else acc + w }
+
     companion object {
         /** Where a trip set out from, as the start of its first leg. */
         const val START = "@start"
         /** Where a trip went back to, as the end of its last leg. */
         const val END = "@end"
+
+        /**
+         * A leg as saved before it had steps: its ways, and the airports of its one flight. The
+         * ways before the plane end at the first airport, the flight hops airport to airport,
+         * and the ways after it run on to the leg's end. Without a flight each way is a step to
+         * somewhere along the way.
+         */
+        fun fromWays(from: String, to: String, ways: List<Travel>, via: List<String>, around: Boolean): Leg? {
+            if (ways.isEmpty()) return null
+            val plane = ways.indexOf(Travel.Plane)
+            if (plane < 0 || via.size < 2) return Leg(from, to, ways.map { Step(it) }, around && plane >= 0)
+            val before = ways.take(plane)
+            val steps = ArrayList<Step>()
+            if (before.isEmpty()) steps += Step(null, Step.airport(via[0]))
+            else before.forEachIndexed { i, w -> steps += Step(w, if (i == before.lastIndex) Step.airport(via[0]) else null) }
+            for (code in via.drop(1)) steps += Step(Travel.Plane, Step.airport(code))
+            val after = ways.drop(plane + 1)
+            if (after.isEmpty()) steps += Step(null) else after.forEach { steps += Step(it) }
+            return Leg(from, to, steps, around)
+        }
+
+        /**
+         * [steps] as a leg keeps them: the last ends at the leg's end, and a leg with no way said
+         * and no stop named is no leg.
+         */
+        fun tidy(steps: List<Step>): List<Step> {
+            if (steps.isEmpty()) return steps
+            val s = if (steps.last().to == null) steps else steps + Step(null)
+            return if (s.all { it.way == null } && s.none { it.to != null }) emptyList() else s
+        }
     }
 }
 
@@ -108,51 +154,70 @@ object LegPath {
     const val FAR_DEGREES = 100.0
 
     /**
-     * A leg taken several ways, cut into that many even stretches along the line between its
-     * stops, each drawn its own way. One way, or none, is the whole leg.
-     */
-    fun parts(
-        a: Pair<Double, Double>, b: Pair<Double, Double>, ways: List<Travel>, follow: Follow? = null, around: Boolean = false,
-    ): List<Pair<List<Pair<Double, Double>>, Travel?>> {
-        // One way from place to place can follow the real line; split stretches stay straight,
-        // since the points between them are only guesses.
-        if (ways.size == 1) follow?.invoke(ways[0], a, b)?.let { return listOf(it to ways[0]) }
-        if (ways.size <= 1) return listOf(points(a, b, ways.firstOrNull(), around) to ways.firstOrNull())
-        val end = nearest(a, b)
-        fun at(f: Double) = (a.first + (end.first - a.first) * f) to (a.second + (end.second - a.second) * f)
-        return ways.mapIndexed { i, w ->
-            points(at(i.toDouble() / ways.size), at((i + 1).toDouble() / ways.size), w, around) to w
-        }
-    }
-
-    /**
-     * A leg with the airports its flight went through, [via], departure first: the ways before
-     * the plane run from [a] to the first airport, the flight hops from airport to airport, and
-     * the ways after it run on from the last airport to [b]. A stretch with no way said between a
-     * stop and its airport draws as a leg not said, so the stop stays joined to its flight; at
-     * the trip's own start and end ([fromHome], [toHome]) it is left out, so the way there begins
-     * at the airport, not the front door. Without airports it is [parts].
+     * The line of a leg from [a] to [b], each step drawn its own way between its own stops, as
+     * [pointOf] places them. A stop that cannot be placed sits evenly between those that can.
+     * A flight arcs from airport to airport, the long way round on its longest hop with
+     * [around]; a train or a road follows the real line between two stops the user named; a
+     * step with no way said is a straight line, or nothing where it leaves from or comes back to
+     * the trip's own start and end ([fromHome], [toHome]), so the way there begins at the
+     * airport, not the front door.
      */
     fun route(
-        a: Pair<Double, Double>, b: Pair<Double, Double>, ways: List<Travel>, via: List<Pair<Double, Double>>,
+        a: Pair<Double, Double>, b: Pair<Double, Double>, steps: List<Step>,
+        pointOf: (String) -> Pair<Double, Double>? = { null },
         follow: Follow? = null,
         around: Boolean = false,
         fromHome: Boolean = false,
         toHome: Boolean = false,
     ): List<Pair<List<Pair<Double, Double>>, Travel?>> {
-        val plane = ways.indexOf(Travel.Plane)
-        if (plane < 0 || via.size < 2) return parts(a, b, ways, follow, around)
-        fun ground(x: Pair<Double, Double>, y: Pair<Double, Double>, w: List<Travel>, home: Boolean) =
-            if (x == y || Distance.km(x, y) < 1.0) emptyList()
-            else if (w.isEmpty()) (if (home) emptyList() else listOf(listOf(x, nearest(x, y)) to null))
-            else parts(x, y, w, follow)
-        return ground(a, via.first(), ways.take(plane), fromHome) +
-            via.zipWithNext().let { hops ->
-                // The other way round is one long flight across the globe, not every hop of it.
-                val longest = hops.indices.maxByOrNull { kotlin.math.abs(nearest(hops[it].first, hops[it].second).second - hops[it].first.second) }
-                hops.mapIndexed { i, (x, y) -> points(x, y, Travel.Plane, around && i == longest) to Travel.Plane }
-            } +
-            ground(via.last(), b, ways.drop(plane + 1), toHome)
+        val s = steps.ifEmpty { listOf(Step(null)) }
+        val n = s.size
+        // Every stop of the leg, on the short way round from [a]; null where it cannot be placed.
+        val known = arrayOfNulls<Pair<Double, Double>>(n + 1)
+        known[0] = a
+        known[n] = nearest(a, b)
+        for (i in 1 until n) known[i] = s[i - 1].to?.let(pointOf)?.let { nearest(a, it) }
+        val at = Array(n + 1) { known[it] ?: a }
+        var i = 1
+        while (i < n) {
+            if (known[i] != null) { i++; continue }
+            var j = i
+            while (known[j] == null) j++
+            val x = at[i - 1]; val y = known[j]!!
+            for (k in i until j) {
+                val f = (k - i + 1).toDouble() / (j - i + 1)
+                at[k] = (x.first + (y.first - x.first) * f) to (x.second + (y.second - x.second) * f)
+            }
+            i = j
+        }
+        // The other way round is one long flight across the globe, not every hop of it.
+        val longest = s.indices.filter { s[it].way == Travel.Plane }
+            .maxByOrNull { kotlin.math.abs(nearest(at[it], at[it + 1]).second - at[it].second) }
+        return s.indices.mapNotNull { k ->
+            val x = at[k]; val y = at[k + 1]
+            val w = s[k].way
+            if (n > 1 && (x == y || Distance.km(x, y) < 1.0)) return@mapNotNull null
+            when {
+                w == null && ((k == 0 && fromHome) || (k == n - 1 && toHome)) -> null
+                w == null -> listOf(x, nearest(x, y)) to null
+                w == Travel.Plane -> points(x, y, w, around && k == longest) to w
+                // Only between two real stops: a guessed one is no place a line runs through.
+                known[k] != null && known[k + 1] != null -> (followed(follow, w, x, y) ?: points(x, y, w)) to w
+                else -> points(x, y, w) to w
+            }
+        }
+    }
+
+    /**
+     * The real line between [x] and [y] as [follow] finds it, asked with longitudes the network
+     * knows and handed back on the same turn of the globe as [x], which the leg may have moved.
+     */
+    private fun followed(follow: Follow?, w: Travel, x: Pair<Double, Double>, y: Pair<Double, Double>): List<Pair<Double, Double>>? {
+        follow ?: return null
+        fun wrap(lon: Double) = if (lon in -180.0..180.0) lon else ((lon + 540.0) % 360.0) - 180.0
+        val shift = x.second - wrap(x.second)
+        val line = follow(w, x.first to wrap(x.second), y.first to wrap(y.second)) ?: return null
+        return if (shift == 0.0) line else line.map { it.first to it.second + shift }
     }
 
     /** [b] with its longitude moved by whole turns to lie within half a turn of [a]'s, so a line between them takes the short way, across the date line if need be. */

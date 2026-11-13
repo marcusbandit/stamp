@@ -8,6 +8,7 @@ import com.marcusrosado.stamp.data.Homes
 import com.marcusrosado.stamp.data.Leg
 import com.marcusrosado.stamp.data.LegPath
 import com.marcusrosado.stamp.data.Places
+import com.marcusrosado.stamp.data.Step
 import com.marcusrosado.stamp.data.Travel
 import com.marcusrosado.stamp.data.Trip
 import com.marcusrosado.stamp.data.Visit
@@ -85,6 +86,15 @@ class Journey(
 
     fun airport(code: String): Airport? = airports?.get(code)
 
+    /** A stop inside a leg, an airport or a place, where it is on the map. */
+    fun stopPoint(stop: String, visit: Visit? = null): Pair<Double, Double>? =
+        Step.codeOf(stop)?.let { code -> airport(code)?.let { it.lat to it.lon } }
+            ?: (placeOf(stop, visit, places) ?: place(stop))?.let { it.lat to it.lon }
+
+    /** A stop inside a leg as its strip labels it: an airport's code, a town's name. */
+    fun stopLabel(stop: String, visit: Visit? = null): String? =
+        Step.codeOf(stop) ?: (placeOf(stop, visit, places) ?: place(stop))?.name?.substringBefore(',')?.trim()
+
     /**
      * Every leg of [trip] the map draws, with each line's way, plus the airports it passes
      * through as ghost points. The way there and the way home only draw once the user said how.
@@ -126,14 +136,16 @@ class Journey(
         if ((a == Leg.START || b == Leg.END) && leg == null) return emptyList()
         val from = endPoint(trip, visit, a) ?: return emptyList()
         val to = endPoint(trip, visit, b) ?: return emptyList()
-        val via = leg?.via.orEmpty().mapNotNull { airport(it)?.let { ap -> ap.lat to ap.lon } }
+        val steps = leg?.steps.orEmpty()
         val follow = lines?.let { net -> { w: Travel, x: Pair<Double, Double>, y: Pair<Double, Double> -> net.follow(w, x, y) } }
         return LegPath.route(
-            from.lat to from.lon, to.lat to to.lon, leg?.ways.orEmpty(), via, follow, leg?.around == true,
+            from.lat to from.lon, to.lat to to.lon, steps, { stopPoint(it, visit) }, follow, leg?.around == true,
             fromHome = a == Leg.START, toHome = b == Leg.END,
         )
             .map { (points, way) -> MapRoute(points, way, trip = trip.id, leg = ends) } +
-            via.map { MapRoute(listOf(it), null, ghost = true, trip = trip.id) }
+            // The stops between, airports and stations, as points that mark nothing.
+            steps.dropLast(1).mapNotNull { st -> st.to?.let { stopPoint(it, visit) } }
+                .map { MapRoute(listOf(it), null, ghost = true, trip = trip.id) }
     }
 }
 

@@ -24,8 +24,8 @@ android {
         applicationId = "com.marcusrosado.stamp"
         minSdk = 26
         targetSdk = 36
-        versionCode = 72
-        versionName = "0.39.0"
+        versionCode = 74
+        versionName = "0.40.1"
     }
 
     signingConfigs {

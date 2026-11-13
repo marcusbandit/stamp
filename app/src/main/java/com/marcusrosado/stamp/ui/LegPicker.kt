@@ -2,6 +2,7 @@ package com.marcusrosado.stamp.ui
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -22,6 +23,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -38,6 +40,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -45,15 +49,20 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.marcusrosado.stamp.data.Airport
 import com.marcusrosado.stamp.data.Airports
+import com.marcusrosado.stamp.data.Leg
+import com.marcusrosado.stamp.data.LegPath
+import com.marcusrosado.stamp.data.Places
+import com.marcusrosado.stamp.data.Step
 import com.marcusrosado.stamp.data.Travel
 
 /**
  * The stretch of the timeline between two stops: how the user got to the next one, named so
  * it is plain which leg it is, drawn as the map draws it with the way's icon on its way; or an
- * invitation to say. The line down the left carries on from the stop above.
+ * invitation to say. [stops] names the stops between the leg's steps. The line down the left
+ * carries on from the stop above.
  */
 @Composable
-fun LegLine(ways: List<Travel>, via: List<String>, question: String, where: String, lit: Boolean, onClick: () -> Unit) {
+fun LegLine(leg: Leg?, stops: List<String?>, question: String, where: String, lit: Boolean, onClick: () -> Unit) {
     Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min).padding(start = 20.dp, end = 16.dp)) {
         Box(Modifier.width(40.dp).fillMaxHeight(), contentAlignment = Alignment.TopCenter) {
             Box(
@@ -66,7 +75,8 @@ fun LegLine(ways: List<Travel>, via: List<String>, question: String, where: Stri
             Modifier.weight(1f).padding(bottom = 12.dp).clip(RoundedCornerShape(12.dp)).clickable(onClick = onClick)
                 .padding(horizontal = 8.dp, vertical = 6.dp),
         ) {
-            if (ways.isEmpty()) {
+            val told = leg?.told.orEmpty()
+            if (told.isEmpty()) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
                     Spacer(Modifier.width(6.dp))
@@ -74,24 +84,24 @@ fun LegLine(ways: List<Travel>, via: List<String>, question: String, where: Stri
                 }
             } else {
                 Text(
-                    ways.joinToString(", then ") { it.label.lowercase() }.replaceFirstChar { it.uppercase() } + " $where",
+                    told.joinToString(", then ") { it.label.lowercase() }.replaceFirstChar { it.uppercase() } + " $where",
                     style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
                 Spacer(Modifier.height(4.dp))
-                TravelStrip(ways, via, Modifier.fillMaxWidth().padding(end = 24.dp))
+                TravelStrip(leg!!.steps.map { it.way }, stops, Modifier.fillMaxWidth().padding(end = 24.dp))
             }
         }
     }
 }
 
 /**
- * Picks how the user went from [fromName] to [toName]. Each way tapped is added in order and
- * numbered once there are several; a second tap takes it off. A flight reads like a boarding
- * pass: the airports it left and landed at, the nearest big ones to start with, changed with a
- * tap, and any layovers between.
+ * Picks how the user went from [fromName] to [toName], step by step, top to bottom: where the
+ * leg started, how each step went and the stop it ended at, and where the leg ended. Stops are
+ * airports or towns, added, changed and taken off with a tap; a way tapped again is taken off,
+ * leaving the step unsaid. A flight is town to town until the user names an airport.
  */
 @Composable
 fun LegPicker(
@@ -99,111 +109,128 @@ fun LegPicker(
     toName: String,
     from: Pair<Double, Double>?,
     to: Pair<Double, Double>?,
-    initial: List<Travel>,
-    initialVia: List<String>,
+    initial: List<Step>,
     airports: Airports?,
-    onDone: (ways: List<Travel>, via: List<String>, around: Boolean) -> Unit,
+    places: Places?,
+    /** Where a stop inside the leg is, and what it is called. */
+    stopPoint: (String) -> Pair<Double, Double>?,
+    stopName: (String) -> String?,
+    onDone: (steps: List<Step>, around: Boolean) -> Unit,
     onDismiss: () -> Unit,
     /** True when an end is the user's home: it reads "Home", with the address under it. */
     fromHome: Boolean = false,
     toHome: Boolean = false,
     initialAround: Boolean = false,
 ) {
-    var ways by remember { mutableStateOf(initial) }
+    var steps by remember { mutableStateOf(initial) }
     var around by remember { mutableStateOf(initialAround) }
-    // Where the flight took off and landed, and the layovers between, kept apart so picking
-    // one never moves another.
-    var dep by remember { mutableStateOf(initialVia.firstOrNull()) }
-    var arr by remember { mutableStateOf(initialVia.takeIf { it.size >= 2 }?.last()) }
-    var stops by remember { mutableStateOf(if (initialVia.size > 2) initialVia.subList(1, initialVia.size - 1) else emptyList()) }
-    var picking by remember { mutableStateOf<AirportSlot?>(null) }
-    val palette = LocalMapPalette.current
-    val flying = Travel.Plane in ways && airports != null
-    // Only a flight that spans much of the globe could have gone either way, judged on the line
-    // the map will draw: between the airports once both ends are named, else place to place.
-    val farFlight = flying && run {
-        val named = listOfNotNull(dep, arr).size == 2
-        val hops = if (named) (listOfNotNull(dep) + stops + listOfNotNull(arr)).mapNotNull { airports?.get(it)?.let { ap -> ap.lat to ap.lon } }
-        else listOfNotNull(from, to)
-        hops.zipWithNext().any { (x, y) -> com.marcusrosado.stamp.data.LegPath.spansFar(x, y) }
+    // The step whose ways are open for picking.
+    var open by remember { mutableStateOf<Int?>(if (initial.isEmpty()) 0 else null) }
+    var picking by remember { mutableStateOf<StopSlot?>(null) }
+    // Where each stop is, the leg's own ends first and last.
+    fun pointAt(i: Int): Pair<Double, Double>? = when (i) {
+        0 -> from
+        steps.size -> to
+        else -> steps[i - 1].to?.let(stopPoint)
     }
-    // A flight just picked starts out between the big airports nearest each end. One saved
-    // before airports could be named keeps none until the user picks them.
-    val newFlight = Travel.Plane !in initial
-    LaunchedEffect(Travel.Plane in ways, airports) {
-        if (newFlight && Travel.Plane in ways && dep == null && arr == null && airports != null) {
-            val d = from?.let { airports.near(it, 1).firstOrNull() }?.code
-            val r = to?.let { airports.near(it, 1).firstOrNull() }?.code
-            dep = d
-            arr = r?.takeIf { it != d }
-        }
+    fun isAirport(i: Int) = i in 1 until steps.size && Step.codeOf(steps[i - 1].to) != null
+    // Only a flight that spans much of the globe could have gone either way.
+    val farFlight = steps.indices.any { i ->
+        steps[i].way == Travel.Plane && pointAt(i)?.let { x -> pointAt(i + 1)?.let { y -> LegPath.spansFar(x, y) } } == true
+    }
+    // A way tapped again is taken off. A flight is from town to town until the user names an
+    // airport, at either end or both.
+    fun setWay(i: Int, w: Travel) {
+        val list = steps.ifEmpty { listOf(Step(null)) }
+        steps = list.mapIndexed { k, s -> if (k == i) s.copy(way = if (s.way == w) null else w) else s }
+        open = null
     }
     SeamAlertDialog(
         onDismissRequest = onDismiss,
         title = {
             BoardingPass(
-                fromName = fromName, toName = toName,
-                fromHome = fromHome, toHome = toHome,
-                depart = if (flying) dep?.let { airports?.get(it) } else null,
-                arrive = if (flying) arr?.let { airports?.get(it) } else null,
-                flying = flying,
-                ways = ways,
-                onDepart = { picking = AirportSlot.Dep },
-                onArrive = { picking = AirportSlot.Arr },
+                fromName = fromName, toName = toName, fromHome = fromHome, toHome = toHome,
+                ways = steps.map { it.way },
+                stops = steps.dropLast(1).map { st -> st.to?.let { Step.codeOf(it) ?: stopName(it)?.let(::shortName) } },
             )
         },
         text = {
             Column {
-                WayGrid(ways, onTap = { w -> ways = if (w in ways) ways - w else ways + w })
-                if (flying) {
-                    Spacer(Modifier.height(16.dp))
-                    // The layovers, between takeoff and landing.
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        stops.forEachIndexed { i, code ->
-                            Pill(
-                                text = "via $code",
-                                color = palette.travel(Travel.Plane),
-                                onClick = { picking = AirportSlot.Stop(i) },
-                                onRemove = { stops = stops.filterIndexed { k, _ -> k != i } },
-                            )
+                StepEnd(if (fromHome) "Home" else shortName(fromName))
+                val shown = steps.ifEmpty { listOf(Step(null)) }
+                shown.forEachIndexed { i, step ->
+                    StepWay(
+                        step.way, opened = open == i, onClick = { open = if (open == i) null else i },
+                        // A flight may name the airport it took off from or landed at, either or both.
+                        onTookOff = if (step.way == Travel.Plane && !isAirport(i)) { { picking = StopSlot.Before(i) } } else null,
+                        onLanded = if (step.way == Travel.Plane && !isAirport(i + 1)) { { picking = StopSlot.After(i) } } else null,
+                    )
+                    if (open == i) {
+                        Box(Modifier.padding(start = 28.dp, top = 4.dp, bottom = 8.dp)) {
+                            WayGrid(step.way, onTap = { w -> setWay(i, w) })
                         }
-                        Pill(text = "Layover", color = MaterialTheme.colorScheme.onSurfaceVariant, add = true, onClick = { picking = AirportSlot.NewStop })
                     }
-                    if (farFlight) {
-                        Row(
-                            Modifier.fillMaxWidth().padding(top = 12.dp).clip(RoundedCornerShape(12.dp)).clickable { around = !around },
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text("Flew the other way round", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
-                            androidx.compose.material3.Switch(checked = around, onCheckedChange = { around = it })
-                        }
+                    if (i < shown.lastIndex) {
+                        val code = Step.codeOf(step.to)
+                        StepStop(
+                            big = code ?: step.to?.let { stopName(it)?.let(::shortName) },
+                            small = code?.let { airports?.get(it)?.name },
+                            onClick = { picking = StopSlot.At(i) },
+                            onRemove = {
+                                val next = shown[i + 1]
+                                steps = shown.take(i) + Step(next.way ?: step.way, next.to) + shown.drop(i + 2)
+                                open = null
+                            },
+                        )
+                    }
+                }
+                StepEnd(if (toHome) "Home" else shortName(toName))
+                Spacer(Modifier.height(12.dp))
+                Pill(text = "Add a stop", color = MaterialTheme.colorScheme.primary, add = true, onClick = { picking = StopSlot.New })
+                if (farFlight) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(top = 12.dp).clip(RoundedCornerShape(12.dp)).clickable { around = !around },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("Flew the other way round", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
+                        androidx.compose.material3.Switch(checked = around, onCheckedChange = { around = it })
                     }
                 }
             }
         },
         dismissButton = {
-            if (initial.isNotEmpty()) TextButton(onClick = { onDone(emptyList(), emptyList(), false) }) { Text("Clear") }
+            if (initial.isNotEmpty()) TextButton(onClick = { onDone(emptyList(), false) }) { Text("Clear") }
             else TextButton(onClick = onDismiss) { Text("Cancel") }
         },
         confirmButton = {
-            TextButton(onClick = {
-                val d = dep; val r = arr
-                onDone(ways, if (Travel.Plane in ways && d != null && r != null) listOf(d) + stops + r else emptyList(), around && farFlight)
-            }) { Text("Done") }
+            TextButton(onClick = { onDone(Leg.tidy(steps), around && farFlight) }) { Text("Done") }
         },
     )
     picking?.let { slot ->
-        AirportSearch(
-            title = when (slot) { AirportSlot.Dep -> "Took off from"; AirportSlot.Arr -> "Landed at"; else -> "Layover" },
-            airports = airports ?: return@let,
-            near = when (slot) { AirportSlot.Dep -> from; AirportSlot.Arr -> to; else -> null },
-            onPick = { ap ->
-                when (slot) {
-                    AirportSlot.Dep -> dep = ap.code
-                    AirportSlot.Arr -> arr = ap.code
-                    AirportSlot.NewStop -> stops = stops + ap.code
-                    is AirportSlot.Stop -> stops = stops.mapIndexed { k, c -> if (k == slot.at) ap.code else c }
+        // The step the stop belongs to, for the airports nearest its ends.
+        val i = when (slot) { is StopSlot.At -> slot.at; is StopSlot.Before -> slot.at; is StopSlot.After -> slot.at; StopSlot.New -> steps.lastIndex.coerceAtLeast(0) }
+        StopSearch(
+            airports = airports,
+            // Takeoff and landing are airports and nothing else.
+            places = if (slot is StopSlot.Before || slot is StopSlot.After) null else places,
+            near = when (slot) {
+                is StopSlot.Before -> listOfNotNull(pointAt(i))
+                is StopSlot.After -> listOfNotNull(pointAt(i + 1))
+                is StopSlot.At -> listOfNotNull(pointAt(i), pointAt(i + 2))
+                StopSlot.New -> listOfNotNull(pointAt(i), to)
+            },
+            onPick = { id ->
+                val list = steps.ifEmpty { listOf(Step(null)) }
+                steps = when (slot) {
+                    is StopSlot.At -> list.mapIndexed { k, s -> if (k == slot.at) s.copy(to = id) else s }
+                    // The flight now leaves from the airport; how the user got there is unsaid.
+                    is StopSlot.Before -> list.take(slot.at) + Step(null, id) + list.drop(slot.at)
+                    // The flight now lands at the airport; how the user went on is unsaid.
+                    is StopSlot.After -> list.take(slot.at) + list[slot.at].copy(to = id) + Step(null, list[slot.at].to) + list.drop(slot.at + 1)
+                    // A new stop goes just before the leg's end: the last step now ends there.
+                    StopSlot.New -> list.dropLast(1) + list.last().copy(to = id) + Step(null)
                 }
+                open = null
                 picking = null
             },
             onDismiss = { picking = null },
@@ -213,35 +240,108 @@ fun LegPicker(
 
 /**
  * The top of the picker: where the leg started on the left, where it ended on the right, and
- * the way between them moving across. On a flight the ends are the airports, big, as on a
- * boarding pass, and each one changes with a tap.
+ * its steps between them, with the stops named along the way.
  */
 @Composable
-private fun BoardingPass(
-    fromName: String, toName: String, fromHome: Boolean, toHome: Boolean,
-    depart: Airport?, arrive: Airport?, flying: Boolean, ways: List<Travel>,
-    onDepart: () -> Unit, onArrive: () -> Unit,
-) {
+private fun BoardingPass(fromName: String, toName: String, fromHome: Boolean, toHome: Boolean, ways: List<Travel?>, stops: List<String?>) {
     androidx.compose.foundation.layout.BoxWithConstraints {
-        // The ends take what they need, up to a little over a third each; the way between them
+        // The ends take what they need, up to a little under a third each; the way between them
         // gets all the rest.
-        val most = maxWidth * 0.36f
+        val most = maxWidth * 0.3f
         Row(verticalAlignment = Alignment.CenterVertically) {
-            if (flying) {
-                AirportEnd(depart, shortName(fromName), end = false, onClick = onDepart, modifier = Modifier.widthIn(max = most))
-            } else {
-                PlaceEnd(if (fromHome) "Home" else shortName(fromName), if (fromHome) shortName(fromName) else "From", end = false, modifier = Modifier.widthIn(max = most))
-            }
+            PlaceEnd(if (fromHome) "Home" else shortName(fromName), if (fromHome) shortName(fromName) else "From", end = false, modifier = Modifier.widthIn(max = most))
             TravelStrip(
-                ways, emptyList(),
+                ways, stops,
                 Modifier.weight(1f).padding(horizontal = 8.dp),
                 gap = MaterialTheme.colorScheme.surfaceContainerHigh,
             )
-            if (flying) {
-                AirportEnd(arrive, shortName(toName), end = true, onClick = onArrive, modifier = Modifier.widthIn(max = most))
-            } else {
-                PlaceEnd(if (toHome) "Home" else shortName(toName), if (toHome) shortName(toName) else "To", end = true, modifier = Modifier.widthIn(max = most))
+            PlaceEnd(if (toHome) "Home" else shortName(toName), if (toHome) shortName(toName) else "To", end = true, modifier = Modifier.widthIn(max = most))
+        }
+    }
+}
+
+/** Where the leg started or ended, in the list of its steps: a ringed dot and the place. */
+@Composable
+private fun StepEnd(name: String) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.width(24.dp), contentAlignment = Alignment.Center) {
+            Box(Modifier.size(12.dp).clip(CircleShape).background(MaterialTheme.colorScheme.onSurfaceVariant))
+        }
+        Spacer(Modifier.width(12.dp))
+        Text(name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+/**
+ * How one step went, as a button on the line between two stops: the way's icon and name in its
+ * colour, or How? while it is unsaid.
+ */
+@Composable
+private fun StepWay(way: Travel?, opened: Boolean, onClick: () -> Unit, onTookOff: (() -> Unit)? = null, onLanded: (() -> Unit)? = null) {
+    val palette = LocalMapPalette.current
+    val line = way?.let { palette.travel(it) } ?: MaterialTheme.colorScheme.outlineVariant
+    // The line is drawn behind rather than measured, so a row that wraps keeps it full height.
+    Row(
+        Modifier.fillMaxWidth().drawBehind {
+            val x = 12.dp.toPx()
+            drawLine(line, Offset(x, 0f), Offset(x, size.height), strokeWidth = 2.dp.toPx())
+        },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Spacer(Modifier.width(36.dp))
+        val color = way?.let { palette.travel(it) } ?: MaterialTheme.colorScheme.primary
+        FlowRow(
+            Modifier.padding(vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Surface(
+                onClick = onClick,
+                shape = RoundedCornerShape(50),
+                color = if (opened) color.copy(alpha = 0.2f) else MaterialTheme.colorScheme.surfaceContainerHighest,
+                border = if (opened) BorderStroke(1.5.dp, color) else null,
+            ) {
+                Row(Modifier.padding(horizontal = 14.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(way?.icon ?: Icons.Filled.Add, contentDescription = null, tint = color, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(way?.label ?: "How?", style = MaterialTheme.typography.labelLarge, color = if (way == null) color else MaterialTheme.colorScheme.onSurface)
+                }
             }
+            if (onTookOff != null) Pill(text = "Took off from", color = MaterialTheme.colorScheme.onSurfaceVariant, add = true, onClick = onTookOff)
+            if (onLanded != null) Pill(text = "Landed at", color = MaterialTheme.colorScheme.onSurfaceVariant, add = true, onClick = onLanded)
+        }
+    }
+}
+
+/**
+ * A stop between two steps: an airport's code with its name under it, or a town; Pick a stop
+ * while it has none. A tap changes it, the cross takes it off.
+ */
+@Composable
+private fun StepStop(big: String?, small: String?, onClick: () -> Unit, onRemove: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable(onClick = onClick).padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.width(24.dp), contentAlignment = Alignment.Center) {
+            Box(
+                Modifier.size(12.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                    .border(2.dp, MaterialTheme.colorScheme.onSurfaceVariant, CircleShape),
+            )
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                big ?: "Pick a stop", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold,
+                color = if (big == null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+            if (small != null) {
+                Text(small, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        Box(Modifier.size(40.dp).clip(CircleShape).clickable(onClick = onRemove), contentAlignment = Alignment.Center) {
+            Icon(Icons.Filled.Close, contentDescription = "Remove stop", modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -261,85 +361,40 @@ private fun PlaceEnd(big: String, small: String, end: Boolean, modifier: Modifie
     }
 }
 
-/**
- * One end of a flight as a button, filled like the tiles under it: the airport's code, big,
- * with its town, or Pick airport while there is none.
- */
-@Composable
-private fun AirportEnd(airport: Airport?, place: String, end: Boolean, onClick: () -> Unit, modifier: Modifier) {
-    Surface(
-        onClick = onClick,
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerHighest,
-        modifier = modifier,
-    ) {
-        Column(
-            Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-            horizontalAlignment = if (end) Alignment.End else Alignment.Start,
-        ) {
-            if (airport != null) {
-                Text(
-                    airport.code, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface, maxLines = 1,
-                )
-                Text(
-                    airport.town.ifBlank { place }, style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                )
-            } else {
-                Text(
-                    "Pick airport", style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.primary, maxLines = 1,
-                )
-            }
-        }
-    }
-}
-
 /** A street address reads as its first part, "Example Street 12"; a town as itself. */
 private fun shortName(name: String) = name.substringBefore(',').trim().ifEmpty { name }
 
-/** Every way of travel as an even grid of tiles, four to a row, the picked ones in their colour. */
+/** Every way of travel as an even grid of tiles, four to a row, the picked one in its colour. */
 @Composable
-private fun WayGrid(ways: List<Travel>, onTap: (Travel) -> Unit) {
+private fun WayGrid(picked: Travel?, onTap: (Travel) -> Unit) {
     val palette = LocalMapPalette.current
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Travel.entries.chunked(4).forEach { row ->
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 row.forEach { w ->
-                    val at = ways.indexOf(w)
+                    val on = w == picked
                     val color = palette.travel(w)
                     Surface(
                         onClick = { onTap(w) },
                         shape = RoundedCornerShape(16.dp),
-                        color = if (at >= 0) color.copy(alpha = 0.2f) else MaterialTheme.colorScheme.surfaceContainerHighest,
-                        border = if (at >= 0) BorderStroke(2.dp, color) else null,
-                        modifier = Modifier.weight(1f).height(76.dp),
+                        color = if (on) color.copy(alpha = 0.2f) else MaterialTheme.colorScheme.surfaceContainerHighest,
+                        border = if (on) BorderStroke(2.dp, color) else null,
+                        modifier = Modifier.weight(1f).height(68.dp),
                     ) {
-                        Box(Modifier.fillMaxWidth()) {
-                            Column(
-                                Modifier.align(Alignment.Center).padding(horizontal = 4.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                            ) {
-                                Icon(w.icon, contentDescription = null, tint = color, modifier = Modifier.size(26.dp))
-                                Spacer(Modifier.height(4.dp))
-                                Text(
-                                    w.short,
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
-                            // Its place in the order, once there are several.
-                            if (at >= 0 && ways.size > 1) {
-                                Box(
-                                    Modifier.align(Alignment.TopEnd).padding(5.dp).size(18.dp).clip(CircleShape).background(color),
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    Text("${at + 1}", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = palette.ocean)
-                                }
-                            }
+                        Column(
+                            Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center,
+                        ) {
+                            Icon(w.icon, contentDescription = null, tint = color, modifier = Modifier.size(24.dp))
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                w.short,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
                         }
                     }
                 }
@@ -372,31 +427,42 @@ private fun Pill(text: String, color: Color, onClick: () -> Unit, onRemove: (() 
     }
 }
 
-/** Which airport of a flight is being picked. */
-private sealed interface AirportSlot {
-    data object Dep : AirportSlot
-    data object Arr : AirportSlot
-    data object NewStop : AirportSlot
-    data class Stop(val at: Int) : AirportSlot
+/** Which stop is being picked: one already in the leg, or a new one before its end. */
+private sealed interface StopSlot {
+    data object New : StopSlot
+    data class At(val at: Int) : StopSlot
+    /** The airport the flight of step [at] took off from. */
+    data class Before(val at: Int) : StopSlot
+    /** The airport the flight of step [at] landed at. */
+    data class After(val at: Int) : StopSlot
 }
 
-/** Finds an airport by code, name or town; with nothing typed, the big ones nearest [near]. */
+/** One stop to pick: an airport, by its code, or a town. */
+private class StopHit(val id: String, val tag: String?, val name: String, val where: String)
+
+/**
+ * Finds a stop by airport code or name, or by town; with nothing typed, the big airports
+ * nearest each end of the step. Hands back the stop's id.
+ */
 @Composable
-private fun AirportSearch(title: String, airports: Airports, near: Pair<Double, Double>?, onPick: (Airport) -> Unit, onDismiss: () -> Unit) {
+private fun StopSearch(airports: Airports?, places: Places?, near: List<Pair<Double, Double>>, onPick: (String) -> Unit, onDismiss: () -> Unit) {
     var query by remember { mutableStateOf("") }
     val found = remember(query, near) {
-        if (query.isBlank()) near?.let { airports.near(it, 8) }.orEmpty() else airports.search(query)
+        fun ap(a: Airport) = StopHit(Step.airport(a.code), a.code, a.name, listOf(a.town, a.country).filter { it.isNotBlank() }.joinToString(", "))
+        if (query.isBlank()) near.flatMap { airports?.near(it, 4).orEmpty() }.distinctBy { it.code }.map(::ap)
+        else airports?.search(query, 8).orEmpty().map(::ap) +
+            places?.searchAll(query, 12).orEmpty().map { c -> StopHit(c.id, null, c.name, c.country) }
     }
     SeamAlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(title) },
+        title = { Text(if (places == null) "Airport" else "Stop") },
         text = {
             Column {
                 OutlinedTextField(
                     value = query,
                     onValueChange = { query = it },
                     singleLine = true,
-                    placeholder = { Text("Code, airport or town") },
+                    placeholder = { Text(if (places == null) "Code, airport or town" else "Airport or town") },
                     leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -404,17 +470,20 @@ private fun AirportSearch(title: String, airports: Airports, near: Pair<Double, 
                 // A plain column: the dialog already scrolls, and a lazy list inside a scroll
                 // has no height to measure against.
                 Column {
-                    found.forEach { ap ->
+                    found.forEach { hit ->
                         Row(
-                            Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable { onPick(ap) }
+                            Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable { onPick(hit.id) }
                                 .padding(vertical = 8.dp, horizontal = 4.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Text(ap.code, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, modifier = Modifier.width(52.dp))
+                            Box(Modifier.width(52.dp)) {
+                                if (hit.tag != null) Text(hit.tag, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                                else Icon(Icons.Filled.Place, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+                            }
                             Column(Modifier.weight(1f)) {
-                                Text(ap.name, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(hit.name, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 Text(
-                                    listOf(ap.town, ap.country).filter { it.isNotBlank() }.joinToString(", "),
+                                    hit.where,
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     maxLines = 1,

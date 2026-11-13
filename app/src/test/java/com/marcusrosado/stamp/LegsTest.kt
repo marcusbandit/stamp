@@ -1,6 +1,7 @@
 package com.marcusrosado.stamp
 
 import com.marcusrosado.stamp.data.LegPath
+import com.marcusrosado.stamp.data.Step
 import com.marcusrosado.stamp.data.Travel
 import com.marcusrosado.stamp.data.TravelState
 import com.marcusrosado.stamp.data.VisitStore
@@ -21,8 +22,8 @@ class LegsTest {
         s.set("JPN", TravelState.Visited)
         val id = trip(s).id
         for (c in listOf("tokyo", "sapporo", "sendai", "kanazawa")) s.addCity("JPN", id, c)
-        s.setLeg(id, "tokyo", "sapporo", listOf(Travel.Plane))
-        s.setLeg(id, "sendai", "kanazawa", listOf(Travel.Train, Travel.Bus))
+        s.setLeg(id, "tokyo", "sapporo", listOf(Step(Travel.Plane)))
+        s.setLeg(id, "sendai", "kanazawa", listOf(Step(Travel.Train), Step(Travel.Bus)))
         val t = trip(store())
         assertEquals(listOf(Travel.Plane), t.waysBetween("tokyo", "sapporo"))
         assertEquals(listOf(Travel.Train, Travel.Bus), t.waysBetween("sendai", "kanazawa"))
@@ -34,7 +35,7 @@ class LegsTest {
         s.set("JPN", TravelState.Visited)
         val id = trip(s).id
         s.addCity("JPN", id, "tokyo"); s.addCity("JPN", id, "osaka")
-        s.setLeg(id, "tokyo", "osaka", listOf(Travel.Train))
+        s.setLeg(id, "tokyo", "osaka", listOf(Step(Travel.Train)))
         s.setLeg(id, "tokyo", "osaka", emptyList())
         assertTrue(trip(store()).legs.isEmpty())
     }
@@ -44,8 +45,8 @@ class LegsTest {
         s.set("JPN", TravelState.Visited)
         val id = trip(s).id
         for (c in listOf("tokyo", "osaka", "kyoto")) s.addCity("JPN", id, c)
-        s.setLeg(id, "tokyo", "osaka", listOf(Travel.Train))
-        s.setLeg(id, "osaka", "kyoto", listOf(Travel.Walk))
+        s.setLeg(id, "tokyo", "osaka", listOf(Step(Travel.Train)))
+        s.setLeg(id, "osaka", "kyoto", listOf(Step(Travel.Walk)))
         s.moveStop(id, "kyoto", -1) // tokyo, kyoto, osaka
         val t = trip(store())
         assertTrue(t.legs.isEmpty())
@@ -56,7 +57,7 @@ class LegsTest {
         s.set("JPN", TravelState.Visited)
         val id = trip(s).id
         s.addCity("JPN", id, "tokyo"); s.addCity("JPN", id, "osaka")
-        s.setLeg(id, "tokyo", "osaka", listOf(Travel.Train))
+        s.setLeg(id, "tokyo", "osaka", listOf(Step(Travel.Train)))
         s.removeCity(id, "osaka")
         s.addCity("JPN", id, "osaka")
         assertEquals(emptyList<Travel>(), trip(s).waysBetween("tokyo", "osaka"))
@@ -65,7 +66,7 @@ class LegsTest {
     @Test fun aLegTakenSeveralWaysAcrossTheDateLineSplitsOnTheShortWay() {
         val tokyo = 35.68 to 139.78
         val honolulu = 21.31 to -157.86
-        val parts = LegPath.parts(tokyo, honolulu, listOf(Travel.Ferry, Travel.Ferry))
+        val parts = LegPath.route(tokyo, honolulu, listOf(Step(Travel.Ferry), Step(Travel.Ferry)))
         val mid = parts[0].first.last()
         // Halfway between them over the Pacific, past 180 east, not over the Atlantic.
         assertTrue("mid ${mid.second}", mid.second > 170 && mid.second < 190)
@@ -81,7 +82,7 @@ class LegsTest {
         s.set("JPN", TravelState.Visited)
         val id = trip(s).id
         s.addCity("JPN", id, "tokyo"); s.addCity("JPN", id, "osaka")
-        s.setLeg(id, "tokyo", "osaka", listOf(Travel.Bus))
+        s.setLeg(id, "tokyo", "osaka", listOf(Step(Travel.Bus)))
         s.replaceStopWithPin(id, "osaka", com.marcusrosado.stamp.data.Pin("A street", 34.6, 135.5))
         val t = trip(store())
         assertEquals(listOf(Travel.Bus), t.waysBetween("tokyo", t.cities[1]))
@@ -116,7 +117,7 @@ class LegsTest {
     }
 
     @Test fun severalWaysCutTheLegIntoEvenStretches() {
-        val parts = LegPath.parts(0.0 to 0.0, 0.0 to 30.0, listOf(Travel.Train, Travel.Bus, Travel.Walk))
+        val parts = LegPath.route(0.0 to 0.0, 0.0 to 30.0, listOf(Step(Travel.Train), Step(Travel.Bus), Step(Travel.Walk)))
         assertEquals(listOf(Travel.Train, Travel.Bus, Travel.Walk), parts.map { it.second })
         assertEquals(10.0, parts[0].first.last().second, 1e-9)
         assertEquals(20.0, parts[2].first.first().second, 1e-9)
