@@ -78,44 +78,56 @@ private fun hsl(c: Color): Triple<Float, Float, Float> {
 
 private fun fromHsl(h: Float, s: Float, l: Float) = Color(androidx.core.graphics.ColorUtils.HSLToColor(floatArrayOf(h, s, l)))
 
+/**
+ * [way]'s line as the map draws it, flat from [x0] to [x1] at height [y]: the same dashes,
+ * sleepers, road and wave, so a legend or a leg on the timeline reads like the map. [gap] is
+ * the colour drawn under it and in a road's centre line.
+ */
+fun androidx.compose.ui.graphics.drawscope.DrawScope.drawWay(
+    way: Travel?, x0: Float, x1: Float, y: Float, p: MapPalette, gap: Color = p.ocean,
+) {
+    if (x1 - x0 < 1f) return
+    val d = density
+    val c = way?.let { p.travel(it) } ?: p.selected
+    fun dashes(vararg on: Float) = androidx.compose.ui.graphics.PathEffect.dashPathEffect(on.map { it * d }.toFloatArray())
+    fun line(width: Float, color: Color = c, effect: androidx.compose.ui.graphics.PathEffect? = null,
+             cap: androidx.compose.ui.graphics.StrokeCap = androidx.compose.ui.graphics.StrokeCap.Round) =
+        drawLine(color, androidx.compose.ui.geometry.Offset(x0, y), androidx.compose.ui.geometry.Offset(x1, y), width * d, cap, effect)
+    val butt = androidx.compose.ui.graphics.StrokeCap.Butt
+    line(6f, gap)
+    when (way) {
+        // As on the map: a plane's dashes are longer and wider apart than a leg not said.
+        null -> line(2f, effect = dashes(4f, 3f))
+        Travel.Plane -> line(2.2f, effect = dashes(5.5f, 4.4f))
+        Travel.Train -> { line(8f, effect = dashes(2f, 7f), cap = butt); line(2.4f) }
+        Travel.Bus -> line(3.4f, effect = dashes(10f, 3f), cap = butt)
+        Travel.Transit -> line(2.6f, effect = dashes(7f, 3.5f, 0.1f, 3.5f))
+        Travel.Bike -> line(2.6f, effect = dashes(4f, 3f), cap = butt)
+        Travel.Walk -> line(3.6f, effect = dashes(0.1f, 6f))
+        Travel.Car -> { line(5.6f); line(1.4f, gap, dashes(4f, 4f), butt) }
+        Travel.Ferry -> {
+            val path = androidx.compose.ui.graphics.Path()
+            val w = 12 * d
+            var x = x0
+            path.moveTo(x, y)
+            while (x + w <= x1 + 0.5f) {
+                path.cubicTo(x + w * 0.25f, y - 3 * d, x + w * 0.25f, y - 3 * d, x + w * 0.5f, y)
+                path.cubicTo(x + w * 0.75f, y + 3 * d, x + w * 0.75f, y + 3 * d, x + w, y)
+                x += w
+            }
+            if (x < x1) path.lineTo(x1, y)
+            drawPath(path, gap, style = androidx.compose.ui.graphics.drawscope.Stroke(3.6f * d))
+            drawPath(path, c, style = androidx.compose.ui.graphics.drawscope.Stroke(1.8f * d))
+        }
+    }
+}
+
 /** A short sample of [way]'s line as the map draws it, for legends. */
-@androidx.compose.runtime.Composable
-fun WaySample(way: Travel?, modifier: androidx.compose.ui.Modifier = androidx.compose.ui.Modifier) {
+@Composable
+fun WaySample(way: Travel?, modifier: Modifier = Modifier) {
     val p = LocalMapPalette.current
     androidx.compose.foundation.Canvas(modifier.clipToBounds()) {
-        val y = size.height / 2
-        val d = density
-        val c = way?.let { p.travel(it) } ?: p.selected
-        fun dashes(vararg on: Float) = androidx.compose.ui.graphics.PathEffect.dashPathEffect(on.map { it * d }.toFloatArray())
-        fun line(width: Float, color: androidx.compose.ui.graphics.Color = c, effect: androidx.compose.ui.graphics.PathEffect? = null,
-                 cap: androidx.compose.ui.graphics.StrokeCap = androidx.compose.ui.graphics.StrokeCap.Round) =
-            drawLine(color, androidx.compose.ui.geometry.Offset(4 * d, y), androidx.compose.ui.geometry.Offset(size.width - 4 * d, y), width * d, cap, effect)
-        val butt = androidx.compose.ui.graphics.StrokeCap.Butt
-        line(6f, p.ocean)
-        when (way) {
-            // As on the map: a plane's dashes are longer and wider apart than a leg not said.
-            null -> line(2f, effect = dashes(4f, 3f))
-            Travel.Plane -> line(2.2f, effect = dashes(5.5f, 4.4f))
-            Travel.Train -> { line(8f, effect = dashes(2f, 7f), cap = butt); line(2.4f) }
-            Travel.Bus -> line(3.4f, effect = dashes(10f, 3f), cap = butt)
-            Travel.Transit -> line(2.6f, effect = dashes(7f, 3.5f, 0.1f, 3.5f))
-            Travel.Bike -> line(2.6f, effect = dashes(4f, 3f), cap = butt)
-            Travel.Walk -> line(3.6f, effect = dashes(0.1f, 6f))
-            Travel.Car -> { line(5.6f); line(1.4f, p.ocean, dashes(4f, 4f), butt) }
-            Travel.Ferry -> {
-                val path = androidx.compose.ui.graphics.Path()
-                val w = 12 * d
-                var x = 4 * d
-                path.moveTo(x, y)
-                while (x < size.width - 4 * d) {
-                    path.cubicTo(x + w * 0.25f, y - 3 * d, x + w * 0.25f, y - 3 * d, x + w * 0.5f, y)
-                    path.cubicTo(x + w * 0.75f, y + 3 * d, x + w * 0.75f, y + 3 * d, x + w, y)
-                    x += w
-                }
-                drawPath(path, p.ocean, style = androidx.compose.ui.graphics.drawscope.Stroke(3.6f * d))
-                drawPath(path, c, style = androidx.compose.ui.graphics.drawscope.Stroke(1.8f * d))
-            }
-        }
+        drawWay(way, 4 * density, size.width - 4 * density, size.height / 2, p)
     }
 }
 

@@ -50,6 +50,8 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Hotel
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.SubdirectoryArrowRight
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
@@ -276,7 +278,8 @@ fun VisitTimeline(
                             muted = trip.date == null,
                             onClick = { editingDates = true },
                         )
-                        MemoryRow(loose, onOpen = { viewing = it }, onAdd = { adding = "" }, invite = trip.memories.isEmpty())
+                        MemoryRow(loose, onOpen = { viewing = it }, onAdd = { adding = "" })
+                        if (loose.isEmpty()) QuietActions(memory = { adding = "" }, dayTrip = null)
                     }
                 }
                 if (journeyed && trip.cities.isNotEmpty()) {
@@ -294,6 +297,9 @@ fun VisitTimeline(
                             accent = true,
                             lit = reachedAt >= i + 1,
                         ) {
+                            val days = trip.dayPlaces[place].orEmpty()
+                            val bed = trip.bedOf(place)
+                            val own = placeIdOf(place)
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Column(Modifier.weight(1f).clip(RoundedCornerShape(12.dp)).clickable { actions.onOpenPlace(place) }) {
                                     Text(
@@ -302,56 +308,35 @@ fun VisitTimeline(
                                         maxLines = 2,
                                         overflow = TextOverflow.Ellipsis,
                                     )
-                                    NoteLine(info?.region, visit.cityNotes[placeIdOf(place)])
+                                    // "Tokyo, Tokyo" says nothing twice.
+                                    NoteLine(info?.region?.takeIf { it != info.name }, visit.cityNotes[own])
                                 }
+                                // Where the user slept, once the stop has other places to choose from.
+                                if (days.isNotEmpty()) BedButton(slept = bed == own, onClick = { actions.onSlept(place, own) })
                                 if (trip.cities.size > 1) {
-                                    Column {
-                                        IconButton(onClick = { actions.onMove(place, -1) }, enabled = i > 0, modifier = Modifier.size(36.dp)) {
-                                            Icon(Icons.Filled.KeyboardArrowUp, contentDescription = "Earlier")
-                                        }
-                                        IconButton(onClick = { actions.onMove(place, 1) }, enabled = i < trip.cities.size - 1, modifier = Modifier.size(36.dp)) {
-                                            Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "Later")
-                                        }
-                                    }
-                                }
-                            }
-                            val days = trip.dayPlaces[place].orEmpty()
-                            val bed = trip.bedOf(place)
-                            // With day places, every place of the stop shows where the user slept.
-                            if (days.isNotEmpty()) {
-                                DayPlaceRow(
-                                    name = info?.name ?: "Unknown place",
-                                    own = true,
-                                    slept = bed == placeIdOf(place),
-                                    onSlept = { actions.onSlept(place, placeIdOf(place)) },
-                                    onOpen = { actions.onOpenPlace(place) },
-                                    onRemove = null,
-                                )
-                                days.forEach { d ->
-                                    DayPlaceRow(
-                                        name = placeOf(d, visit, places)?.name ?: journey.place(d)?.name ?: "Unknown place",
-                                        own = false,
-                                        slept = bed == d,
-                                        onSlept = { actions.onSlept(place, d) },
-                                        onOpen = { actions.onOpenPlace(d) },
-                                        onRemove = { actions.onRemoveDayPlace(place, d) },
+                                    StopMenu(
+                                        canEarlier = i > 0,
+                                        canLater = i < trip.cities.size - 1,
+                                        onMove = { by -> actions.onMove(place, by) },
                                     )
                                 }
                             }
-                            if (!lived) {
-                                TextButton(onClick = { actions.onAddDayPlace(place) }, contentPadding = PaddingValues(horizontal = 0.dp)) {
-                                    Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    Spacer(Modifier.width(6.dp))
-                                    Text(if (days.isEmpty()) "Went somewhere from here" else "Went somewhere else from here")
-                                }
+                            days.forEach { d ->
+                                DayPlaceRow(
+                                    name = placeOf(d, visit, places)?.name ?: journey.place(d)?.name ?: "Unknown place",
+                                    slept = bed == d,
+                                    onSlept = { actions.onSlept(place, d) },
+                                    onOpen = { actions.onOpenPlace(d) },
+                                    onRemove = { actions.onRemoveDayPlace(place, d) },
+                                )
                             }
-                            Spacer(Modifier.height(6.dp))
+                            Spacer(Modifier.height(8.dp))
                             StopDatesPill(from, to, onClick = { stopDates = place })
-                            MemoryRow(
-                                trip.memories.filter { it.place == place },
-                                onOpen = { viewing = it },
-                                onAdd = { adding = place },
-                                invite = false,
+                            val kept = trip.memories.filter { it.place == place }
+                            MemoryRow(kept, onOpen = { viewing = it }, onAdd = { adding = place })
+                            QuietActions(
+                                memory = if (kept.isEmpty()) ({ adding = place }) else null,
+                                dayTrip = if (!lived) ({ actions.onAddDayPlace(place) }) else null,
                             )
                         }
                     }
@@ -463,7 +448,8 @@ fun VisitTimeline(
             val a = journey.endPoint(trip, visit, from)
             val b = journey.endPoint(trip, visit, to)
             LegPicker(
-                title = "${a?.name ?: nameOf(from)}  →  ${b?.name ?: nameOf(to)}",
+                fromName = a?.name ?: nameOf(from),
+                toName = b?.name ?: nameOf(to),
                 from = a?.let { it.lat to it.lon },
                 to = b?.let { it.lat to it.lon },
                 initial = l?.ways.orEmpty(),
@@ -471,6 +457,8 @@ fun VisitTimeline(
                 airports = journey.airports,
                 onDone = { ways, via -> actions.onLeg(from, to, ways, via); leg = null },
                 onDismiss = { leg = null },
+                fromHome = from == com.marcusrosado.stamp.data.Leg.START && trip.start == null && journey.homeFor(trip) != null,
+                toHome = to == com.marcusrosado.stamp.data.Leg.END && trip.end == null && journey.homeAtEnd(trip) != null,
             )
         }
         pickingEnd?.let { start ->
@@ -650,37 +638,92 @@ private fun DateLine(label: String, muted: Boolean, onClick: () -> Unit) {
     )
 }
 
-/**
- * One place of a stop that has day places: the stop's own place or one gone to from it, with a
- * bed to say this is where the user slept, and a way to take a day place off.
- */
+/** A place gone to from a stop on its dates, with a bed to say the user slept there instead. */
 @Composable
-private fun DayPlaceRow(name: String, own: Boolean, slept: Boolean, onSlept: () -> Unit, onOpen: () -> Unit, onRemove: (() -> Unit)?) {
+private fun DayPlaceRow(name: String, slept: Boolean, onSlept: () -> Unit, onOpen: () -> Unit, onRemove: () -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-        IconButton(onClick = onSlept, modifier = Modifier.size(36.dp)) {
+        Row(
+            Modifier.weight(1f).clip(RoundedCornerShape(8.dp)).clickable(onClick = onOpen).padding(vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Icon(
-                if (slept) Icons.Filled.Hotel else Icons.Outlined.Hotel,
-                contentDescription = if (slept) "Slept here" else "Slept here instead",
-                tint = if (slept) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
-                modifier = Modifier.size(20.dp),
+                Icons.Filled.SubdirectoryArrowRight, contentDescription = null,
+                tint = MaterialTheme.colorScheme.outline, modifier = Modifier.size(18.dp),
             )
-        }
-        Column(Modifier.weight(1f).clip(RoundedCornerShape(8.dp)).clickable(onClick = onOpen).padding(vertical = 4.dp, horizontal = 4.dp)) {
-            Text(name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Spacer(Modifier.width(8.dp))
+            Text(name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+            Spacer(Modifier.width(8.dp))
             Text(
-                when {
-                    slept -> "Slept here"
-                    own -> "Went here from where you slept"
-                    else -> "Day trip"
-                },
+                if (slept) "Slept here" else "Day trip",
                 style = MaterialTheme.typography.labelSmall,
                 color = if (slept) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        if (onRemove != null) {
-            IconButton(onClick = onRemove, modifier = Modifier.size(36.dp)) {
-                Icon(Icons.Filled.Close, contentDescription = "Remove", modifier = Modifier.size(18.dp))
-            }
+        BedButton(slept = slept, onClick = onSlept)
+        IconButton(onClick = onRemove, modifier = Modifier.size(36.dp)) {
+            Icon(Icons.Filled.Close, contentDescription = "Remove $name", modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+/** Says this is where the user slept: filled when it is, a quiet outline to move the bed here. */
+@Composable
+private fun BedButton(slept: Boolean, onClick: () -> Unit) {
+    IconButton(onClick = onClick, modifier = Modifier.size(36.dp)) {
+        Icon(
+            if (slept) Icons.Filled.Hotel else Icons.Outlined.Hotel,
+            contentDescription = if (slept) "Slept here" else "Slept here instead",
+            tint = if (slept) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+            modifier = Modifier.size(20.dp),
+        )
+    }
+}
+
+/** Moving a stop earlier or later, kept in a menu so the stops themselves stay calm. */
+@Composable
+private fun StopMenu(canEarlier: Boolean, canLater: Boolean, onMove: (Int) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { open = true }, modifier = Modifier.size(36.dp)) {
+            Icon(Icons.Filled.MoreVert, contentDescription = "Move this stop", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        androidx.compose.material3.DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            androidx.compose.material3.DropdownMenuItem(
+                text = { Text("Move earlier") }, enabled = canEarlier,
+                leadingIcon = { Icon(Icons.Filled.KeyboardArrowUp, contentDescription = null) },
+                onClick = { open = false; onMove(-1) },
+            )
+            androidx.compose.material3.DropdownMenuItem(
+                text = { Text("Move later") }, enabled = canLater,
+                leadingIcon = { Icon(Icons.Filled.KeyboardArrowDown, contentDescription = null) },
+                onClick = { open = false; onMove(1) },
+            )
+        }
+    }
+}
+
+/** The small things a stop can still take, as quiet chips rather than empty tiles. */
+@Composable
+private fun QuietActions(memory: (() -> Unit)?, dayTrip: (() -> Unit)?) {
+    if (memory == null && dayTrip == null) return
+    Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        memory?.let { QuietChip(Icons.Outlined.AddAPhoto, "Memory", it) }
+        dayTrip?.let { QuietChip(Icons.Filled.SubdirectoryArrowRight, "Day trip", it) }
+    }
+}
+
+@Composable
+private fun QuietChip(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(50),
+        color = MaterialTheme.colorScheme.surface,
+        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Row(Modifier.padding(horizontal = 12.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(icon, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
+            Spacer(Modifier.width(6.dp))
+            Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface)
         }
     }
 }
@@ -752,27 +795,9 @@ private fun DatePart(d: PartialDate?, guessed: Boolean) {
 
 /** A stop's photos, videos and moments in a row, ending with a tile that adds another. */
 @Composable
-private fun MemoryRow(memories: List<Memory>, onOpen: (Memory) -> Unit, onAdd: () -> Unit, invite: Boolean) {
-    if (invite) {
-        Spacer(Modifier.height(8.dp))
-        Surface(
-            onClick = onAdd,
-            shape = RoundedCornerShape(20.dp),
-            color = MaterialTheme.colorScheme.primaryContainer,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Outlined.AddAPhoto, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimaryContainer)
-                Spacer(Modifier.width(16.dp))
-                Text(
-                    "Keep a memory from this trip",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                )
-            }
-        }
-        return
-    }
+private fun MemoryRow(memories: List<Memory>, onOpen: (Memory) -> Unit, onAdd: () -> Unit) {
+    // With nothing kept yet, a quiet chip asks instead of an empty tile on every stop.
+    if (memories.isEmpty()) return
     Spacer(Modifier.height(10.dp))
     // A plain scrolling row, not a lazy one: the timeline row around it measures its height.
     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {

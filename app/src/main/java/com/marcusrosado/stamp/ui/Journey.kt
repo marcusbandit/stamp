@@ -94,6 +94,3 @@ class Journey(val visits: Map<String, Visit>, val places: Places?, val airports:
 }
 
 val LocalJourney = compositionLocalOf { Journey(emptyMap(), null, null) }
-
-/** "CPH → HEL → HND", the airports a flight went through. */
-fun viaLabel(via: List<String>): String = via.joinToString("  →  ")
