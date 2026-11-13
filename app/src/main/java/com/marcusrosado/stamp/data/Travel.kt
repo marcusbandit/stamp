@@ -51,6 +51,9 @@ data class Leg(
     }
 }
 
+/** Finds the real line a way of travel took between two points, or null to draw it straight. */
+typealias Follow = (Travel, Pair<Double, Double>, Pair<Double, Double>) -> List<Pair<Double, Double>>?
+
 /** The line a leg draws on the map, as latitude and longitude. */
 object LegPath {
     /**
@@ -84,7 +87,12 @@ object LegPath {
      * A leg taken several ways, cut into that many even stretches along the line between its
      * stops, each drawn its own way. One way, or none, is the whole leg.
      */
-    fun parts(a: Pair<Double, Double>, b: Pair<Double, Double>, ways: List<Travel>): List<Pair<List<Pair<Double, Double>>, Travel?>> {
+    fun parts(
+        a: Pair<Double, Double>, b: Pair<Double, Double>, ways: List<Travel>, follow: Follow? = null,
+    ): List<Pair<List<Pair<Double, Double>>, Travel?>> {
+        // One way from place to place can follow the real line; split stretches stay straight,
+        // since the points between them are only guesses.
+        if (ways.size == 1) follow?.invoke(ways[0], a, b)?.let { return listOf(it to ways[0]) }
         if (ways.size <= 1) return listOf(points(a, b, ways.firstOrNull()) to ways.firstOrNull())
         val end = nearest(a, b)
         fun at(f: Double) = (a.first + (end.first - a.first) * f) to (a.second + (end.second - a.second) * f)
@@ -101,12 +109,13 @@ object LegPath {
      */
     fun route(
         a: Pair<Double, Double>, b: Pair<Double, Double>, ways: List<Travel>, via: List<Pair<Double, Double>>,
+        follow: Follow? = null,
     ): List<Pair<List<Pair<Double, Double>>, Travel?>> {
         val plane = ways.indexOf(Travel.Plane)
-        if (plane < 0 || via.size < 2) return parts(a, b, ways)
+        if (plane < 0 || via.size < 2) return parts(a, b, ways, follow)
         fun ground(x: Pair<Double, Double>, y: Pair<Double, Double>, w: List<Travel>) =
             if (x == y || Distance.km(x, y) < 1.0) emptyList()
-            else if (w.isEmpty()) listOf(listOf(x, nearest(x, y)) to null) else parts(x, y, w)
+            else if (w.isEmpty()) listOf(listOf(x, nearest(x, y)) to null) else parts(x, y, w, follow)
         return ground(a, via.first(), ways.take(plane)) +
             via.zipWithNext().map { (x, y) -> points(x, y, Travel.Plane) to Travel.Plane } +
             ground(via.last(), b, ways.drop(plane + 1))

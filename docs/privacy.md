@@ -4,10 +4,10 @@ title: Stamp privacy policy
 
 # Stamp privacy policy
 
-Last updated 13 November 2026.
+Last updated 13 November 2026, for rail and road downloads.
 
-Stamp keeps everything on your phone. It has no account, no ads, no analytics and no internet
-permission, so it cannot send anything anywhere.
+Stamp keeps everything you enter on your phone. It has no account, no ads and no analytics, and
+it never sends your marks, trips, places or photos anywhere.
 
 That also means nobody, including the developer, can recover your data if it is lost. If you
 delete the app, reset or lose your phone, your marks are gone unless your own Android backup
@@ -31,6 +31,17 @@ on this phone. Uninstalling Stamp deletes them.
 If Android backup is turned on in your phone's settings, Android may include this storage in your
 own device backup. That backup belongs to your Google account; the Stamp developer cannot see it.
 
+## What Stamp downloads
+
+When a trip has a leg by train, car or bus, Stamp downloads the main railways and big roads of
+the countries that trip goes through, so the leg can follow the real line. Each download asks for
+one country's file by its two-letter code from GitHub, which hosts the files, and nothing else.
+As with any download, GitHub sees the address your phone connects from; the request carries no
+account, no identifier and nothing about your trips. You can turn this off in Settings, Map.
+
+These files are map data, not your data. They are kept outside your backup and are fetched again
+when needed.
+
 ## What Stamp shares
 
 Nothing. Stamp does not collect personal data and does not share data with anyone.
@@ -40,7 +51,9 @@ Nothing. Stamp does not collect personal data and does not share data with anyon
 - Photos and videos: to read where and when they were taken. You can allow all, some or none.
 - Photo location: Android hides the location inside photos unless an app asks for this.
 
-Stamp does not ask for your device location.
+- Rough location, if you turn on "Mark the country I'm in": to find which country the phone is in.
+  It is read on the phone and never sent anywhere.
+- Internet: only to download the rail and road files described above.
 
 ## Children
 

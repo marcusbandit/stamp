@@ -1,7 +1,8 @@
 # CLAUDE.md
 
 Stamp is an Android travel tracker in Kotlin and Jetpack Compose. You mark countries on a
-MapLibre world map drawn from bundled Natural Earth shapes, with no tiles and no network.
+MapLibre world map drawn from bundled Natural Earth shapes, with no tiles. The only network use is
+downloading rail and road packs for legs that follow real lines.
 README.md has the code layout and the build commands. This file holds the rules for working
 on it.
 
@@ -27,7 +28,10 @@ on it.
 - **Memories may use the system photo picker.** Attaching photos and videos to a visit's stops
   offers suggestions from this phone (taken on those dates near that place) plus the system
   gallery picker, with a lasting read grant. Videos never autoplay inside the app.
-- Nothing leaves the phone. There are no accounts and no network calls.
+- The user's data never leaves the phone. There are no accounts. With the owner's go-ahead
+  (2026-11-13) the app may download public map data: per-country rail and road packs from the
+  `marcusbandit/stamp-data` repository, asked for by country code only, kept outside the backup
+  and switched off in Settings. Nothing about the user goes with any request.
 - Every input beyond the country itself is optional: dates (year, month or day), ratings,
   visit counts, cities. A country with no other details is a complete entry.
 - Onboarding introduces every feature that needs setup: the photo scan, and the photo access

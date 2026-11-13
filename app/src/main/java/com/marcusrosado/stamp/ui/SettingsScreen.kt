@@ -177,6 +177,7 @@ fun SettingsScreen(state: AppState, contentPadding: PaddingValues, modifier: Mod
         Found("Photo access", Page.Memories, "permission allow gallery"),
         Found("Photos on the map", Page.Memories, "previews pictures zoom"),
         Found("Routes between cities", Page.Map, "lines dashed trip path plane train bus walk bike car ferry travel"),
+        Found("Follow railways and roads", Page.Map, "rail tracks motorway highway download real line"),
         Found("Mark the country I'm in", Page.Map, "location gps where am i here current country"),
         Found("Save a backup", Page.Backup, "export file json copy"),
         Found("Restore from a backup", Page.Backup, "import file json"),
@@ -502,6 +503,11 @@ private fun MapPage(state: AppState) {
     Category("On the map")
     SwitchPref("Routes between cities", "Lines in the order visited", state.routes, state.onRoutes)
     if (state.routes) TravelLegend(Modifier.padding(start = 24.dp, end = 24.dp, top = 4.dp, bottom = 12.dp))
+    SwitchPref(
+        "Follow railways and roads",
+        "Downloads the main rail lines and motorways of countries you travel in",
+        state.followLines, state.onFollowLines,
+    )
     // Where the phone is: on asks for the rough location if the phone has not allowed it yet.
     val context = LocalContext.current
     val askHere = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -661,6 +667,7 @@ private fun AboutPage() {
     Pref("Cities and regions", "GeoNames, CC BY 4.0")
     Pref("Airports", "OurAirports, public domain")
     Pref("City boundaries", "© OpenStreetMap contributors, ODbL")
+    Pref("Railways and roads", "© OpenStreetMap contributors, ODbL")
 }
 
 // ---------------------------------------------------------------- photo access

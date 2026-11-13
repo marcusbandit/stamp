@@ -10,6 +10,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
+import kotlinx.coroutines.ensureActive
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -104,6 +105,9 @@ class AppState(
     /** Route lines between a visit's cities show on the map. */
     val routes: Boolean,
     val onRoutes: (Boolean) -> Unit,
+    /** Whether train, car and bus legs follow the real rails and roads. */
+    val followLines: Boolean = true,
+    val onFollowLines: (Boolean) -> Unit = {},
     /** When the last backup was saved, epoch ms, 0 for never. */
     val lastBackup: Long,
     /** Whether the country the phone is in gets marked and the map opens there. */
@@ -218,6 +222,8 @@ private fun App(
     val split by app.split.on.collectAsStateWithLifecycle()
     val mapPhotos by app.mapPhotos.on.collectAsStateWithLifecycle()
     val routes by app.routes.on.collectAsStateWithLifecycle()
+    val follow by app.followLines.on.collectAsStateWithLifecycle()
+    val lines by app.routePacks.net.collectAsStateWithLifecycle()
     val lastBackup by app.lastBackup.collectAsStateWithLifecycle()
     val here by app.here.on.collectAsStateWithLifecycle()
     // Once per launch: find the country the phone is in, mark it visited if it is not marked
@@ -366,6 +372,8 @@ private fun App(
             onMapPhotos = app.mapPhotos::set,
             routes = routes,
             onRoutes = app.routes::set,
+            followLines = follow,
+            onFollowLines = app.followLines::set,
             lastBackup = lastBackup,
             here = here,
             onHere = app.here::set,
@@ -389,8 +397,34 @@ private fun App(
             },
             app = app,
         )
-        val journey = remember(visits, places, airports) { Journey(visits, places, airports) }
-        androidx.compose.runtime.CompositionLocalProvider(LocalJourney provides journey) {
+        // The packs of every country a leg by rail or road starts or ends in, the way there
+        // from a home in another country included. Switched off, the kept packs go.
+        LaunchedEffect(visits, places, airports, follow) {
+            if (!follow) { app.routePacks.clear(); return@LaunchedEffect }
+            val plain = Journey(visits, places, airports)
+            val codes = visits.values.flatMap { v -> v.trips.map { it to v } }.distinctBy { it.first.id }
+                .flatMap { (t, v) ->
+                    t.legEnds.filter { (a, b) -> t.legBetween(a, b)?.ways.orEmpty().any { com.marcusrosado.stamp.data.RouteNet.kindOf(it) != null } }
+                        .flatMap { (a, b) -> listOfNotNull(plain.endPoint(t, v, a), plain.endPoint(t, v, b)) }
+                }
+                .mapNotNull { p -> atlas.locate(p.lat, p.lon)?.let { land -> land.alpha2.ifEmpty { null } ?: atlas.byId[land.country]?.alpha2?.ifEmpty { null } } }
+                .toSet()
+            if (codes.isNotEmpty()) app.routePacks.want(codes)
+        }
+        val journey = remember(visits, places, airports, lines, follow) { Journey(visits, places, airports, lines.takeIf { follow }) }
+        // Every trip's lines, worked out once for every map and off the main thread: following
+        // the rails can take a moment the first time. The last lines stay up meanwhile.
+        val mapRoutes by produceState(emptyList<MapRoute>(), journey) {
+            value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                // A trip that crosses borders shows on every country it touched; draw it once.
+                journey.visits.values.filter { it.state.counts }
+                    .flatMap { v -> v.trips.map { it to v } }
+                    .distinctBy { (t, _) -> t.id }
+                    .flatMap { (t, v) -> ensureActive(); journey.routes(t, v) }
+                    .distinct()
+            }
+        }
+        androidx.compose.runtime.CompositionLocalProvider(LocalJourney provides journey, LocalMapRoutes provides mapRoutes) {
             when (state.posture) {
                 Posture.Portrait -> PortraitLayout(state)
                 // One layout for the big screen, flat or bent, so bending it never swaps the tree.

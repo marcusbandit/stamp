@@ -456,17 +456,7 @@ private fun StampMap(
         visits = state.visits,
         showRoutes = state.routes,
         split = state.split,
-        routes = LocalJourney.current.let { journey ->
-            remember(journey) {
-                // A trip that crosses borders shows on every country it touched; draw it once.
-                journey.visits.values.filter { it.state.counts }
-                    .flatMap { v -> v.trips.map { it to v } }
-                    .distinctBy { (t, _) -> t.id }
-                    .flatMap { (t, v) ->
-                        journey.routes(t, v)
-                    }.distinct()
-            }
-        },
+        routes = LocalMapRoutes.current,
         photos = remember(state.visits, state.places, state.mapPhotos) {
             if (!state.mapPhotos) return@remember emptyList()
             // The first photo kept at each place; places only, not the visit as a whole.

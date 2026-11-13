@@ -94,6 +94,12 @@ class StampApp : Application() {
     /** Whether the route lines between a visit's cities show on the map. */
     val routes by lazy { Toggle(FLAG_NO_ROUTES) }
 
+    /** Whether legs by train, car or bus follow the real rails and roads, fetched per country. */
+    val followLines by lazy { Toggle(FLAG_NO_FOLLOW_LINES) }
+
+    /** The rail and road packs, kept outside the user's backup: map data, fetched again at will. */
+    val routePacks by lazy { com.marcusrosado.stamp.data.RoutePacks(File(noBackupFilesDir, "routes"), scope) }
+
     /** Whether the country the phone is in gets marked and the map opens there. */
     val here by lazy { Toggle(FLAG_NO_HERE) }
 
@@ -157,6 +163,7 @@ class StampApp : Application() {
         private const val FLAG_WHOLE = "whole_countries"
         private const val FLAG_NO_MAP_PHOTOS = "no_map_photos"
         private const val FLAG_NO_ROUTES = "no_routes"
+        private const val FLAG_NO_FOLLOW_LINES = "no_follow_lines"
         private const val FLAG_NO_HERE = "no_here"
         private const val BACKUP_FILE = "last_backup.txt"
     }
