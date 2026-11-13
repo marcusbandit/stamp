@@ -769,7 +769,12 @@ private fun HomePage(state: AppState) {
     var leaving by remember { mutableStateOf(false) }
     moving?.let { c ->
         LossDialog(
-            Loss("Move home to ${c.name}?", if (home != null) "${country?.name ?: "Your home country"} becomes a place you lived." else "${c.name} becomes where you live.", "Move"),
+            // Only asked with a home already set; with none, a pick moves straight in.
+            Loss(
+                "Move home to ${c.name}?",
+                "${country?.name ?: "Your home country"} becomes a place you lived, and ${c.name} is marked Lived as where you live now.",
+                "Move",
+            ),
             onConfirm = { state.app.visits.setHome(c.id); query = ""; moving = null },
             onDismiss = { moving = null },
         )

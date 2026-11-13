@@ -120,7 +120,9 @@ fun CountryListScreen(
                         TravelState.entries.forEach { s ->
                             IconToggleButton(checked = state == s, onCheckedChange = { on ->
                                 val to = if (on) s else null
-                                val loss = lossOf(c.id, c.name, visits[c.id], to)
+                                // Whole, clearing a country clears its parts too, so their loss counts.
+                                val parts = if (split) emptyList() else atlas.partsOf(c.id).mapNotNull { visits[it.id] }
+                                val loss = lossOf(c.id, c.name, visits[c.id], to, parts)
                                 if (loss != null) asking = Triple(c.id, to, loss) else onSet(c.id, to)
                             }) {
                                 Icon(

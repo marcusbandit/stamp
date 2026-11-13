@@ -223,21 +223,19 @@ fun TripsSection(
         }
     }
     removing?.let { t ->
-        SeamAlertDialog(
-            onDismissRequest = { removing = null },
-            title = { Text(if (lived) "Remove this time living here?" else "Remove this visit?") },
-            // Everything that goes with it, photos included, so nothing is lost by surprise.
-            text = {
-                Text(
-                    listOfNotNull(
-                        if (lived) stayLabel(t) else rangeLabel(t.date, t.until),
-                        t.places.size.takeIf { it > 0 }?.let { if (it == 1) "1 city" else "$it cities" },
-                        t.memories.size.takeIf { it > 0 }?.let { if (it == 1) "1 memory" else "$it memories" },
-                    ).joinToString(", ").ifEmpty { "Nothing filled in yet" },
-                )
-            },
-            confirmButton = { TextButton(onClick = { onRemove(t); removing = null }) { Text("Remove") } },
-            dismissButton = { TextButton(onClick = { removing = null }) { Text("Keep") } },
+        LossDialog(
+            Loss(
+                if (lived) "Remove this time living here?" else "Remove this visit?",
+                // Everything that goes with it, photos included, so nothing is lost by surprise.
+                listOfNotNull(
+                    if (lived) stayLabel(t) else rangeLabel(t.date, t.until),
+                    t.places.size.takeIf { it > 0 }?.let { if (it == 1) "1 city" else "$it cities" },
+                    t.memories.size.takeIf { it > 0 }?.let { if (it == 1) "1 memory" else "$it memories" },
+                ).joinToString(", ").ifEmpty { "Nothing filled in yet" },
+                "Remove",
+            ),
+            onConfirm = { onRemove(t); removing = null },
+            onDismiss = { removing = null },
         )
     }
 }
@@ -346,13 +344,17 @@ fun CityDialog(
     onRemove: () -> Unit,
     onDismiss: () -> Unit,
     onShowOnMap: (() -> Unit)? = null,
+    /**
+     * What removing asks first. Taking a stop off a visit takes its dates, day trips and legs
+     * with it; a day trip takes only itself.
+     */
+    removeAsk: Loss? = removeLabel?.let { Loss("$it?", "Its dates, day trips and the ways to and from it go too.", "Remove") },
 ) {
     var renaming by remember { mutableStateOf(false) }
-    // Taking a stop off a visit takes its dates, day trips and legs with it, so it asks.
     var removing by remember { mutableStateOf(false) }
-    if (removing && removeLabel != null) {
+    if (removing && removeAsk != null) {
         LossDialog(
-            Loss("$removeLabel?", "Its dates, day trips and the ways to and from it go too.", "Remove"),
+            removeAsk,
             onConfirm = { removing = false; onRemove() },
             onDismiss = { removing = false },
         )
@@ -449,7 +451,8 @@ fun placeOf(stop: String, visit: Visit?, places: Places?): PlaceInfo? {
 fun DateDialog(initial: PartialDate?, onDone: (PartialDate?) -> Unit, onDismiss: () -> Unit) {
     val thisYear = LocalDate.now().year
     // A stored year outside the wheel, from old data or a camera with a wrong clock, starts at its edge.
-    var year by rememberSaveable { mutableStateOf((initial?.year ?: thisYear).coerceIn(FIRST_YEAR, thisYear)) }
+    val startYear = (initial?.year ?: thisYear).coerceIn(FIRST_YEAR, thisYear)
+    var year by rememberSaveable { mutableStateOf(startYear) }
     var month by rememberSaveable { mutableStateOf(initial?.month) }
     var day by rememberSaveable { mutableStateOf(initial?.day) }
     val days = month?.let { YearMonth.of(year, it).lengthOfMonth() } ?: 31
@@ -458,14 +461,11 @@ fun DateDialog(initial: PartialDate?, onDone: (PartialDate?) -> Unit, onDismiss:
 
     SeamAlertDialog(
         onDismissRequest = onDismiss,
+        // A date being picked survives a stray tap outside; untouched, a tap outside closes it.
+        outsideCloses = year == startYear && month == initial?.month && day == initial?.day,
         title = { Text("When was it?") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(
-                    "As exact as you remember. A year is enough.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
                 val years = (FIRST_YEAR..thisYear).toList()
                 Wheel(years.map { "$it" }, selected = year - FIRST_YEAR, onSelect = { year = years[it] })
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {

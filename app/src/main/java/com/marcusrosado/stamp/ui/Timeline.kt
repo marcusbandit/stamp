@@ -1063,7 +1063,15 @@ private fun MemoryViewer(memory: Memory, onSave: (Memory) -> Unit, onRemove: () 
     var removing by remember(memory.id) { mutableStateOf(false) }
     if (removing) {
         LossDialog(
-            Loss("Remove this memory?", if (memory.media == null) "What you wrote goes with it." else "The photo stays in your gallery.", "Remove"),
+            Loss(
+                "Remove this memory?",
+                when {
+                    memory.media == null -> "What you wrote goes with it."
+                    else -> "The ${if (memory.video) "video" else "photo"} stays in your gallery" +
+                        if (memory.text.isNotBlank()) "; its note goes." else "."
+                },
+                "Remove",
+            ),
             onConfirm = { removing = false; onRemove() },
             onDismiss = { removing = false },
         )

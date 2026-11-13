@@ -133,6 +133,8 @@ fun CountryDetail(
      * as id and label, so their visits stay reachable.
      */
     markedParts: List<Pair<String, String>> = emptyList(),
+    /** With whole countries, the visits of its parts, which clearing the country clears too. */
+    partVisits: List<Visit> = emptyList(),
     onOpenPart: (String) -> Unit = {},
 ) {
     // A change of mark that would throw something away, waiting for the user to say yes.
@@ -189,7 +191,7 @@ fun CountryDetail(
         }
         StateButtons(visit?.state, { s ->
             // A change that drops visits, stars or other trips' stops asks first.
-            val loss = lossOf(country.id, country.name, visit, s)
+            val loss = lossOf(country.id, country.name, visit, s, partVisits)
             if (loss != null) asking = s to loss else onSet(s)
         })
         if (visit != null && visit.state.counts) {
@@ -355,6 +357,8 @@ fun CountryDetail(
         // Notes belong to the place, not to one stop at it.
         val cid = placeIdOf(stopId)
         val tripIndex = visit?.trips?.indexOfFirst { it.id == tripId } ?: -1
+        // A day place hangs from a stop; taking it off takes nothing else.
+        val dayPlace = visit?.trips?.getOrNull(tripIndex)?.let { stopId !in it.cities } == true
         CityDialog(
             place = placeOf(cid, visit, places),
             visits = visit?.visitsTo(cid) ?: 0,
@@ -363,9 +367,19 @@ fun CountryDetail(
             // Any place can carry the user's own name; an empty one goes back to the real name.
             onRename = { name -> actions.onCityNote(country.id, cid, (visit?.cityNotes?.get(cid) ?: Note()).copy(name = name.trim())) },
             onShowOnMap = placeOf(cid, visit, places)?.let { p -> { actions.onShowOnMap(p.lat, p.lon) } },
-            removeLabel = if (tripIndex >= 0) {
-                "Remove from ${if (visit?.state == TravelState.Lived) "stay" else "visit"} ${tripIndex + 1}"
-            } else null,
+            removeLabel = when {
+                tripIndex < 0 -> null
+                dayPlace -> "Remove day trip"
+                else -> "Remove from ${if (visit?.state == TravelState.Lived) "stay" else "visit"} ${tripIndex + 1}"
+            },
+            removeAsk = when {
+                tripIndex < 0 -> null
+                dayPlace -> Loss("Remove this day trip?", "", "Remove")
+                else -> Loss(
+                    "Remove from ${if (visit?.state == TravelState.Lived) "stay" else "visit"} ${tripIndex + 1}?",
+                    "Its dates, day trips and the ways to and from it go too.", "Remove",
+                )
+            },
             onRemove = {
                 if (tripId != null) actions.onRemoveCity(tripId, stopId)
                 openCity = null
@@ -463,30 +477,45 @@ fun FlagMark(country: Country, modifier: Modifier = Modifier) {
     }
 }
 
-/** What a change of mark would throw away: the question, what goes, and the word that does it. */
+/**
+ * What a change of mark would throw away: the question, what goes, and the word that does it.
+ * An empty [text] asks the question alone.
+ */
 class Loss(val title: String, val text: String, val action: String)
 
 /**
  * What changing [visit] of country [id] to [to] would throw away, or null when nothing would:
- * clearing drops its visits, cities, stars and heart; Want to go takes its stops off trips that
- * started in another country. The card and the country list ask the same way.
+ * clearing drops its visits, cities, stars and heart, and those of its [parts] when they are
+ * cleared with it; Want to go takes its stops off trips that started in another country. The
+ * card and the country list ask the same way.
  */
-fun lossOf(id: String, name: String, visit: Visit?, to: TravelState?): Loss? {
-    visit ?: return null
-    if (to == null && visit.hasDetails) {
+fun lossOf(id: String, name: String, visit: Visit?, to: TravelState?, parts: List<Visit> = emptyList()): Loss? {
+    if (to == null) {
+        val all = listOfNotNull(visit) + parts
+        if (all.none { it.hasDetails }) return null
+        // A trip through a country and one of its parts is one trip, not two.
+        val trips = all.flatMap { it.trips }.filter { !it.isBlank }.distinctBy { it.id }.size
+        val livedOnly = visit?.state == TravelState.Lived && parts.none { p -> p.trips.any { !it.isBlank } }
+        val rated = all.filter { it.rating > 0 }
+        val loved = all.count { it.loved }
+        val regions = all.sumOf { it.regions.size }
+        val cities = all.sumOf { it.cities.size }
         val lost = listOfNotNull(
-            visit.trips.count { !it.isBlank }.takeIf { it > 0 }?.let { if (visit.state == TravelState.Lived) "the dates you lived here" else visitsLabel(it) },
-            visit.rating.takeIf { it > 0 }?.let { "your $it-star rating" },
-            "the heart".takeIf { visit.loved },
-            visit.regions.size.takeIf { it > 0 }?.let { if (it == 1) "1 region you added" else "$it regions you added" },
-            visit.cities.size.takeIf { it > 0 }?.let { n ->
-                (if (n == 1) "1 city" else "$n cities") + if (visit.cityNotes.isNotEmpty()) " with their hearts and stars" else ""
+            trips.takeIf { it > 0 }?.let { if (livedOnly) "the dates you lived here" else visitsLabel(it) },
+            when (rated.size) { 0 -> null; 1 -> "your ${rated[0].rating}-star rating"; else -> "your star ratings" },
+            when (loved) { 0 -> null; 1 -> "the heart"; else -> "the hearts" },
+            regions.takeIf { it > 0 }?.let { if (it == 1) "1 region you added" else "$it regions you added" },
+            cities.takeIf { it > 0 }?.let { n ->
+                (if (n == 1) "1 city" else "$n cities") + if (all.any { it.cityNotes.isNotEmpty() }) " with their hearts and stars" else ""
             },
         )
         return Loss("Clear $name?", "This also removes ${lost.joinToString(", ")}.", "Clear")
     }
+    visit ?: return null
     if (to == TravelState.Want && visit.state != TravelState.Want) {
-        val others = visit.trips.count { it.home != id && it.lands.size > 1 }
+        // Only trips that pass through the country itself lose stops; one that only touched a
+        // part of it keeps them.
+        val others = visit.trips.count { id in it.lands && it.home != id && it.lands.size > 1 }
         if (others > 0) return Loss(
             "Mark $name as want to go?",
             "Its stops come off " + (if (others == 1) "a trip" else "$others trips") + " that started in another country.",
@@ -501,7 +530,7 @@ fun LossDialog(loss: Loss, onConfirm: () -> Unit, onDismiss: () -> Unit) {
     SeamAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(loss.title) },
-        text = { Text(loss.text) },
+        text = if (loss.text.isEmpty()) null else { { Text(loss.text) } },
         confirmButton = { TextButton(onClick = onConfirm) { Text(loss.action) } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Keep") } },
     )

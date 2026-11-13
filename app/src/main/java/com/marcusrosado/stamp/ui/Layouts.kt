@@ -430,6 +430,7 @@ private fun Card(state: AppState, shown: com.marcusrosado.stamp.data.Country, mo
         partOf = shown.takeIf { it.isPart }?.let { state.atlas.byId[it.country]?.name },
         markedParts = if (state.split || shown.isPart) emptyList() else state.atlas.partsOf(shown.id)
             .mapNotNull { p -> state.visits[p.id]?.let { p.id to "${p.name} · ${it.state.short}" } },
+        partVisits = if (state.split || shown.isPart) emptyList() else state.atlas.partsOf(shown.id).mapNotNull { state.visits[it.id] },
         onOpenPart = { state.onSelect(it) },
         countryLabel = state.countryLabel,
         landName = { state.atlas.byId[it]?.name ?: it },
