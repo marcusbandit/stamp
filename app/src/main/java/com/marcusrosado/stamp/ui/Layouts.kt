@@ -285,18 +285,24 @@ private fun MapPane(state: AppState, sidePanel: Boolean, bottomInset: Dp) {
             // On the thumb's side: left on the big screen, flat or bent, and right on the folded phone.
             val left = state.posture == Posture.Unfolded
             if (hinge != null || sidePanel || selected == null) {
+                var menuOpen by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
                 ActionMenu(
                     state,
+                    open = menuOpen,
+                    onOpen = { menuOpen = it },
                     Modifier.align(if (left) Alignment.BottomStart else Alignment.BottomEnd)
                         .padding(start = if (left) 4.dp else 0.dp, end = if (left) 0.dp else 4.dp, bottom = bottomInset),
                     left = left,
                 )
-                // Where am I, like any map app: above the main button, on the same side.
-                LocateButton(
-                    state,
-                    Modifier.align(if (left) Alignment.BottomStart else Alignment.BottomEnd)
+                // Where am I, like any map app: above the main button, on the same side. It steps
+                // aside while the menu is open, whose items rise through the same place.
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = !menuOpen,
+                    modifier = Modifier.align(if (left) Alignment.BottomStart else Alignment.BottomEnd)
                         .padding(start = if (left) 20.dp else 0.dp, end = if (left) 0.dp else 20.dp, bottom = bottomInset + 96.dp),
-                )
+                    enter = androidx.compose.animation.fadeIn() + androidx.compose.animation.scaleIn(),
+                    exit = androidx.compose.animation.fadeOut() + androidx.compose.animation.scaleOut(),
+                ) { LocateButton(state, Modifier) }
             }
             // The card slides up from the bottom and back down, rather than appearing at once. It
             // keeps showing the last country while it leaves.
@@ -493,8 +499,8 @@ private fun StampMap(
         val a = journey.endPoint(trip, visit, from)
         val b = journey.endPoint(trip, visit, to)
         LegPicker(
-            fromName = a?.name ?: "Home",
-            toName = b?.name ?: "Home",
+            fromName = a?.name ?: if (from == com.marcusrosado.stamp.data.Leg.START) "Home" else "The stop before",
+            toName = b?.name ?: if (to == com.marcusrosado.stamp.data.Leg.END) "Home" else "The next stop",
             from = a?.let { it.lat to it.lon },
             to = b?.let { it.lat to it.lon },
             initial = leg?.steps.orEmpty(),
@@ -569,9 +575,8 @@ private fun StampMap(
  */
 @OptIn(androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun ActionMenu(state: AppState, modifier: Modifier, left: Boolean = false) {
-    var open by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
-    BackHandler(enabled = open && state.destination == Destination.Map) { open = false }
+private fun ActionMenu(state: AppState, open: Boolean, onOpen: (Boolean) -> Unit, modifier: Modifier, left: Boolean = false) {
+    BackHandler(enabled = open && state.destination == Destination.Map) { onOpen(false) }
     androidx.compose.material3.FloatingActionButtonMenu(
         expanded = open,
         modifier = modifier,
@@ -582,7 +587,7 @@ private fun ActionMenu(state: AppState, modifier: Modifier, left: Boolean = fals
             val cs = MaterialTheme.colorScheme
             androidx.compose.material3.ToggleFloatingActionButton(
                 checked = open,
-                onCheckedChange = { open = it },
+                onCheckedChange = onOpen,
                 containerColor = { p -> androidx.compose.ui.graphics.lerp(cs.primaryContainer, cs.inverseSurface, p) },
             ) {
                 Icon(
@@ -594,17 +599,17 @@ private fun ActionMenu(state: AppState, modifier: Modifier, left: Boolean = fals
         },
     ) {
         FloatingActionButtonMenuItem(
-            onClick = { open = false; state.onNewTrip() },
+            onClick = { onOpen(false); state.onNewTrip() },
             icon = { Icon(Icons.Filled.Add, contentDescription = null) },
             text = { Text("New trip") },
         )
         FloatingActionButtonMenuItem(
-            onClick = { open = false; state.onFindCity() },
+            onClick = { onOpen(false); state.onFindCity() },
             icon = { Icon(Icons.Outlined.LocationCity, contentDescription = null) },
             text = { Text("Cities") },
         )
         FloatingActionButtonMenuItem(
-            onClick = { open = false; state.onOpenList() },
+            onClick = { onOpen(false); state.onOpenList() },
             icon = { Icon(Icons.Outlined.Public, contentDescription = null) },
             text = { Text("Countries") },
         )

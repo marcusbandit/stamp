@@ -148,7 +148,7 @@ fun CityPicker(
                         places == null -> Quiet("Loading cities")
                         anywhere && typed.length < 2 -> Quiet("Type a city in any country")
                         results.isEmpty() && typed.isEmpty() -> Quiet("No cities listed for $countryName")
-                        results.isEmpty() && alpha2.isEmpty() -> Quiet("No city called \"$typed\"")
+                        results.isEmpty() && (alpha2.isEmpty() || anywhere) -> Quiet("No city called \"$typed\"")
                         results.isEmpty() -> NotListed(typed, onPin = { onPin(typed) })
                         else -> LazyColumn(
                             Modifier.fillMaxSize().imePadding(),

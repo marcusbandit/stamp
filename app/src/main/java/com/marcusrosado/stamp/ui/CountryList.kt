@@ -60,6 +60,11 @@ fun CountryListScreen(
     BackHandler(onBack = onClose)
     var query by rememberSaveable { mutableStateOf("") }
     var mineOnly by rememberSaveable { mutableStateOf(false) }
+    // A change of mark that would throw something away, waiting for the user to say yes.
+    var asking by remember { mutableStateOf<Triple<String, TravelState?, Loss>?>(null) }
+    asking?.let { (id, s, loss) ->
+        LossDialog(loss, onConfirm = { asking = null; onSet(id, s) }, onDismiss = { asking = null })
+    }
     val palette = LocalMapPalette.current
     val q = fold(query.trim())
     // Split, Corsica and Hawaii are listed on their own; whole, only countries are.
@@ -113,7 +118,11 @@ fun CountryListScreen(
                             )
                         }
                         TravelState.entries.forEach { s ->
-                            IconToggleButton(checked = state == s, onCheckedChange = { on -> onSet(c.id, if (on) s else null) }) {
+                            IconToggleButton(checked = state == s, onCheckedChange = { on ->
+                                val to = if (on) s else null
+                                val loss = lossOf(c.id, c.name, visits[c.id], to)
+                                if (loss != null) asking = Triple(c.id, to, loss) else onSet(c.id, to)
+                            }) {
                                 Icon(
                                     s.icon,
                                     contentDescription = s.label,

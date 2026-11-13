@@ -135,7 +135,8 @@ fun CountryDetail(
     markedParts: List<Pair<String, String>> = emptyList(),
     onOpenPart: (String) -> Unit = {},
 ) {
-    var confirmClear by remember(country.id) { mutableStateOf(false) }
+    // A change of mark that would throw something away, waiting for the user to say yes.
+    var asking by remember(country.id) { mutableStateOf<Pair<TravelState?, Loss>?>(null) }
     // The visit a city is being picked for.
     var pickingFor by remember(country.id) { mutableStateOf<String?>(null) }
     // The city open in its dialog, and the visit it was opened from, if any.
@@ -187,8 +188,9 @@ fun CountryDetail(
             }
         }
         StateButtons(visit?.state, { s ->
-            // Clearing a mark drops its visits, stars and heart too, so ask first.
-            if (s == null && visit?.hasDetails == true) confirmClear = true else onSet(s)
+            // A change that drops visits, stars or other trips' stops asks first.
+            val loss = lossOf(country.id, country.name, visit, s)
+            if (loss != null) asking = s to loss else onSet(s)
         })
         if (visit != null && visit.state.counts) {
             LoveAndRating(
@@ -397,23 +399,8 @@ fun CountryDetail(
             } else null,
         )
     }
-    if (confirmClear && visit != null) {
-        val lost = listOfNotNull(
-            visit.trips.count { !it.isBlank }.takeIf { it > 0 }?.let { if (visit.state == TravelState.Lived) "the dates you lived here" else visitsLabel(it) },
-            visit.rating.takeIf { it > 0 }?.let { "your $it-star rating" },
-            "the heart".takeIf { visit.loved },
-            visit.regions.size.takeIf { it > 0 }?.let { if (it == 1) "1 region you added" else "$it regions you added" },
-            visit.cities.size.takeIf { it > 0 }?.let { n ->
-                (if (n == 1) "1 city" else "$n cities") + if (visit.cityNotes.isNotEmpty()) " with their hearts and stars" else ""
-            },
-        )
-        SeamAlertDialog(
-            onDismissRequest = { confirmClear = false },
-            title = { Text("Clear ${country.name}?") },
-            text = { Text("This also removes ${lost.joinToString(", ")}.") },
-            confirmButton = { TextButton(onClick = { confirmClear = false; onSet(null) }) { Text("Clear") } },
-            dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("Keep") } },
-        )
+    asking?.let { (s, loss) ->
+        LossDialog(loss, onConfirm = { asking = null; onSet(s) }, onDismiss = { asking = null })
     }
 }
 
@@ -474,4 +461,48 @@ fun FlagMark(country: Country, modifier: Modifier = Modifier) {
             )
         }
     }
+}
+
+/** What a change of mark would throw away: the question, what goes, and the word that does it. */
+class Loss(val title: String, val text: String, val action: String)
+
+/**
+ * What changing [visit] of country [id] to [to] would throw away, or null when nothing would:
+ * clearing drops its visits, cities, stars and heart; Want to go takes its stops off trips that
+ * started in another country. The card and the country list ask the same way.
+ */
+fun lossOf(id: String, name: String, visit: Visit?, to: TravelState?): Loss? {
+    visit ?: return null
+    if (to == null && visit.hasDetails) {
+        val lost = listOfNotNull(
+            visit.trips.count { !it.isBlank }.takeIf { it > 0 }?.let { if (visit.state == TravelState.Lived) "the dates you lived here" else visitsLabel(it) },
+            visit.rating.takeIf { it > 0 }?.let { "your $it-star rating" },
+            "the heart".takeIf { visit.loved },
+            visit.regions.size.takeIf { it > 0 }?.let { if (it == 1) "1 region you added" else "$it regions you added" },
+            visit.cities.size.takeIf { it > 0 }?.let { n ->
+                (if (n == 1) "1 city" else "$n cities") + if (visit.cityNotes.isNotEmpty()) " with their hearts and stars" else ""
+            },
+        )
+        return Loss("Clear $name?", "This also removes ${lost.joinToString(", ")}.", "Clear")
+    }
+    if (to == TravelState.Want && visit.state != TravelState.Want) {
+        val others = visit.trips.count { it.home != id && it.lands.size > 1 }
+        if (others > 0) return Loss(
+            "Mark $name as want to go?",
+            "Its stops come off " + (if (others == 1) "a trip" else "$others trips") + " that started in another country.",
+            "Mark",
+        )
+    }
+    return null
+}
+
+@Composable
+fun LossDialog(loss: Loss, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    SeamAlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(loss.title) },
+        text = { Text(loss.text) },
+        confirmButton = { TextButton(onClick = onConfirm) { Text(loss.action) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Keep") } },
+    )
 }

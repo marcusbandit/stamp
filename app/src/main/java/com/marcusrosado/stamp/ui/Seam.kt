@@ -81,12 +81,15 @@ fun dialogHalf(hinge: Hinge?): Half = if (hinge?.vertical == false) Half.First e
 
 /**
  * A dialog that never sits on the fold: centred on the screen when it is flat, and centred
- * on one half when it is bent. Taps outside the content dismiss it, as with any dialog.
+ * on one half when it is bent. Taps outside the content dismiss it, as with any dialog, unless
+ * [outsideCloses] is false: a dialog holding unsaved changes keeps them through a stray tap,
+ * which on a bent phone is anywhere on the map's half. Back still closes it.
  * [content] sizes itself; it gets the half (or the screen) as its room, inside the safe area.
  */
 @Composable
 fun SeamDialog(
     onDismissRequest: () -> Unit,
+    outsideCloses: Boolean = true,
     content: @Composable () -> Unit,
 ) {
     val hinge = LocalHinge.current
@@ -95,7 +98,7 @@ fun SeamDialog(
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
     ) {
         Box(
-            Modifier.fillMaxSize().pointerInput(onDismissRequest) { detectTapGestures { onDismissRequest() } },
+            Modifier.fillMaxSize().pointerInput(onDismissRequest, outsideCloses) { detectTapGestures { if (outsideCloses) onDismissRequest() } },
         ) {
             InHalf(dialogHalf(hinge), contentAlignment = Alignment.Center) {
                 Box(
@@ -121,8 +124,9 @@ fun SeamAlertDialog(
     dismissButton: (@Composable () -> Unit)? = null,
     title: (@Composable () -> Unit)? = null,
     text: (@Composable () -> Unit)? = null,
+    outsideCloses: Boolean = true,
 ) {
-    SeamDialog(onDismissRequest) {
+    SeamDialog(onDismissRequest, outsideCloses) {
         Surface(
             modifier = Modifier.widthIn(min = 280.dp, max = 560.dp),
             shape = RoundedCornerShape(28.dp),

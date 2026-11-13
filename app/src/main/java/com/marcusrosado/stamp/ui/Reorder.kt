@@ -76,6 +76,7 @@ fun StopOrderDialog(names: List<String>, onDone: (List<Int>) -> Unit, onDismiss:
     fun drop() { dragging = null; offset = 0f }
     SeamAlertDialog(
         onDismissRequest = onDismiss,
+        outsideCloses = order == names.indices.toList(),
         title = { Text("Order of stops") },
         text = {
             Column {
@@ -89,11 +90,14 @@ fun StopOrderDialog(names: List<String>, onDone: (List<Int>) -> Unit, onDismiss:
                         val slide = remember { Animatable(0f) }
                         var was by remember { mutableIntStateOf(at) }
                         LaunchedEffect(at) {
-                            if (!lifted && was != at) {
-                                slide.snapTo((was - at) * rowPx)
-                                slide.animateTo(0f)
-                            }
+                            // Noted before the glide, so a glide cut short by the next move
+                            // carries on from where it was and never leaves a row astray.
+                            val from = was
                             was = at
+                            if (!lifted && from != at) {
+                                slide.snapTo(slide.value + (from - at) * rowPx)
+                                slide.animateTo(0f)
+                            } else if (lifted) slide.snapTo(0f)
                         }
                         Row(
                             Modifier

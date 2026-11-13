@@ -144,12 +144,16 @@ fun WorldMap(
                     // still picks the country under it.
                     tappedTrips = null
                     if (routeTap != null) {
-                        val slack = 10 * context.resources.displayMetrics.density
-                        val box = android.graphics.RectF(e.x - slack, e.y - slack, e.x + slack, e.y + slack)
-                        val trips = m.queryRenderedFeatures(box, *ROUTE_LAYERS.filter { it != "route-icons" }.toTypedArray())
-                            .flatMap { f -> f.getStringProperty("trips")?.split(',').orEmpty() }
-                            .mapNotNull { e -> e.split('|').takeIf { it.size == 3 && it[0].isNotEmpty() }?.let { Triple(it[0], it[1], it[2]) } }
-                            .distinct()
+                        // Closest first: a tight box, then a wider one, so where two legs meet
+                        // at a stop the one under the finger wins over its neighbour.
+                        val layers = ROUTE_LAYERS.filter { it != "route-icons" }.toTypedArray()
+                        val trips = listOf(3f, 10f).asSequence().map { dp ->
+                            val slack = dp * context.resources.displayMetrics.density
+                            m.queryRenderedFeatures(android.graphics.RectF(e.x - slack, e.y - slack, e.x + slack, e.y + slack), *layers)
+                                .flatMap { f -> f.getStringProperty("trips")?.split(',').orEmpty() }
+                                .mapNotNull { e -> e.split('|').takeIf { it.size == 3 && it[0].isNotEmpty() }?.let { Triple(it[0], it[1], it[2]) } }
+                                .distinct()
+                        }.firstOrNull { it.isNotEmpty() }.orEmpty()
                         if (trips.isNotEmpty()) { tappedTrips = trips; return false }
                     }
                     // Both fills, since only one of them draws away from the switch-over zoom.

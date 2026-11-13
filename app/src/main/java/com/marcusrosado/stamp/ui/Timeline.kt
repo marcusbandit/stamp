@@ -731,7 +731,7 @@ private fun Bubble(icon: androidx.compose.ui.graphics.vector.ImageVector, label:
         shape = CircleShape,
         color = MaterialTheme.colorScheme.surface,
         border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        modifier = Modifier.size(36.dp),
+        modifier = Modifier.size(40.dp),
     ) {
         Box(contentAlignment = Alignment.Center) {
             Icon(icon, contentDescription = label, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
@@ -1048,6 +1048,14 @@ private fun BigChoice(icon: androidx.compose.ui.graphics.vector.ImageVector, lab
 private fun MemoryViewer(memory: Memory, onSave: (Memory) -> Unit, onRemove: () -> Unit, onDismiss: () -> Unit) {
     val context = LocalContext.current
     var text by remember(memory.id) { mutableStateOf(memory.text) }
+    var removing by remember(memory.id) { mutableStateOf(false) }
+    if (removing) {
+        LossDialog(
+            Loss("Remove this memory?", if (memory.media == null) "What you wrote goes with it." else "The photo stays in your gallery.", "Remove"),
+            onConfirm = { removing = false; onRemove() },
+            onDismiss = { removing = false },
+        )
+    }
     val screen = 1600
     // A written moment emptied of its words is gone, not an empty tile.
     fun finish() {
@@ -1083,7 +1091,7 @@ private fun MemoryViewer(memory: Memory, onSave: (Memory) -> Unit, onRemove: () 
                         placeholder = { Text(if (memory.media == null) "What happened here?" else "Add a note") },
                     )
                     Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(onClick = onRemove) { Icon(Icons.Filled.Delete, contentDescription = "Remove memory") }
+                        IconButton(onClick = { removing = true }) { Icon(Icons.Filled.Delete, contentDescription = "Remove memory") }
                         Spacer(Modifier.weight(1f))
                         TextButton(onClick = ::finish) { Text("Done") }
                     }
@@ -1114,6 +1122,7 @@ private fun RangeDialog(
     var editing by remember { mutableStateOf<Int?>(null) }
     SeamAlertDialog(
         onDismissRequest = onDismiss,
+        outsideCloses = a == from && b == to,
         title = { Text(title) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {

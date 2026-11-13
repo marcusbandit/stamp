@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -38,6 +39,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -82,7 +84,8 @@ fun LegLine(leg: Leg?, stops: List<String?>, question: String, where: String, li
                 .padding(horizontal = 8.dp, vertical = 6.dp),
         ) {
             val told = leg?.told.orEmpty()
-            if (told.isEmpty()) {
+            val named = stops.filterNotNull()
+            if (told.isEmpty() && named.isEmpty()) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
                     Spacer(Modifier.width(6.dp))
@@ -90,7 +93,9 @@ fun LegLine(leg: Leg?, stops: List<String?>, question: String, where: String, li
                 }
             } else {
                 Text(
-                    told.joinToString(", then ") { it.label.lowercase() }.replaceFirstChar { it.uppercase() } + " $where",
+                    // Stops named but no way said still tell where it went.
+                    if (told.isEmpty()) "Via ${named.joinToString(", ")} $where"
+                    else told.joinToString(", then ") { it.label.lowercase() }.replaceFirstChar { it.uppercase() } + " $where",
                     style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 2,
@@ -153,6 +158,7 @@ fun LegPicker(
     }
     SeamAlertDialog(
         onDismissRequest = onDismiss,
+        outsideCloses = steps == initial && around == initialAround,
         title = {
             BoardingPass(
                 fromName = fromName, toName = toName, fromHome = fromHome, toHome = toHome,
@@ -205,8 +211,13 @@ fun LegPicker(
             }
         },
         dismissButton = {
-            if (initial.isNotEmpty()) TextButton(onClick = { onDone(emptyList(), false) }) { Text("Clear") }
-            else TextButton(onClick = onDismiss) { Text("Cancel") }
+            Row {
+                // Clearing a told leg is its own red word, never where Cancel always is.
+                if (initial.isNotEmpty()) {
+                    TextButton(onClick = { onDone(emptyList(), false) }) { Text("Clear", color = MaterialTheme.colorScheme.error) }
+                }
+                TextButton(onClick = onDismiss) { Text("Cancel") }
+            }
         },
         confirmButton = {
             TextButton(onClick = { onDone(Leg.tidy(steps), around && farFlight) }) { Text("Done") }
@@ -255,13 +266,13 @@ private fun BoardingPass(fromName: String, toName: String, fromHome: Boolean, to
         // gets all the rest.
         val most = maxWidth * 0.3f
         Row(verticalAlignment = Alignment.CenterVertically) {
-            PlaceEnd(if (fromHome) "Home" else shortName(fromName), if (fromHome) shortName(fromName) else "From", end = false, modifier = Modifier.widthIn(max = most))
+            PlaceEnd(if (fromHome) "Home" else shortName(fromName), if (fromHome) shortName(fromName) else null, end = false, modifier = Modifier.widthIn(max = most))
             TravelStrip(
                 ways, stops,
                 Modifier.weight(1f).padding(horizontal = 8.dp),
                 gap = MaterialTheme.colorScheme.surfaceContainerHigh,
             )
-            PlaceEnd(if (toHome) "Home" else shortName(toName), if (toHome) shortName(toName) else "To", end = true, modifier = Modifier.widthIn(max = most))
+            PlaceEnd(if (toHome) "Home" else shortName(toName), if (toHome) shortName(toName) else null, end = true, modifier = Modifier.widthIn(max = most))
         }
     }
 }
@@ -354,13 +365,13 @@ private fun StepStop(big: String?, small: String?, onClick: () -> Unit, onRemove
 
 /** Where a leg by land or sea started or ended: the place, big, and a quiet word under it. */
 @Composable
-private fun PlaceEnd(big: String, small: String, end: Boolean, modifier: Modifier) {
+private fun PlaceEnd(big: String, small: String?, end: Boolean, modifier: Modifier) {
     Column(modifier.padding(vertical = 4.dp), horizontalAlignment = if (end) Alignment.End else Alignment.Start) {
         Text(
             big, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis,
         )
-        Text(
+        if (small != null) Text(
             small, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1, overflow = TextOverflow.Ellipsis,
         )
@@ -417,6 +428,7 @@ private fun Pill(text: String, color: Color, onClick: () -> Unit, onRemove: (() 
         shape = RoundedCornerShape(50),
         color = MaterialTheme.colorScheme.surfaceContainerHighest,
         border = if (add) BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant) else null,
+        modifier = Modifier.heightIn(min = 40.dp),
     ) {
         Row(Modifier.padding(start = 12.dp, end = if (onRemove != null) 4.dp else 12.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             if (add) {
@@ -453,6 +465,8 @@ private class StopHit(val id: String, val tag: String?, val name: String, val wh
 @Composable
 private fun StopSearch(airports: Airports?, places: Places?, near: List<Pair<Double, Double>>, onPick: (String) -> Unit, onDismiss: () -> Unit) {
     var query by remember { mutableStateOf("") }
+    val focus = remember { androidx.compose.ui.focus.FocusRequester() }
+    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
     val found = remember(query, near) {
         fun ap(a: Airport) = StopHit(Step.airport(a.code), a.code, a.name, listOf(a.town, a.country).filter { it.isNotBlank() }.joinToString(", "))
         if (query.isBlank()) near.flatMap { airports?.near(it, 4).orEmpty() }.distinctBy { it.code }.map(::ap)
@@ -470,9 +484,13 @@ private fun StopSearch(airports: Airports?, places: Places?, near: List<Pair<Dou
                     singleLine = true,
                     placeholder = { Text(if (places == null) "Code, airport or town" else "Airport or town") },
                     leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().focusRequester(focus),
                 )
                 Spacer(Modifier.height(8.dp))
+                when {
+                    airports == null -> Text("Loading airports", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(8.dp))
+                    query.isNotBlank() && found.isEmpty() -> Text("Nothing called \"${query.trim()}\"", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(8.dp))
+                }
                 // A plain column: the dialog already scrolls, and a lazy list inside a scroll
                 // has no height to measure against.
                 Column {

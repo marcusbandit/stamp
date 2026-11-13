@@ -472,16 +472,6 @@ private fun SwitchPref(title: String, summary: String?, on: Boolean, onChange: (
     }
 }
 
-/** The small print at the foot of a page, with an info mark. */
-@Composable
-private fun Footer(text: String) {
-    Row(Modifier.padding(start = 24.dp, end = 24.dp, top = 16.dp)) {
-        Icon(Icons.Outlined.Info, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
-        Spacer(Modifier.width(16.dp))
-        Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-}
-
 @Composable
 private fun AppearancePage(state: AppState) {
     Category("Theme")
@@ -621,7 +611,6 @@ private fun BackupPage(state: AppState) {
     Pref("Restore from a backup", onClick = { open.launch(arrayOf("application/json", "text/plain", "application/octet-stream")) })
     Category("Export")
     Pref("Spreadsheet", "CSV, one row per place", onClick = { csv.launch("stamp-places-$today.csv") })
-    Footer("Photos stay in your gallery and are not part of a backup.")
 
     val restoring = rememberCoroutineScope()
     pending?.let { (text, n) ->
@@ -773,9 +762,25 @@ private fun HomePage(state: AppState) {
                 color = MaterialTheme.colorScheme.primary,
             )
         }
-        Footer("Every home in ${country.name}, with when you lived there. Two at once is fine.")
     }
 
+    // Moving home changes a country's mark and ends the stay now going on, so it asks.
+    var moving by remember { mutableStateOf<Country?>(null) }
+    var leaving by remember { mutableStateOf(false) }
+    moving?.let { c ->
+        LossDialog(
+            Loss("Move home to ${c.name}?", if (home != null) "${country?.name ?: "Your home country"} becomes a place you lived." else "${c.name} becomes where you live.", "Move"),
+            onConfirm = { state.app.visits.setHome(c.id); query = ""; moving = null },
+            onDismiss = { moving = null },
+        )
+    }
+    if (leaving) {
+        LossDialog(
+            Loss("You don't live in any of these?", "${country?.name ?: "Your home country"} becomes a place you lived.", "Yes"),
+            onConfirm = { state.app.visits.setHome(null); leaving = false },
+            onDismiss = { leaving = false },
+        )
+    }
     Category(if (home == null) "Where do you live?" else "Moved country?")
     OutlinedTextField(
         value = query,
@@ -792,10 +797,10 @@ private fun HomePage(state: AppState) {
     state.atlas.mains
         .filter { it.id != currentCountry && (q.isEmpty() || Places.fold(it.name).contains(q)) }
         .sortedBy { it.name }
-        .forEach { c -> HomeRow(c, selected = false) { state.app.visits.setHome(c.id); query = "" } }
+        .forEach { c -> HomeRow(c, selected = false) { if (home == null) { state.app.visits.setHome(c.id); query = "" } else moving = c } }
     if (home != null && q.isEmpty()) {
         Row(
-            Modifier.fillMaxWidth().clickable { state.app.visits.setHome(null) }.padding(horizontal = 24.dp, vertical = 14.dp),
+            Modifier.fillMaxWidth().clickable { leaving = true }.padding(horizontal = 24.dp, vertical = 14.dp),
         ) {
             Text("I don't live in any of these", color = MaterialTheme.colorScheme.primary)
         }
@@ -1060,6 +1065,14 @@ private fun AddressEditor(
     var to by remember { mutableStateOf(left) }
     var stillHere by remember { mutableStateOf(left == null && arrived != null) }
     var picking by remember { mutableStateOf<Int?>(null) }
+    var removing by remember { mutableStateOf(false) }
+    if (removing) {
+        LossDialog(
+            Loss("Remove this address?", "Its dates go with it.", "Remove"),
+            onConfirm = { removing = false; onRemove() },
+            onDismiss = { removing = false },
+        )
+    }
     var moveTo by remember { mutableStateOf<Lookup.Found?>(null) }
     val context = LocalContext.current
     // Where the address really is, when that is more than a street away from where it sits.
@@ -1110,7 +1123,7 @@ private fun AddressEditor(
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(onClick = onShow) { Text("Show on map") }
-                    OutlinedButton(onClick = onRemove) { Text("Remove") }
+                    OutlinedButton(onClick = { removing = true }) { Text("Remove") }
                 }
             }
         },

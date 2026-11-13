@@ -32,6 +32,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -167,7 +168,9 @@ fun Onboarding(
                                     }
                                 }
                                 Spacer(Modifier.height(12.dp))
-                                StateButtons(TravelState.Visited, onSet = {})
+                                // A sample to try: it answers like the real one and keeps nothing.
+                                var sample by remember { mutableStateOf<TravelState?>(TravelState.Visited) }
+                                StateButtons(sample, onSet = { sample = it })
                             }
                         }
                         4 -> Page(
@@ -189,7 +192,9 @@ fun Onboarding(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                                 Spacer(Modifier.height(12.dp))
-                                StateButtons(TravelState.Visited, onSet = {})
+                                // A sample to try: it answers like the real one and keeps nothing.
+                                var sample by remember { mutableStateOf<TravelState?>(TravelState.Visited) }
+                                StateButtons(sample, onSet = { sample = it })
                             }
                         }
                     }

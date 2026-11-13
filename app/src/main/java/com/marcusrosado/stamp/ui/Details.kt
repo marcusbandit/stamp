@@ -348,6 +348,15 @@ fun CityDialog(
     onShowOnMap: (() -> Unit)? = null,
 ) {
     var renaming by remember { mutableStateOf(false) }
+    // Taking a stop off a visit takes its dates, day trips and legs with it, so it asks.
+    var removing by remember { mutableStateOf(false) }
+    if (removing && removeLabel != null) {
+        LossDialog(
+            Loss("$removeLabel?", "Its dates, day trips and the ways to and from it go too.", "Remove"),
+            onConfirm = { removing = false; onRemove() },
+            onDismiss = { removing = false },
+        )
+    }
     // Starts with the user's own name, never the real one, so Done on an untouched field
     // leaves the place unnamed.
     var name by remember(place?.name) { mutableStateOf(place?.takeIf { it.name != it.own }?.name.orEmpty()) }
@@ -406,7 +415,7 @@ fun CityDialog(
                 onDismiss()
             }) { Text("Done") }
         },
-        dismissButton = removeLabel?.let { { TextButton(onClick = onRemove) { Text(it) } } },
+        dismissButton = removeLabel?.let { { TextButton(onClick = { removing = true }) { Text(it, color = MaterialTheme.colorScheme.error) } } },
     )
 }
 
@@ -475,7 +484,8 @@ fun DateDialog(initial: PartialDate?, onDone: (PartialDate?) -> Unit, onDismiss:
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         FilledTonalIconButton(onClick = {
                             val m = month ?: return@FilledTonalIconButton
-                            val d = shownDay ?: return@FilledTonalIconButton
+                            // From any day of the month, the day before is its last.
+                            val d = shownDay ?: run { day = YearMonth.of(year, m).lengthOfMonth(); return@FilledTonalIconButton }
                             if (d > 1) {
                                 day = d - 1
                             } else if (m > 1 || year > FIRST_YEAR) {
