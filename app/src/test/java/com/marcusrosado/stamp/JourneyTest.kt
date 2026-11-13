@@ -99,6 +99,19 @@ class JourneyTest {
         assertTrue(near(hnd, r[2].first.last()))
     }
 
+    @Test fun aFlightCanGoTheOtherWayRoundTheGlobe() {
+        val cph = 55.62 to 12.66; val hnd = 35.55 to 139.79
+        assertTrue(LegPath.spansFar(cph, hnd))
+        val short = LegPath.points(cph, hnd, Travel.Plane)
+        val long = LegPath.points(cph, hnd, Travel.Plane, around = true)
+        // The short way heads east over Asia; the other way west, over the Atlantic and America.
+        assertTrue(short.all { it.second in 12.0..140.0 })
+        assertTrue(long.last().second < -200)
+        // A hop that could not have gone either way ignores it.
+        val hel = 60.32 to 24.96
+        assertEquals(LegPath.points(cph, hel, Travel.Plane), LegPath.points(cph, hel, Travel.Plane, around = true))
+    }
+
     @Test fun theNearestBigAirportsComeFirst() {
         assertEquals("CPH", airports.near(55.68 to 12.57, 1).first().code)
         val tokyo = airports.near(35.68 to 139.69, 3).map { it.code }

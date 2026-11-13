@@ -61,6 +61,8 @@ class Journey(
      * through as ghost points. The way there and the way home only draw once the user said how.
      */
     fun routes(trip: Trip, visit: Visit?): List<MapRoute> {
+        // Homes are where the user lived, not a journey: nothing to draw between them.
+        if (visit?.state == com.marcusrosado.stamp.data.TravelState.Lived) return emptyList()
         // A stop that cannot be placed is skipped and its neighbours joined; the way there and
         // the way home stay with whichever stop is now first or last.
         val stops = trip.cities.filter { endPoint(trip, visit, it) != null }
@@ -94,7 +96,7 @@ class Journey(
         val to = endPoint(trip, visit, b) ?: return emptyList()
         val via = leg?.via.orEmpty().mapNotNull { airport(it)?.let { ap -> ap.lat to ap.lon } }
         val follow = lines?.let { net -> { w: Travel, x: Pair<Double, Double>, y: Pair<Double, Double> -> net.follow(w, x, y) } }
-        return LegPath.route(from.lat to from.lon, to.lat to to.lon, leg?.ways.orEmpty(), via, follow)
+        return LegPath.route(from.lat to from.lon, to.lat to to.lon, leg?.ways.orEmpty(), via, follow, leg?.around == true)
             .map { (points, way) -> MapRoute(points, way) } +
             via.map { MapRoute(listOf(it), null, ghost = true) }
     }

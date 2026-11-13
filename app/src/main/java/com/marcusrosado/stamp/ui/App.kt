@@ -319,7 +319,7 @@ private fun App(
                 },
                 onStopDates = app.visits::setStopDates,
                 onMoveStop = app.visits::moveStop,
-                onLeg = { t, from, to, ways, via -> app.visits.setLeg(t, from, to, ways, via) },
+                onLeg = { t, from, to, ways, via, around -> app.visits.setLeg(t, from, to, ways, via, around) },
                 onTripStart = app.visits::setTripStart,
                 onAddDayPlace = app.visits::addDayPlace,
                 onAddDayPin = app.visits::addDayPin,
@@ -402,7 +402,7 @@ private fun App(
         LaunchedEffect(visits, places, airports, follow) {
             if (!follow) { app.routePacks.clear(); return@LaunchedEffect }
             val plain = Journey(visits, places, airports)
-            val codes = visits.values.flatMap { v -> v.trips.map { it to v } }.distinctBy { it.first.id }
+            val codes = visits.values.filter { it.state == TravelState.Visited }.flatMap { v -> v.trips.map { it to v } }.distinctBy { it.first.id }
                 .flatMap { (t, v) ->
                     t.legEnds.filter { (a, b) -> t.legBetween(a, b)?.ways.orEmpty().any { com.marcusrosado.stamp.data.RouteNet.kindOf(it) != null } }
                         .flatMap { (a, b) -> listOfNotNull(plain.endPoint(t, v, a), plain.endPoint(t, v, b)) }

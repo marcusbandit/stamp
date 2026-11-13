@@ -466,11 +466,11 @@ class VisitStore(private val file: File) {
      * Sets how the user got from stop [from] to stop [to], [Leg.START] and [Leg.END] included,
      * and the airports a flight went through; no ways clears it.
      */
-    fun setLeg(tripId: String, from: String, to: String, ways: List<Travel>, via: List<String> = emptyList()) = changeTrip(tripId) { t ->
+    fun setLeg(tripId: String, from: String, to: String, ways: List<Travel>, via: List<String> = emptyList(), around: Boolean = false) = changeTrip(tripId) { t ->
         if ((from to to) !in t.legEnds) return@changeTrip t
         val rest = t.legs.filterNot { it.from == from && it.to == to }
         val keep = if (Travel.Plane in ways) via else emptyList()
-        t.copy(legs = if (ways.isEmpty()) rest else rest + Leg(from, to, ways.distinct(), keep))
+        t.copy(legs = if (ways.isEmpty()) rest else rest + Leg(from, to, ways.distinct(), keep, around && Travel.Plane in ways))
     }
 
     /** Sets where a trip set out from, a city or pin id; null is home. */
@@ -680,7 +680,7 @@ class VisitStore(private val file: File) {
         t.currentLegs.takeIf { it.isNotEmpty() }?.let { legs ->
             put("legs", JSONArray(legs.map { l ->
                 JSONObject().put("from", l.from).put("to", l.to).put("ways", JSONArray(l.ways.map { it.key }))
-                    .apply { if (l.via.isNotEmpty()) put("via", JSONArray(l.via)) }
+                    .apply { if (l.via.isNotEmpty()) put("via", JSONArray(l.via)); if (l.around) put("around", true) }
             }))
         }
         if (t.dayPlaces.isNotEmpty()) put("days", JSONObject(t.dayPlaces.filterKeys { it in t.cities }.mapValues { JSONArray(it.value) }))
@@ -728,7 +728,7 @@ class VisitStore(private val file: File) {
                 val ways = strings(l.optJSONArray("ways")).mapNotNull { Travel.of(it) }
                 val from = l.optString("from"); val to = l.optString("to")
                 if (from.isEmpty() || to.isEmpty() || ways.isEmpty()) null
-                else Leg(from, to, ways, strings(l.optJSONArray("via")).map { it.uppercase() })
+                else Leg(from, to, ways, strings(l.optJSONArray("via")).map { it.uppercase() }, l.optBoolean("around"))
             }
         }.orEmpty(),
         start = t.optString("start").ifEmpty { null },

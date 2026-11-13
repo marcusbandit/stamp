@@ -257,7 +257,7 @@ fun CountryDetail(
                 onDates = { actions.onUpdateTrip(it) },
                 onStopDates = { p, a, l -> actions.onStopDates(tripId, p, a, l) },
                 onMove = { p, by -> actions.onMoveStop(tripId, p, by) },
-                onLeg = { from, to, ways, via -> actions.onLeg(tripId, from, to, ways, via) },
+                onLeg = { from, to, ways, via, around -> actions.onLeg(tripId, from, to, ways, via, around) },
                 onStart = { actions.onTripStart(tripId, it) },
                 onEnd = { actions.onTripEnd(tripId, it) },
                 onAddDayPlace = { stop -> dayFor = tripId to stop },
@@ -399,7 +399,7 @@ fun CountryDetail(
     }
     if (confirmClear && visit != null) {
         val lost = listOfNotNull(
-            visit.trips.count { !it.isBlank }.takeIf { it > 0 }?.let { if (visit.state == TravelState.Lived) staysLabel(it) else visitsLabel(it) },
+            visit.trips.count { !it.isBlank }.takeIf { it > 0 }?.let { if (visit.state == TravelState.Lived) "the dates you lived here" else visitsLabel(it) },
             visit.rating.takeIf { it > 0 }?.let { "your $it-star rating" },
             "the heart".takeIf { visit.loved },
             visit.regions.size.takeIf { it > 0 }?.let { if (it == 1) "1 region you added" else "$it regions you added" },
