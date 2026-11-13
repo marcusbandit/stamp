@@ -210,53 +210,79 @@ private fun BoardingPass(
     depart: Airport?, arrive: Airport?, flying: Boolean, ways: List<Travel>,
     onDepart: () -> Unit, onArrive: () -> Unit,
 ) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        PassEnd(
-            big = if (flying) depart?.code ?: "?" else if (fromHome) "Home" else shortName(fromName),
-            small = if (flying) depart?.town?.ifBlank { null } ?: shortName(fromName) else if (fromHome) shortName(fromName) else "From",
-            flying = flying, end = false, onClick = if (flying) onDepart else null,
-            // Each end takes at most a third, so the way between them always has room to move.
-            modifier = Modifier.weight(1f, fill = false).widthIn(max = 132.dp),
+    androidx.compose.foundation.layout.BoxWithConstraints {
+        // The ends take what they need, up to a little over a third each; the way between them
+        // gets all the rest.
+        val most = maxWidth * 0.36f
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (flying) {
+                AirportEnd(depart, shortName(fromName), end = false, onClick = onDepart, modifier = Modifier.widthIn(max = most))
+            } else {
+                PlaceEnd(if (fromHome) "Home" else shortName(fromName), if (fromHome) shortName(fromName) else "From", end = false, modifier = Modifier.widthIn(max = most))
+            }
+            TravelStrip(
+                ways, emptyList(),
+                Modifier.weight(1f).padding(horizontal = 8.dp),
+                gap = MaterialTheme.colorScheme.surfaceContainerHigh,
+            )
+            if (flying) {
+                AirportEnd(arrive, shortName(toName), end = true, onClick = onArrive, modifier = Modifier.widthIn(max = most))
+            } else {
+                PlaceEnd(if (toHome) "Home" else shortName(toName), if (toHome) shortName(toName) else "To", end = true, modifier = Modifier.widthIn(max = most))
+            }
+        }
+    }
+}
+
+/** Where a leg by land or sea started or ended: the place, big, and a quiet word under it. */
+@Composable
+private fun PlaceEnd(big: String, small: String, end: Boolean, modifier: Modifier) {
+    Column(modifier.padding(vertical = 4.dp), horizontalAlignment = if (end) Alignment.End else Alignment.Start) {
+        Text(
+            big, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis,
         )
-        TravelStrip(
-            ways, emptyList(),
-            Modifier.weight(1f).padding(horizontal = 6.dp),
-            gap = MaterialTheme.colorScheme.surfaceContainerHigh,
-        )
-        PassEnd(
-            big = if (flying) arrive?.code ?: "?" else if (toHome) "Home" else shortName(toName),
-            small = if (flying) arrive?.town?.ifBlank { null } ?: shortName(toName) else if (toHome) shortName(toName) else "To",
-            flying = flying, end = true, onClick = if (flying) onArrive else null,
-            modifier = Modifier.weight(1f, fill = false).widthIn(max = 132.dp),
+        Text(
+            small, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1, overflow = TextOverflow.Ellipsis,
         )
     }
 }
 
+/**
+ * One end of a flight as a button: the airport's code, big, or three blank slots waiting for
+ * one, framed like the buttons below so it plainly takes a tap.
+ */
 @Composable
-private fun PassEnd(big: String, small: String, flying: Boolean, end: Boolean, onClick: (() -> Unit)?, modifier: Modifier) {
+private fun AirportEnd(airport: Airport?, place: String, end: Boolean, onClick: () -> Unit, modifier: Modifier) {
     val align = if (end) Alignment.End else Alignment.Start
-    Column(
-        modifier.clip(RoundedCornerShape(12.dp)).then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
-            .padding(vertical = 4.dp, horizontal = 4.dp),
-        horizontalAlignment = align,
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(14.dp),
+        color = Color.Transparent,
+        border = BorderStroke(1.dp, if (airport == null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline),
+        modifier = modifier,
     ) {
-        Text(
-            big,
-            style = if (flying) MaterialTheme.typography.headlineMedium else MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurface,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            textAlign = if (end) TextAlign.End else TextAlign.Start,
-        )
-        Text(
-            small,
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            textAlign = if (end) TextAlign.End else TextAlign.Start,
-        )
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), horizontalAlignment = align) {
+            if (airport != null) {
+                Text(
+                    airport.code, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface, maxLines = 1,
+                )
+            } else {
+                // Three blanks for the three letters still to come.
+                Row(Modifier.height(32.dp), horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.Bottom) {
+                    repeat(3) { Box(Modifier.width(15.dp).height(2.dp).background(MaterialTheme.colorScheme.primary)) }
+                }
+            }
+            Text(
+                airport?.town?.ifBlank { null } ?: if (airport == null) "Pick airport" else place,
+                style = MaterialTheme.typography.labelMedium,
+                color = if (airport == null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 
