@@ -25,9 +25,10 @@ F-Droid read:
 ## Data safety
 
 - Does the app collect or share any of the required user data types? **No.**
-- Data is processed on the device only and the app has no internet permission, so nothing counts
-  as collected. Photo locations are read on the device and never transmitted.
-- Is data encrypted in transit? Not applicable, nothing is transmitted.
+- Data is processed on the device only, so nothing counts as collected. Photo locations and the
+  rough location are read on the device and never transmitted. The internet permission is used
+  only to download public rail and road files by country code; no user data goes with it.
+- Is data encrypted in transit? Yes: the only traffic is HTTPS downloads of public map files.
 - Can users request deletion? Uninstalling deletes everything; the form question is not shown
   when nothing is collected.
 
@@ -41,7 +42,7 @@ is not enough. Suggested answer:
 > needs the whole library: a typical library has thousands of items, and the system photo picker
 > removes location metadata from the files it returns, so it cannot answer where a photo was
 > taken. The same access lets Stamp suggest photos taken on a visit's dates near that place.
-> Everything is read on the device; the app has no internet permission. Users can grant partial
+> Everything is read on the device, and nothing read from photos is ever transmitted. Users can grant partial
 > access, and the app also offers the system picker for attaching single photos to a visit.
 
 ## Other forms

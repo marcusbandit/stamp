@@ -104,6 +104,9 @@ class AppState(
     /** Route lines between a visit's cities show on the map. */
     val routes: Boolean,
     val onRoutes: (Boolean) -> Unit,
+    /** Whether train, car and bus legs follow the real rails and roads. */
+    val followLines: Boolean = true,
+    val onFollowLines: (Boolean) -> Unit = {},
     /** When the last backup was saved, epoch ms, 0 for never. */
     val lastBackup: Long,
     /** Whether the country the phone is in gets marked and the map opens there. */
@@ -218,6 +221,8 @@ private fun App(
     val split by app.split.on.collectAsStateWithLifecycle()
     val mapPhotos by app.mapPhotos.on.collectAsStateWithLifecycle()
     val routes by app.routes.on.collectAsStateWithLifecycle()
+    val follow by app.followLines.on.collectAsStateWithLifecycle()
+    val lines by app.routePacks.net.collectAsStateWithLifecycle()
     val lastBackup by app.lastBackup.collectAsStateWithLifecycle()
     val here by app.here.on.collectAsStateWithLifecycle()
     // Once per launch: find the country the phone is in, mark it visited if it is not marked
@@ -366,6 +371,8 @@ private fun App(
             onMapPhotos = app.mapPhotos::set,
             routes = routes,
             onRoutes = app.routes::set,
+            followLines = follow,
+            onFollowLines = app.followLines::set,
             lastBackup = lastBackup,
             here = here,
             onHere = app.here::set,
@@ -389,7 +396,18 @@ private fun App(
             },
             app = app,
         )
-        val journey = remember(visits, places, airports) { Journey(visits, places, airports) }
+        // The packs of the countries a leg by rail or road goes through, with home's for the
+        // way there and back.
+        LaunchedEffect(visits, follow, home) {
+            if (!follow) return@LaunchedEffect
+            val codes = visits.values.flatMap { it.trips }
+                .filter { t -> t.legs.any { l -> l.ways.any { w -> com.marcusrosado.stamp.data.RouteNet.kindOf(w) != null } } }
+                .flatMap { t -> t.lands + listOfNotNull(home) }
+                .mapNotNull { land -> (atlas.byId[land]?.alpha2?.ifEmpty { null }) ?: atlas.byId[atlas.countryOf(land)]?.alpha2?.ifEmpty { null } }
+                .toSet()
+            if (codes.isNotEmpty()) app.routePacks.want(codes, download = true)
+        }
+        val journey = remember(visits, places, airports, lines, follow) { Journey(visits, places, airports, lines.takeIf { follow }) }
         androidx.compose.runtime.CompositionLocalProvider(LocalJourney provides journey) {
             when (state.posture) {
                 Posture.Portrait -> PortraitLayout(state)

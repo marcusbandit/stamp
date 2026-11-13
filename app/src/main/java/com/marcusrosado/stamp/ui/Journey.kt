@@ -18,7 +18,13 @@ import com.marcusrosado.stamp.data.placeIdOf
  * What a trip's journey needs from beyond its own country: every visit, for the homes it
  * sets out from and pins kept elsewhere, the cities, and the airports.
  */
-class Journey(val visits: Map<String, Visit>, val places: Places?, val airports: Airports?) {
+class Journey(
+    val visits: Map<String, Visit>,
+    val places: Places?,
+    val airports: Airports?,
+    /** The rail and road network of the countries the trips go through, when it is on the phone. */
+    val lines: com.marcusrosado.stamp.data.RouteNet? = null,
+) {
     /** A city, or a pin on any visit, by id. */
     fun place(stop: String): PlaceInfo? {
         val id = placeIdOf(stop)
@@ -87,7 +93,8 @@ class Journey(val visits: Map<String, Visit>, val places: Places?, val airports:
         val from = endPoint(trip, visit, a) ?: return emptyList()
         val to = endPoint(trip, visit, b) ?: return emptyList()
         val via = leg?.via.orEmpty().mapNotNull { airport(it)?.let { ap -> ap.lat to ap.lon } }
-        return LegPath.route(from.lat to from.lon, to.lat to to.lon, leg?.ways.orEmpty(), via)
+        val follow = lines?.let { net -> { w: Travel, x: Pair<Double, Double>, y: Pair<Double, Double> -> net.follow(w, x, y) } }
+        return LegPath.route(from.lat to from.lon, to.lat to to.lon, leg?.ways.orEmpty(), via, follow)
             .map { (points, way) -> MapRoute(points, way) } +
             via.map { MapRoute(listOf(it), null, ghost = true) }
     }
