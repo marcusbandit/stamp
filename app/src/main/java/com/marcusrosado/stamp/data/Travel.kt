@@ -128,27 +128,31 @@ object LegPath {
     /**
      * A leg with the airports its flight went through, [via], departure first: the ways before
      * the plane run from [a] to the first airport, the flight hops from airport to airport, and
-     * the ways after it run on from the last airport to [b]. A stretch with no way said, such as
-     * home to the airport, draws as a leg not said. Without airports it is [parts].
+     * the ways after it run on from the last airport to [b]. A stretch with no way said between a
+     * stop and its airport draws as a leg not said, so the stop stays joined to its flight; at
+     * the trip's own start and end ([fromHome], [toHome]) it is left out, so the way there begins
+     * at the airport, not the front door. Without airports it is [parts].
      */
     fun route(
         a: Pair<Double, Double>, b: Pair<Double, Double>, ways: List<Travel>, via: List<Pair<Double, Double>>,
         follow: Follow? = null,
         around: Boolean = false,
+        fromHome: Boolean = false,
+        toHome: Boolean = false,
     ): List<Pair<List<Pair<Double, Double>>, Travel?>> {
         val plane = ways.indexOf(Travel.Plane)
         if (plane < 0 || via.size < 2) return parts(a, b, ways, follow, around)
-        fun ground(x: Pair<Double, Double>, y: Pair<Double, Double>, w: List<Travel>) =
+        fun ground(x: Pair<Double, Double>, y: Pair<Double, Double>, w: List<Travel>, home: Boolean) =
             if (x == y || Distance.km(x, y) < 1.0) emptyList()
-            // With no way said, the flight starts at its airport: no line from the door to it.
-            else if (w.isEmpty()) emptyList() else parts(x, y, w, follow)
-        return ground(a, via.first(), ways.take(plane)) +
+            else if (w.isEmpty()) (if (home) emptyList() else listOf(listOf(x, nearest(x, y)) to null))
+            else parts(x, y, w, follow)
+        return ground(a, via.first(), ways.take(plane), fromHome) +
             via.zipWithNext().let { hops ->
                 // The other way round is one long flight across the globe, not every hop of it.
                 val longest = hops.indices.maxByOrNull { kotlin.math.abs(nearest(hops[it].first, hops[it].second).second - hops[it].first.second) }
                 hops.mapIndexed { i, (x, y) -> points(x, y, Travel.Plane, around && i == longest) to Travel.Plane }
             } +
-            ground(via.last(), b, ways.drop(plane + 1))
+            ground(via.last(), b, ways.drop(plane + 1), toHome)
     }
 
     /** [b] with its longitude moved by whole turns to lie within half a turn of [a]'s, so a line between them takes the short way, across the date line if need be. */

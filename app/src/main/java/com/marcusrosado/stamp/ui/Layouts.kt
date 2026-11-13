@@ -450,9 +450,36 @@ private fun StampMap(
     animate: Boolean = true,
 ) {
     val selected = state.selected
+    // Several trips on the tapped line, such as every trip out of the home town: a short list.
+    var choosing by remember { mutableStateOf<List<String>?>(null) }
+    choosing?.let { ids ->
+        SeamAlertDialog(
+            onDismissRequest = { choosing = null },
+            title = { Text("Which trip?") },
+            text = {
+                Column {
+                    ids.mapNotNull { id -> state.trips.firstOrNull { it.id == id } }.forEach { t ->
+                        val where = t.lands.mapNotNull { state.atlas.byId[it]?.name }.distinct().joinToString("  →  ")
+                        Row(
+                            Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+                                .clickable { choosing = null; state.onOpenTrip(t.id) }.padding(vertical = 10.dp, horizontal = 4.dp),
+                        ) {
+                            Column {
+                                Text(where.ifEmpty { "A trip" }, style = MaterialTheme.typography.bodyLarge)
+                                rangeLabel(t.date, t.until)?.let {
+                                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = { androidx.compose.material3.TextButton(onClick = { choosing = null }) { Text("Cancel") } },
+        )
+    }
     WorldMap(
         animate = animate,
-        onRoute = if (selectable) state.onOpenTrip else null,
+        onRoute = if (selectable) { trips -> if (trips.size == 1) state.onOpenTrip(trips[0]) else choosing = trips } else null,
         atlas = state.atlas,
         visits = state.visits,
         showRoutes = state.routes,

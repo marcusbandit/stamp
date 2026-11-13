@@ -108,12 +108,18 @@ private fun imageName(way: Travel) = "route-way-${way.key}"
 
 /** The routes' lines, each tagged with its way so the layers can pick their own. */
 internal fun routeFeatures(routes: List<MapRoute>): FeatureCollection = FeatureCollection.fromFeatures(
-    routes.mapNotNull { r ->
+    // A line several trips share, such as the way from the home town to its airport, draws once
+    // and remembers every trip on it, so a tap can offer them all.
+    routes.groupBy { Triple(it.points, it.way, it.ghost) }.mapNotNull { (key, same) ->
+        val (points, way, ghost) = key
         when {
-            r.ghost && r.points.isNotEmpty() -> Feature.fromGeometry(Point.fromLngLat(r.points[0].second, r.points[0].first))
-            r.points.size >= 2 -> Feature.fromGeometry(LineString.fromLngLats(r.points.map { (lat, lon) -> Point.fromLngLat(lon, lat) }))
+            ghost && points.isNotEmpty() -> Feature.fromGeometry(Point.fromLngLat(points[0].second, points[0].first))
+            points.size >= 2 -> Feature.fromGeometry(LineString.fromLngLats(points.map { (lat, lon) -> Point.fromLngLat(lon, lat) }))
             else -> null
-        }?.apply { addStringProperty("way", r.way?.key ?: ""); addStringProperty("trip", r.trip ?: "") }
+        }?.apply {
+            addStringProperty("way", way?.key ?: "")
+            addStringProperty("trips", same.mapNotNull { it.trip }.distinct().joinToString(","))
+        }
     },
 )
 
@@ -215,51 +221,69 @@ internal class Glide(route: MapRoute, private val phase: Double) {
     /**
      * The stretch of the leg in view, as distances along it: zoomed in on part of a long leg,
      * the icon crosses only what can be seen and starts over at its edge, in the same time the
-     * whole leg takes zoomed out, so it never spends most of its loop off screen.
+     * whole leg takes zoomed out, so it never spends most of its loop off screen. Each piece of
+     * the line is clipped exactly against the view, at any zoom.
      */
     private fun inView(b: LatLngBounds): Pair<Double, Double> {
         val total = along.last()
         if (total <= 0) return 0.0 to 0.0
         val w = b.longitudeWest
         val e = if (b.longitudeEast < w) b.longitudeEast + 360 else b.longitudeEast
-        var first = -1.0
+        val ys0 = mercY(b.latitudeSouth)
+        val ys1 = mercY(b.latitudeNorth)
+        var first = Double.MAX_VALUE
         var last = -1.0
-        val n = 96
-        for (k in 0..n) {
-            val d = total * k / n
-            val (x, y) = pointAt(d)
-            val lat = latOf(y)
-            if (lat < b.latitudeSouth || lat > b.latitudeNorth) continue
-            if ((-1..1).none { j -> x + 360 * j in w..e }) continue
-            if (first < 0) first = d
-            last = d
+        for (i in 1 until xs.size) {
+            for (k in -1..1) {
+                val shift = 360.0 * k
+                val clip = clip(xs[i - 1] + shift, ys[i - 1], xs[i] + shift, ys[i], w, e, ys0, ys1) ?: continue
+                val seg = along[i] - along[i - 1]
+                first = minOf(first, along[i - 1] + seg * clip.first)
+                last = maxOf(last, along[i - 1] + seg * clip.second)
+            }
         }
-        // A short leg seen whole, or one crossing the view between two samples: all of it.
-        if (first < 0 || last - first < total / n) return 0.0 to total
+        // Nothing of it in view, or only a speck: the whole leg.
+        if (last < 0 || last - first < total * 0.02) return 0.0 to total
         return first to last
     }
 
-    private fun pointAt(d: Double): Pair<Double, Double> {
-        var i = along.indexOfFirst { it >= d }.coerceAtLeast(1)
-        if (i >= xs.size) i = xs.size - 1
+    /** Where the piece from (x0, y0) to (x1, y1) enters and leaves a box, as shares of it; Liang and Barsky's clip. */
+    private fun clip(x0: Double, y0: Double, x1: Double, y1: Double, xMin: Double, xMax: Double, yMin: Double, yMax: Double): Pair<Double, Double>? {
+        var t0 = 0.0
+        var t1 = 1.0
+        val dx = x1 - x0
+        val dy = y1 - y0
+        for ((p, q) in listOf(-dx to x0 - xMin, dx to xMax - x0, -dy to y0 - yMin, dy to yMax - y0)) {
+            if (p == 0.0) { if (q < 0) return null; continue }
+            val r = q / p
+            if (p < 0) { if (r > t1) return null; if (r > t0) t0 = r } else { if (r < t0) return null; if (r < t1) t1 = r }
+        }
+        return t0 to t1
+    }
+
+    /** The point [d] along the leg, found by halving: legs that follow the rails run to thousands of points. */
+    private fun pointAt(d: Double): Triple<Double, Double, Int> {
+        var i = java.util.Arrays.binarySearch(along, d).let { if (it >= 0) it else -it - 1 }.coerceIn(1, xs.size - 1)
         val seg = (along[i] - along[i - 1]).takeIf { it > 0 } ?: 1.0
         val k = ((d - along[i - 1]) / seg).coerceIn(0.0, 1.0)
-        return (xs[i - 1] + (xs[i] - xs[i - 1]) * k) to (ys[i - 1] + (ys[i] - ys[i - 1]) * k)
+        return Triple(xs[i - 1] + (xs[i] - xs[i - 1]) * k, ys[i - 1] + (ys[i] - ys[i - 1]) * k, i)
     }
+
+    // The stretch this loop crosses, chosen as the loop begins: panning mid-way never drags the
+    // icon along its line.
+    private var loop = Long.MIN_VALUE
+    private var range = 0.0 to 0.0
 
     /** The icon at [t] seconds: where it is, which way it heads, and how faded it is. */
     fun at(t: Double, b: LatLngBounds): Feature {
-        val f = ((t / seconds + phase) % 1.0)
+        val cycles = t / seconds + phase
+        val f = cycles % 1.0
+        val n = kotlin.math.floor(cycles).toLong()
+        if (n != loop) { loop = n; range = inView(b) }
         // Eased so it sets off and arrives gently, and faded in and out at the ends.
         val e = f * f * (3 - 2 * f)
-        val (from, to) = inView(b)
-        val target = from + e * (to - from)
-        var i = along.indexOfFirst { it >= target }.coerceAtLeast(1)
-        if (i >= xs.size) i = xs.size - 1
-        val seg = (along[i] - along[i - 1]).takeIf { it > 0 } ?: 1.0
-        val k = ((target - along[i - 1]) / seg).coerceIn(0.0, 1.0)
-        val x = xs[i - 1] + (xs[i] - xs[i - 1]) * k
-        val y = ys[i - 1] + (ys[i] - ys[i - 1]) * k
+        val (from, to) = range
+        val (x, y, i) = pointAt(from + e * (to - from))
         val heading = Math.toDegrees(atan2(xs[i] - xs[i - 1], Math.toDegrees(ys[i] - ys[i - 1])))
         val fade = (minOf(f, 1 - f) / 0.08).coerceIn(0.0, 1.0)
         return Feature.fromGeometry(Point.fromLngLat(x, latOf(y))).apply {

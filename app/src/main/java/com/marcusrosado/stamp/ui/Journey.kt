@@ -39,21 +39,33 @@ class Journey(
     fun startOf(trip: Trip): PlaceInfo? =
         trip.start?.let { place(it) } ?: homeFor(trip)?.let { townOf(it) }
 
-    private val towns = HashMap<String, PlaceInfo?>()
-
     /**
-     * The town a home is in, as a trip sets out from it: the biggest within 20 km, where the
-     * main station and the airport are, not the front door. A home that is a town is itself.
+     * The town a home is in, as a trip sets out from it: the biggest within 20 km in the same
+     * country, where the main station and the airport are, not the front door. A home that is a
+     * town is itself. Worked out once per home and kept while the city list stays the same.
      */
-    fun townOf(home: Home): PlaceInfo? = synchronized(towns) {
-        towns.getOrPut(home.place) {
-            val at = placeOf(home.place, home.visit, places) ?: return@getOrPut null
-            if (!isPin(home.place)) return@getOrPut at
-            val town = places?.byId?.values
-                ?.filter { com.marcusrosado.stamp.data.Distance.km(at.lat to at.lon, it.lat to it.lon) < 20 }
-                ?.maxByOrNull { it.population }
-            town?.let { placeOf(it.id, null, places) } ?: at
+    fun townOf(home: Home): PlaceInfo? {
+        val at = placeOf(home.place, home.visit, places) ?: return null
+        val p = places ?: return at
+        if (!isPin(home.place)) return at
+        val key = "${home.place}@${at.lat},${at.lon}"
+        synchronized(townCache) {
+            val kept = townCache[p]?.get(key)
+            if (kept != null) return placeOf(kept, null, p) ?: at
         }
+        // A cheap box first: 20 km is under 0.2 degrees of latitude.
+        val near = p.byId.values.filter { kotlin.math.abs(it.lat - at.lat) < 0.2 }
+            .map { it to com.marcusrosado.stamp.data.Distance.km(at.lat to at.lon, it.lat to it.lon) }
+        val country = near.minByOrNull { it.second }?.first?.country
+        val town = near.filter { (c, km) -> km < 20 && c.country == country }.maxByOrNull { it.first.population }?.first
+            ?: return at
+        synchronized(townCache) { townCache.getOrPut(p) { HashMap() }[key] = town.id }
+        return placeOf(town.id, null, p) ?: at
+    }
+
+    private companion object {
+        /** Each home's town by city id, per city list, shared by every Journey built from it. */
+        val townCache = java.util.WeakHashMap<Places, HashMap<String, String>>()
     }
 
     /** The home lived in when [trip] ended. */
@@ -113,7 +125,10 @@ class Journey(
         val to = endPoint(trip, visit, b) ?: return emptyList()
         val via = leg?.via.orEmpty().mapNotNull { airport(it)?.let { ap -> ap.lat to ap.lon } }
         val follow = lines?.let { net -> { w: Travel, x: Pair<Double, Double>, y: Pair<Double, Double> -> net.follow(w, x, y) } }
-        return LegPath.route(from.lat to from.lon, to.lat to to.lon, leg?.ways.orEmpty(), via, follow, leg?.around == true)
+        return LegPath.route(
+            from.lat to from.lon, to.lat to to.lon, leg?.ways.orEmpty(), via, follow, leg?.around == true,
+            fromHome = a == Leg.START, toHome = b == Leg.END,
+        )
             .map { (points, way) -> MapRoute(points, way, trip = trip.id) } +
             via.map { MapRoute(listOf(it), null, ghost = true, trip = trip.id) }
     }
