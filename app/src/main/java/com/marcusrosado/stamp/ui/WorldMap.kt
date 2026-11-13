@@ -483,8 +483,23 @@ fun WorldMap(
         val f = focus
         if (f == null) {
             if (applied[0] != end || applied[1] != bottom) {
+                val shrinking = end <= applied[0] && bottom <= applied[1]
                 applied[0] = end; applied[1] = bottom
-                m.animateCamera(CameraUpdateFactory.paddingTo(0.0, 0.0, end, bottom), 320)
+                if (shrinking) {
+                    // A pane gone: the room it kept goes too, with the map held exactly where it
+                    // is, the point at the middle of the new room taken as the new centre. A
+                    // room left behind is sea that zooming out could never fill.
+                    val at = m.projection.fromScreenLocation(
+                        PointF(((mapView.width - end) / 2).toFloat(), ((mapView.height - bottom) / 2).toFloat()),
+                    )
+                    m.moveCamera(
+                        CameraUpdateFactory.newCameraPosition(
+                            CameraPosition.Builder(m.cameraPosition).target(at).padding(0.0, 0.0, end, bottom).build(),
+                        ),
+                    )
+                } else {
+                    m.animateCamera(CameraUpdateFactory.paddingTo(0.0, 0.0, end, bottom), 320)
+                }
             }
             return@LaunchedEffect
         }

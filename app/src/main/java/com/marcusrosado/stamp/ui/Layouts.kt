@@ -251,10 +251,9 @@ private fun MapPane(state: AppState, sidePanel: Boolean, bottomInset: Dp) {
             }
         }
         val cardOnMap = !sidePanel && hinge == null && selected != null
-        // The room the map keeps clear for the card. It stays after the card closes, so closing
-        // never shifts the map; the next country picked brings its own.
-        var cardCover by remember { mutableStateOf(0.dp) }
-        if (cardOnMap) cardCover = opened
+        // The room the map keeps clear for the card, gone with the card; the map holds still as
+        // it goes, so closing never shifts what shows.
+        val cardCover = if (cardOnMap) opened else 0.dp
         // The map itself never changes size; the pane slides over it and the map moves its
         // centre into what is left. The buttons over it follow the part that shows.
         StampMap(
