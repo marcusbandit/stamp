@@ -104,4 +104,11 @@ class RouteNetTest {
         assertEquals(bent.first(), thin.first())
         assertEquals(bent.last(), thin.last())
     }
+
+    @Test fun theRealLongWayRoundStillFollowsTheRails() {
+        // Like Copenhagen to Berlin through Jutland: the only line runs far out of the way, at
+        // about two and a half times the straight distance, and the leg still follows it.
+        val net = RouteNet.read(pack(listOf(55.0 to 10.0, 55.0 to 11.0), listOf(Triple(0, 1, 0 to listOf(55.7 to 10.5)))))
+        assertNotNull(net.follow(Travel.Train, 55.0 to 10.0, 55.0 to 11.0))
+    }
 }

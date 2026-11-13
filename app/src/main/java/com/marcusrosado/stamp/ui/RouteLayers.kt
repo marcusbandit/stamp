@@ -41,6 +41,8 @@ data class MapRoute(
     val ghost: Boolean = false,
     /** The trip the line belongs to, so a tap on it can open that trip. */
     val trip: String? = null,
+    /** The leg it draws, as its two ends' ids, so a tap on it can open that leg's picker. */
+    val leg: Pair<String, String>? = null,
 )
 
 internal const val SOURCE_ROUTES = "routes"
@@ -118,7 +120,8 @@ internal fun routeFeatures(routes: List<MapRoute>): FeatureCollection = FeatureC
             else -> null
         }?.apply {
             addStringProperty("way", way?.key ?: "")
-            addStringProperty("trips", same.mapNotNull { it.trip }.distinct().joinToString(","))
+            // Each trip on the line with the leg it is, "trip|from|to", for a tap to open.
+            addStringProperty("trips", same.mapNotNull { r -> r.trip?.let { "$it|${r.leg?.first ?: ""}|${r.leg?.second ?: ""}" } }.distinct().joinToString(","))
         }
     },
 )

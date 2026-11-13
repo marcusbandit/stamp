@@ -115,11 +115,14 @@ class Journey(
     }
 
     private fun legRoute(trip: Trip, visit: Visit?, a: String, b: String): List<MapRoute> {
-        val leg = when {
-            a == Leg.START -> trip.legBetween(a, trip.cities.first())
-            b == Leg.END -> trip.legBetween(trip.cities.last(), b)
-            else -> trip.legBetween(a, b)
+        // The leg's own ends as the trip keeps them: the way there and home belong to the
+        // first and last stops, whichever stops could be placed.
+        val ends = when {
+            a == Leg.START -> a to trip.cities.first()
+            b == Leg.END -> trip.cities.last() to b
+            else -> a to b
         }
+        val leg = trip.legBetween(ends.first, ends.second)
         if ((a == Leg.START || b == Leg.END) && leg == null) return emptyList()
         val from = endPoint(trip, visit, a) ?: return emptyList()
         val to = endPoint(trip, visit, b) ?: return emptyList()
@@ -129,7 +132,7 @@ class Journey(
             from.lat to from.lon, to.lat to to.lon, leg?.ways.orEmpty(), via, follow, leg?.around == true,
             fromHome = a == Leg.START, toHome = b == Leg.END,
         )
-            .map { (points, way) -> MapRoute(points, way, trip = trip.id) } +
+            .map { (points, way) -> MapRoute(points, way, trip = trip.id, leg = ends) } +
             via.map { MapRoute(listOf(it), null, ghost = true, trip = trip.id) }
     }
 }
