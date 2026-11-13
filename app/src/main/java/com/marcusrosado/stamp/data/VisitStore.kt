@@ -45,9 +45,16 @@ data class Visit(
     val cityNotes: Map<String, Note> = emptyMap(),
     /** Places pinned by hand, by pin id. Each one is on at least one of [trips]. */
     val pins: Map<String, Pin> = emptyMap(),
+    /** The map draws this country as its regions, each marked on its own. */
+    val splitRegions: Boolean = false,
+    /** Regions ("JP.15") the user wants to go to. */
+    val wantRegions: List<String> = emptyList(),
+    /** Cities, by id, the user wants to go to. */
+    val wantCities: List<String> = emptyList(),
 ) {
     /** True when clearing the mark would throw away something the user entered. */
-    val hasDetails: Boolean get() = loved || rating > 0 || trips.any { !it.isBlank } || regions.isNotEmpty()
+    val hasDetails: Boolean
+        get() = loved || rating > 0 || trips.any { !it.isBlank } || regions.isNotEmpty() || wantRegions.isNotEmpty() || wantCities.isNotEmpty()
 
     /** Every city on any visit, each once, in the order first visited. */
     val cities: List<String> get() = trips.flatMap { it.places }.distinct()
@@ -77,6 +84,9 @@ private data class Mark(
     val rating: Int = 0,
     val regions: List<String> = emptyList(),
     val cityNotes: Map<String, Note> = emptyMap(),
+    val split: Boolean = false,
+    val wantRegions: List<String> = emptyList(),
+    val wantCities: List<String> = emptyList(),
 )
 
 /**
@@ -220,8 +230,45 @@ class VisitStore(private val file: File) {
         marks = marks + (id to m.copy(
             state = new.state, evidence = new.evidence, loved = new.loved,
             rating = new.rating.coerceIn(0, MAX_RATING), regions = new.regions, cityNotes = new.cityNotes,
+            split = new.splitRegions, wantRegions = new.wantRegions, wantCities = new.wantCities,
         ))
         save()
+    }
+
+    /**
+     * Draws country [id] as its regions, or as one country again. Regions marked while split
+     * stay with the country, so splitting it again brings them back.
+     */
+    fun setSplitRegions(id: String, on: Boolean) {
+        if (_visits.value[id] == null) { if (!on) return; set(id, TravelState.Want) }
+        edit(id) { it.copy(splitRegions = on) }
+    }
+
+    /**
+     * Marks region [regionId] of country [id] visited, wanted, or neither. A region marked in a
+     * country with no mark of its own marks the country too: visited for a visited region,
+     * want to go for a wanted one.
+     */
+    fun setRegion(id: String, regionId: String, state: TravelState?) {
+        val v = _visits.value[id]
+        if (v == null) {
+            if (state == null) return
+            set(id, if (state == TravelState.Want) TravelState.Want else TravelState.Visited)
+        } else if (state != null && state != TravelState.Want && !v.state.counts) {
+            set(id, TravelState.Visited)
+        }
+        edit(id) { x ->
+            x.copy(
+                regions = if (state != null && state != TravelState.Want) (x.regions - regionId) + regionId else x.regions - regionId,
+                wantRegions = if (state == TravelState.Want) (x.wantRegions - regionId) + regionId else x.wantRegions - regionId,
+            )
+        }
+    }
+
+    /** Says the user wants to go to city [cityId] of country [id], or no longer does. */
+    fun setCityWant(id: String, cityId: String, on: Boolean) {
+        if (_visits.value[id] == null) { if (!on) return; set(id, TravelState.Want) }
+        edit(id) { x -> x.copy(wantCities = if (on) (x.wantCities - cityId) + cityId else x.wantCities - cityId) }
     }
 
     fun setLoved(id: String, loved: Boolean) = edit(id) { it.copy(loved = loved) }
@@ -611,6 +658,7 @@ class VisitStore(private val file: File) {
                 state = m.state, evidence = m.evidence, loved = m.loved, rating = m.rating,
                 trips = ts, regions = m.regions, cityNotes = m.cityNotes,
                 pins = pins.filterKeys { it in on },
+                splitRegions = m.split, wantRegions = m.wantRegions, wantCities = m.wantCities,
             )
         }
         _visits.value = view
@@ -655,6 +703,9 @@ class VisitStore(private val file: File) {
                     if (m.loved) put("loved", true)
                     if (m.rating > 0) put("rating", m.rating)
                     if (m.regions.isNotEmpty()) put("regions", JSONArray(m.regions))
+                    if (m.split) put("split", true)
+                    if (m.wantRegions.isNotEmpty()) put("wantRegions", JSONArray(m.wantRegions))
+                    if (m.wantCities.isNotEmpty()) put("wantCities", JSONArray(m.wantCities))
                     if (m.cityNotes.isNotEmpty()) put("cityNotes", JSONObject().apply {
                         for ((cid, n) in m.cityNotes) put(cid, JSONObject().apply { if (n.loved) put("loved", true); if (n.rating > 0) put("rating", n.rating); if (n.name.isNotBlank()) put("name", n.name) })
                     })
@@ -799,6 +850,9 @@ class VisitStore(private val file: File) {
                 loved = o.optBoolean("loved"),
                 rating = o.optInt("rating").coerceIn(0, MAX_RATING),
                 regions = strings(o.optJSONArray("regions")),
+                split = o.optBoolean("split"),
+                wantRegions = strings(o.optJSONArray("wantRegions")),
+                wantCities = strings(o.optJSONArray("wantCities")),
                 cityNotes = o.optJSONObject("cityNotes")?.let { n ->
                     n.keys().asSequence().mapNotNull { k ->
                         val x = n.optJSONObject(k) ?: return@mapNotNull null

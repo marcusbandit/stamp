@@ -2,6 +2,7 @@ package com.marcusrosado.stamp.ui
 
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -214,6 +215,19 @@ fun CountryDetail(
                 // Regions use the country's own code: a place that borrows another country's
                 // cities, such as Somaliland, has no regions of its own in GeoNames.
                 val all = places.regionsIn(country.alpha2)
+                if (all.isNotEmpty()) {
+                    // The map draws the country as its regions, each marked on its own; turned
+                    // off, it is one country again and the regions picked are kept for next time.
+                    Row(
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+                            .clickable { actions.onSplitRegions(country.id, !visit.splitRegions) }
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("Split into regions", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                        androidx.compose.material3.Switch(checked = visit.splitRegions, onCheckedChange = { actions.onSplitRegions(country.id, it) })
+                    }
+                }
                 RegionsSection(
                     regionsVisited,
                     counted = regionsVisited.keys.count { id -> all.any { it.id == id } },

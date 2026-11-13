@@ -100,6 +100,23 @@ class StampApp : Application() {
     /** The rail and road packs, kept outside the user's backup: map data, fetched again at will. */
     val routePacks by lazy { com.marcusrosado.stamp.data.RoutePacks(File(noBackupFilesDir, "routes"), scope) }
 
+    /** What the map marks: countries, regions or cities. */
+    val mapView: kotlinx.coroutines.flow.MutableStateFlow<com.marcusrosado.stamp.data.MapView> by lazy {
+        kotlinx.coroutines.flow.MutableStateFlow(
+            com.marcusrosado.stamp.data.MapView.of(runCatching { File(filesDir, MAP_VIEW_FILE).readText().trim() }.getOrNull()),
+        )
+    }
+
+    fun setMapView(v: com.marcusrosado.stamp.data.MapView) {
+        mapView.value = v
+        scope.launch(lookWriter) { runCatching { File(filesDir, MAP_VIEW_FILE).writeText(v.key) } }
+    }
+
+    /** The outlines of each country's regions, read per country when first drawn. */
+    val regionShapes by lazy {
+        com.marcusrosado.stamp.data.RegionShapes { cc -> runCatching { assets.open("regions/$cc.bin") }.getOrNull() }
+    }
+
     /** Whether the country the phone is in gets marked and the map opens there. */
     val here by lazy { Toggle(FLAG_NO_HERE) }
 
@@ -167,6 +184,7 @@ class StampApp : Application() {
         private const val FLAG_NO_ROUTES = "no_routes"
         private const val FLAG_NO_FOLLOW_LINES = "no_follow_lines"
         private const val FLAG_NO_HERE = "no_here"
+        private const val MAP_VIEW_FILE = "map_view.txt"
         private const val BACKUP_FILE = "last_backup.txt"
     }
 }

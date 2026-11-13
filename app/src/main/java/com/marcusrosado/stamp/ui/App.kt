@@ -105,6 +105,20 @@ class AppState(
     /** Route lines between a visit's cities show on the map. */
     val routes: Boolean,
     val onRoutes: (Boolean) -> Unit,
+    /** What the map marks: countries, regions or cities. */
+    val mapView: com.marcusrosado.stamp.data.MapView = com.marcusrosado.stamp.data.MapView.Countries,
+    val onMapView: (com.marcusrosado.stamp.data.MapView) -> Unit = {},
+    /** The outlines of each country's regions. */
+    val regionShapes: com.marcusrosado.stamp.data.RegionShapes? = null,
+    /** Draws a country as its regions, or as one again. */
+    val onSplitRegions: (countryId: String, on: Boolean) -> Unit = { _, _ -> },
+    /** Marks a region of a country visited, wanted, or neither. */
+    val onRegion: (countryId: String, regionId: String, state: TravelState?) -> Unit = { _, _, _ -> },
+    /** Says the user wants to go to a city of a country, or no longer does. */
+    val onCityWant: (countryId: String, cityId: String, on: Boolean) -> Unit = { _, _, _ -> },
+    /** A region or a found city shown over the map, or none. */
+    val spot: Spot? = null,
+    val onSpot: (Spot?) -> Unit = {},
     /** Whether train, car and bus legs follow the real rails and roads. */
     val followLines: Boolean = true,
     val onFollowLines: (Boolean) -> Unit = {},
@@ -210,6 +224,7 @@ private fun App(
     var showList by rememberSaveable { mutableStateOf(false) }
     // A city search across every country: to fly to a city, or to start a trip there.
     var cityHunt by rememberSaveable { mutableStateOf<String?>(null) }
+    var spot by remember { mutableStateOf<Spot?>(null) }
     var pendingTrip by rememberSaveable { mutableStateOf<String?>(null) }
     var tripFromTab by rememberSaveable { mutableStateOf(false) }
     val allTrips by app.visits.allTrips.collectAsStateWithLifecycle()
@@ -222,6 +237,7 @@ private fun App(
     val split by app.split.on.collectAsStateWithLifecycle()
     val mapPhotos by app.mapPhotos.on.collectAsStateWithLifecycle()
     val routes by app.routes.on.collectAsStateWithLifecycle()
+    val mapView by app.mapView.collectAsStateWithLifecycle()
     val follow by app.followLines.on.collectAsStateWithLifecycle()
     val lines by app.routePacks.net.collectAsStateWithLifecycle()
     val lastBackup by app.lastBackup.collectAsStateWithLifecycle()
@@ -291,6 +307,7 @@ private fun App(
             onRestoreSelection = { selectedId = it },
             onSelect = { id ->
                 selectedId = id
+                spot = null
                 // Picking a country by hand drops a trip still waiting to open somewhere else.
                 pendingTrip = null
                 // A picked country moves into the map left showing beside or above its card.
@@ -330,6 +347,7 @@ private fun App(
                 onUpdateMemory = app.visits::updateMemory,
                 onRemoveMemory = app.visits::removeMemory,
                 onRemoveCity = app.visits::removeCity,
+                onSplitRegions = app.visits::setSplitRegions,
                 onCityNote = app.visits::setCityNote,
                 onAddRegion = app.visits::addRegion,
                 onRemoveRegion = app.visits::removeRegion,
@@ -372,6 +390,14 @@ private fun App(
             onMapPhotos = app.mapPhotos::set,
             routes = routes,
             onRoutes = app.routes::set,
+            mapView = mapView,
+            onMapView = app::setMapView,
+            regionShapes = app.regionShapes,
+            onSplitRegions = app.visits::setSplitRegions,
+            onRegion = app.visits::setRegion,
+            onCityWant = app.visits::setCityWant,
+            spot = spot,
+            onSpot = { spot = it; if (it != null) selectedId = null },
             followLines = follow,
             onFollowLines = app.followLines::set,
             lastBackup = lastBackup,
@@ -464,7 +490,9 @@ private fun App(
                             pendingTrip = id
                         }
                     } else if (show != null) {
-                        selectedId = show
+                        // A city found by name shows on its own, to say Want to go to it.
+                        selectedId = null
+                        spot = Spot.City(land.country, c.id, c.name, c.lat, c.lon)
                     }
                     focus = Focus(c.lat, c.lon, CITY_ZOOM)
                 },

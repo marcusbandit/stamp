@@ -51,6 +51,7 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -268,24 +269,24 @@ private fun MapPane(state: AppState, sidePanel: Boolean, bottomInset: Dp) {
             },
         )
         Box(Modifier.size(mapW, mapH)) {
-            // The legend and the routes button, side by side and centred over the map's part of
-            // the screen, however wide it is: one unit, so they never collide, and they glide
-            // with the map instead of jumping.
-            Row(
-                Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 8.dp)
-                    .height(androidx.compose.foundation.layout.IntrinsicSize.Min),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Legend(state, Modifier)
-                // As tall as the legend: the usual 48 dp touch box would make it the odd one out.
-                androidx.compose.runtime.CompositionLocalProvider(
-                    androidx.compose.material3.LocalMinimumInteractiveComponentSize provides 0.dp,
-                ) { RoutesToggle(state, Modifier.fillMaxHeight().aspectRatio(1f)) }
-            }
+            // The legend, centred over the map's part of the screen, however wide it is.
+            Legend(state, Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 8.dp))
             // On the thumb's side: left on the big screen, flat or bent, and right on the folded phone.
             val left = state.posture == Posture.Unfolded
             if (hinge != null || sidePanel || selected == null) {
                 var menuOpen by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
+                // What the map shows, along the bottom on the side away from the main button,
+                // with a region or a found city floating above it.
+                Column(
+                    Modifier.align(if (left) Alignment.BottomEnd else Alignment.BottomStart)
+                        .padding(start = if (left) 0.dp else 12.dp, end = if (left) 12.dp else 0.dp, bottom = bottomInset + 8.dp)
+                        .widthIn(max = mapW - 96.dp),
+                    horizontalAlignment = if (left) Alignment.End else Alignment.Start,
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    state.spot?.let { SpotFor(state, it) }
+                    ViewBar(state.mapView, state.onMapView, state.routes, state.onRoutes)
+                }
                 ActionMenu(
                     state,
                     open = menuOpen,
@@ -515,8 +516,27 @@ private fun StampMap(
             onDismiss = { editing = null },
         )
     }
+    // The regions drawn, their marks, and what is done in full; the shapes are read off the main
+    // thread, a country's file at a time, and only for the countries drawn as regions.
+    val regionIds = remember(state.mapView, state.atlas, state.visits) { regionCountries(state.mapView, state.atlas, state.visits) }
+    val shapes by androidx.compose.runtime.produceState(emptyList<Pair<String, com.marcusrosado.stamp.data.RegionShape>>(), regionIds, state.regionShapes) {
+        val rs = state.regionShapes ?: return@produceState
+        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            regionIds.flatMap { id -> val a2 = state.atlas.byId[id]?.alpha2.orEmpty(); if (a2.length == 2) rs.of(a2).map { id to it } else emptyList() }
+        }
+    }
+    val marks = remember(regionIds, state.visits, state.places) { regionMarks(regionIds, state.atlas, state.visits, state.places) }
+    val complete = remember(state.mapView, shapes, marks, state.visits) { completeCountries(state.mapView, state.atlas, state.visits, shapes, marks) }
+    val wantCities = remember(state.visits, state.places) {
+        state.visits.values.flatMap { v -> v.wantCities.mapNotNull { placeOf(it, v, state.places) } }.map { it.lat to it.lon }.distinct()
+    }
     WorldMap(
         animate = animate,
+        regionLayer = if (regionIds.isEmpty()) null else RegionLayer(shapes, marks),
+        complete = complete,
+        plain = state.mapView == com.marcusrosado.stamp.data.MapView.Cities,
+        wantCities = wantCities,
+        onRegion = if (selectable) { cid, rid -> state.onSpot(Spot.Region(cid, rid)) } else null,
         onRoute = if (selectable) { entries ->
             // Within one trip a leg wins over the trip as a whole, such as a layover's dot or a
             // day trip beside it. One leg left: straight to it. Several: ask which.
@@ -636,23 +656,34 @@ private fun LocateButton(state: AppState, modifier: Modifier) {
     ) { Icon(androidx.compose.material.icons.Icons.Filled.MyLocation, contentDescription = "Where I am") }
 }
 
-/** One tap shows or hides the lines between a visit's cities, leaving just the points. */
+/** The floating panel for a region or a found city, with the marks it can take. */
 @Composable
-private fun RoutesToggle(state: AppState, modifier: Modifier) {
-    // The legend's own pill colour, so it reads on any land; on, the icon takes the accent.
-    val cs = MaterialTheme.colorScheme
-    val tint by androidx.compose.animation.animateColorAsState(
-        if (state.routes) cs.primary else cs.onSurfaceVariant.copy(alpha = 0.6f), label = "routes",
-    )
-    Surface(
-        onClick = { state.onRoutes(!state.routes) },
-        modifier = modifier.semantics { contentDescription = if (state.routes) "Hide routes" else "Show routes" },
-        shape = RoundedCornerShape(50),
-        color = cs.surfaceContainerHigh.copy(alpha = 0.92f),
-        shadowElevation = 2.dp,
-    ) {
-        Box(contentAlignment = Alignment.Center) {
-            Icon(androidx.compose.material.icons.Icons.Filled.Timeline, contentDescription = null, tint = tint, modifier = Modifier.size(18.dp))
+private fun SpotFor(state: AppState, spot: Spot) {
+    val country = state.atlas.byId[spot.countryId]
+    val vs = visitsOf(spot.countryId, state.atlas, state.visits)
+    when (spot) {
+        is Spot.Region -> {
+            val marks = regionMarks(listOf(spot.countryId), state.atlas, state.visits, state.places)
+            SpotPanel(
+                title = state.places?.regionName(spot.regionId) ?: spot.regionId,
+                subtitle = country?.name.orEmpty(),
+                state = marks[spot.regionId]?.let { if (it == TravelState.Lived) TravelState.Visited else it },
+                choices = listOf(TravelState.Visited, TravelState.Want),
+                onState = { s -> state.onRegion(spot.countryId, spot.regionId, s) },
+                onClose = { state.onSpot(null) },
+            )
+        }
+        is Spot.City -> {
+            val been = vs.any { v -> v.state.counts && spot.cityId in v.cities }
+            SpotPanel(
+                title = spot.name,
+                subtitle = listOfNotNull(state.places?.byId?.get(spot.cityId)?.let { state.places.regionOf(it) }, country?.name).joinToString(", "),
+                state = when { been -> TravelState.Visited; vs.any { spot.cityId in it.wantCities } -> TravelState.Want; else -> null },
+                // A city already been to has nothing left to want.
+                choices = if (been) listOf(TravelState.Visited) else listOf(TravelState.Want),
+                onState = { s -> if (!been) state.onCityWant(spot.countryId, spot.cityId, s == TravelState.Want) },
+                onClose = { state.onSpot(null) },
+            )
         }
     }
 }

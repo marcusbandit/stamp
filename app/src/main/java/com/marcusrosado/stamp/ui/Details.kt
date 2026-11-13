@@ -76,6 +76,8 @@ import java.util.Locale
 
 /** What the country card can change besides the mark itself. */
 class DetailActions(
+    /** Draws a country as its regions, or as one again. */
+    val onSplitRegions: (countryId: String, on: Boolean) -> Unit = { _, _ -> },
     val onLoved: (id: String, loved: Boolean) -> Unit,
     val onRating: (id: String, rating: Int) -> Unit,
     val onAddTrip: (id: String) -> Unit,
