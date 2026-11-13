@@ -19,6 +19,9 @@ enum class Travel(val key: String, val label: String) {
     Car("car", "Car"),
     Ferry("ferry", "Ferry");
 
+    /** The label where room is short, such as a tile in the picker. */
+    val short: String get() = if (this == Transit) "Transit" else label
+
     companion object {
         fun of(key: String): Travel? = entries.firstOrNull { it.key == key }
     }
