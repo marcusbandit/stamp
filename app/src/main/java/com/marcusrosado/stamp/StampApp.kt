@@ -127,6 +127,8 @@ class StampApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // First, so a crash anywhere after it leaves a report on the phone.
+        CrashLog.install(this)
         MapLibre.getInstance(this)
         atlas.start()
         places.start()

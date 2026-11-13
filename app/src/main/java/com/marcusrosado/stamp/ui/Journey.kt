@@ -23,7 +23,7 @@ class Journey(
     val places: Places?,
     val airports: Airports?,
     /** The rail and road network of the countries the trips go through, when it is on the phone. */
-    val lines: com.marcusrosado.stamp.data.RouteNet? = null,
+    val lines: com.marcusrosado.stamp.data.RouteLines? = null,
 ) {
     /** A city, or a pin on any visit, by id. */
     fun place(stop: String): PlaceInfo? {

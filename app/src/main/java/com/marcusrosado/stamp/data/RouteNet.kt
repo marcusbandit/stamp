@@ -18,9 +18,31 @@ class RouteNet private constructor(
     private val segKind: ByteArray,
     private val segA: IntArray,
     private val segB: IntArray,
-    /** The points between a segment's two junctions, lat and lon interleaved, in 1e-5 degrees. */
-    private val segPts: Array<IntArray>,
+    /**
+     * The points between each segment's two junctions, lat and lon interleaved, in 1e-5 degrees,
+     * all in one array: segment s holds [ptStart] s up to [ptStart] s + 1. One array instead of
+     * one per segment keeps a country's network a fraction of the size in memory.
+     */
+    private val ptStart: IntArray,
+    private val pts: IntArray,
 ) {
+    // The box the network covers, to tell which countries' networks a leg needs.
+    private val south = nodeLat.minOrNull() ?: 0
+    private val north = nodeLat.maxOrNull() ?: 0
+    private val west = nodeLon.minOrNull() ?: 0
+    private val east = nodeLon.maxOrNull() ?: 0
+
+    /** Whether the network's box meets the box from [a] to [b], give or take [marginDeg] degrees. */
+    fun meets(a: Pair<Double, Double>, b: Pair<Double, Double>, marginDeg: Double = 0.3): Boolean {
+        if (segA.isEmpty()) return false
+        val m = (marginDeg * 1e5).toInt()
+        val s = (minOf(a.first, b.first) * 1e5).toInt() - m
+        val n = (maxOf(a.first, b.first) * 1e5).toInt() + m
+        val w = (minOf(a.second, b.second) * 1e5).toInt() - m
+        val e = (maxOf(a.second, b.second) * 1e5).toInt() + m
+        return n >= south && s <= north && e >= west && w <= east
+    }
+
     private val segKm = FloatArray(segA.size) { s -> length(s) }
 
     // Each junction's segments, as one flat list with an offset per junction.
@@ -63,8 +85,11 @@ class RouteNet private constructor(
             for (i in 1 until line.size) along += Distance.km(line[i - 1], line[i])
             along <= crow * 2.2 + 15
         }
-        cache[key] = found.orEmpty()
-        return found
+        // Thinned to about 150 m before it is kept: a followed line runs to thousands of
+        // points, far finer than the map draws, and every trip holds its own.
+        val thin = found?.let { simplify(it, 0.0015) }
+        cache[key] = thin.orEmpty()
+        return thin
     }
 
     private fun route(kind: Byte, from: Pair<Double, Double>, to: Pair<Double, Double>): List<Pair<Double, Double>>? {
@@ -293,12 +318,12 @@ class RouteNet private constructor(
                 out += point(nodeLat[v], nodeLon[v])
                 continue
             }
-            val pts = segPts[s]
+            val base = ptStart[s]
             val forward = segB[s] == v
-            val m = pts.size / 2
+            val m = (ptStart[s + 1] - base) / 2
             for (i in 0 until m) {
                 val j = if (forward) m - 1 - i else i
-                out += point(pts[2 * j], pts[2 * j + 1])
+                out += point(pts[base + 2 * j], pts[base + 2 * j + 1])
             }
             v = if (forward) segA[s] else segB[s]
             out += point(nodeLat[v], nodeLon[v])
@@ -346,9 +371,8 @@ class RouteNet private constructor(
         var la = nodeLat[segA[s]]
         var lo = nodeLon[segA[s]]
         var sum = 0.0
-        val pts = segPts[s]
-        for (i in 0 until pts.size / 2) {
-            sum += km(la, lo, pts[2 * i], pts[2 * i + 1]); la = pts[2 * i]; lo = pts[2 * i + 1]
+        for (i in ptStart[s] until ptStart[s + 1] step 2) {
+            sum += km(la, lo, pts[i], pts[i + 1]); la = pts[i]; lo = pts[i + 1]
         }
         sum += km(la, lo, nodeLat[segB[s]], nodeLon[segB[s]])
         return sum.toFloat()
@@ -403,7 +427,36 @@ class RouteNet private constructor(
             else -> null
         }
 
-        val EMPTY = RouteNet(IntArray(0), IntArray(0), ByteArray(0), IntArray(0), IntArray(0), emptyArray())
+        /**
+         * The line with only the points that keep it within [eps] degrees of latitude of itself;
+         * Ramer, Douglas and Peucker. Longitude is scaled to its width at the line's middle, so
+         * the tolerance is the same distance whichever way the line runs.
+         */
+        fun simplify(line: List<Pair<Double, Double>>, eps: Double): List<Pair<Double, Double>> {
+            if (line.size < 3) return line
+            val k = cos(Math.toRadians(line[line.size / 2].first)).coerceAtLeast(0.1)
+            val keep = BooleanArray(line.size)
+            keep[0] = true; keep[line.size - 1] = true
+            val stack = ArrayDeque<Pair<Int, Int>>()
+            stack.addLast(0 to line.size - 1)
+            while (stack.isNotEmpty()) {
+                val (a, b) = stack.removeLast()
+                val y1 = line[a].first; val x1 = line[a].second * k
+                val y2 = line[b].first; val x2 = line[b].second * k
+                val dx = x2 - x1; val dy = y2 - y1
+                val n = sqrt(dx * dx + dy * dy).takeIf { it > 0 } ?: 1e-12
+                var far = 0.0; var at = -1
+                for (i in a + 1 until b) {
+                    val y = line[i].first; val x = line[i].second * k
+                    val d = kotlin.math.abs(dy * (x - x1) - dx * (y - y1)) / n
+                    if (d > far) { far = d; at = i }
+                }
+                if (far > eps && at > 0) { keep[at] = true; stack.addLast(a to at); stack.addLast(at to b) }
+            }
+            return line.filterIndexed { i, _ -> keep[i] }
+        }
+
+        val EMPTY = RouteNet(IntArray(0), IntArray(0), ByteArray(0), IntArray(0), IntArray(0), IntArray(1), IntArray(0))
 
         private fun point(lat: Int, lon: Int) = lat / 1e5 to lon / 1e5
 
@@ -445,18 +498,19 @@ class RouteNet private constructor(
             val kind = ByteArray(m)
             val sa = IntArray(m)
             val sb = IntArray(m)
-            val pts = arrayOfNulls<IntArray>(m)
+            val start = IntArray(m + 1)
+            var pts = IntArray(maxOf(1024, m * 4))
+            var used = 0
             for (s in 0 until m) {
                 kind[s] = b[at++]
                 sa[s] = varint().toInt(); sb[s] = varint().toInt()
                 val c = varint().toInt()
-                val arr = IntArray(c * 2)
+                if (used + c * 2 > pts.size) pts = pts.copyOf(maxOf(pts.size * 2, used + c * 2))
                 var py = lat[sa[s]]; var px = lon[sa[s]]
-                for (i in 0 until c) { py += zz(); px += zz(); arr[2 * i] = py; arr[2 * i + 1] = px }
-                pts[s] = arr
+                for (i in 0 until c) { py += zz(); px += zz(); pts[used++] = py; pts[used++] = px }
+                start[s + 1] = used
             }
-            @Suppress("UNCHECKED_CAST")
-            return RouteNet(lat, lon, kind, sa, sb, pts as Array<IntArray>)
+            return RouteNet(lat, lon, kind, sa, sb, start, pts.copyOf(used))
         }
 
         /** One network from several countries' packs, joined where they share a junction. */
@@ -464,19 +518,55 @@ class RouteNet private constructor(
             if (nets.isEmpty()) return EMPTY
             if (nets.size == 1) return nets[0]
             val index = HashMap<Long, Int>()
-            val lat = ArrayList<Int>(); val lon = ArrayList<Int>()
-            val kind = ArrayList<Byte>(); val sa = ArrayList<Int>(); val sb = ArrayList<Int>()
-            val pts = ArrayList<IntArray>()
+            val nodes = nets.sumOf { it.nodeLat.size }
+            val lat = IntArray(nodes); val lon = IntArray(nodes)
+            var n = 0
+            val segs = nets.sumOf { it.segA.size }
+            val kind = ByteArray(segs); val sa = IntArray(segs); val sb = IntArray(segs)
+            val start = IntArray(segs + 1)
+            val pts = IntArray(nets.sumOf { it.pts.size })
+            var m = 0
+            var used = 0
             for (net in nets) {
                 val remap = IntArray(net.nodeLat.size) { i ->
                     val key = (net.nodeLat[i].toLong() shl 32) or (net.nodeLon[i].toLong() and 0xFFFFFFFFL)
-                    index.getOrPut(key) { lat += net.nodeLat[i]; lon += net.nodeLon[i]; lat.size - 1 }
+                    index.getOrPut(key) { lat[n] = net.nodeLat[i]; lon[n] = net.nodeLon[i]; n++ }
                 }
                 for (s in net.segA.indices) {
-                    kind += net.segKind[s]; sa += remap[net.segA[s]]; sb += remap[net.segB[s]]; pts += net.segPts[s]
+                    kind[m] = net.segKind[s]; sa[m] = remap[net.segA[s]]; sb[m] = remap[net.segB[s]]
+                    net.pts.copyInto(pts, used, net.ptStart[s], net.ptStart[s + 1])
+                    used += net.ptStart[s + 1] - net.ptStart[s]
+                    m++
+                    start[m] = used
                 }
             }
-            return RouteNet(lat.toIntArray(), lon.toIntArray(), kind.toByteArray(), sa.toIntArray(), sb.toIntArray(), pts.toTypedArray())
+            return RouteNet(lat.copyOf(n), lon.copyOf(n), kind, sa, sb, start, pts)
         }
     }
+}
+
+/**
+ * The rail and road networks of every country kept on the phone, each on its own. A leg uses
+ * the networks whose ground its stretch of map crosses, the countries it passes through
+ * included, joined for the moment when there are several, so memory holds each country once
+ * and never one big merged copy of them all. The last few joins are kept for the next leg.
+ */
+class RouteLines(private val nets: Map<String, RouteNet>) {
+    private val joined = object : LinkedHashMap<String, RouteNet>(4, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, RouteNet>) = size > 3
+    }
+
+    @Synchronized
+    fun follow(way: Travel, from: Pair<Double, Double>, to: Pair<Double, Double>): List<Pair<Double, Double>>? {
+        if (RouteNet.kindOf(way) == null) return null
+        val pick = nets.filterValues { it.meets(from, to) }.toSortedMap()
+        val net = when (pick.size) {
+            0 -> return null
+            1 -> pick.values.first()
+            else -> joined.getOrPut(pick.keys.joinToString(",")) { RouteNet.merge(pick.values.toList()) }
+        }
+        return net.follow(way, from, to)
+    }
+
+    val isEmpty: Boolean get() = nets.isEmpty()
 }

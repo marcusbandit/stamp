@@ -70,6 +70,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.Backup
 import androidx.compose.material.icons.outlined.Home
@@ -94,6 +95,7 @@ import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.rememberTopAppBarState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -501,13 +503,9 @@ private fun MapPage(state: AppState) {
         ) { state.onSplit(false) }
     }
     Category("On the map")
-    SwitchPref("Routes between cities", "Lines in the order visited", state.routes, state.onRoutes)
+    SwitchPref("Routes between cities", null, state.routes, state.onRoutes)
     if (state.routes) TravelLegend(Modifier.padding(start = 24.dp, end = 24.dp, top = 4.dp, bottom = 12.dp))
-    SwitchPref(
-        "Follow railways and roads",
-        "Downloads the main rail lines and motorways of countries you travel in",
-        state.followLines, state.onFollowLines,
-    )
+    SwitchPref("Follow railways and roads", null, state.followLines, state.onFollowLines)
     // Where the phone is: on asks for the rough location if the phone has not allowed it yet.
     val context = LocalContext.current
     val askHere = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -520,17 +518,9 @@ private fun MapPage(state: AppState) {
             )
         }
     }
-    SwitchPref(
-        "Mark the country I'm in",
-        "Opens the map where you are and marks it visited",
-        state.here && Here.granted(context),
-    ) { on ->
+    SwitchPref("Mark the country I'm in", null, state.here && Here.granted(context)) { on ->
         if (on && !Here.granted(context)) askHere.launch(Here.PERMISSION) else state.onHere(on)
     }
-    Footer(
-        if (state.split) "Alaska and Hawaii get marks of their own. The United States still counts once in your passport."
-        else "Marking the United States marks Alaska and Hawaii too.",
-    )
 }
 
 /** One of the two ways to treat islands, drawn on the United States with Alaska and Hawaii, with a radio under it. */
@@ -661,6 +651,29 @@ private fun places(n: Int) = if (n == 1) "1 place" else "$n places"
 private fun AboutPage() {
     Category("Stamp")
     Pref("Version", BuildConfig.VERSION_NAME)
+    // Crash reports stay on the phone; sharing them is the user's own step.
+    val context = LocalContext.current
+    var crashes by remember { mutableStateOf(0) }
+    val clearing = androidx.compose.runtime.rememberCoroutineScope()
+    LaunchedEffect(Unit) {
+        crashes = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { com.marcusrosado.stamp.CrashLog.reports(context).size }
+    }
+    if (crashes > 0) {
+        Pref(
+            "Share crash reports", if (crashes == 1) "1 saved" else "$crashes saved",
+            onClick = {
+                val text = com.marcusrosado.stamp.CrashLog.text(context)
+                val send = Intent(Intent.ACTION_SEND).setType("text/plain")
+                    .putExtra(Intent.EXTRA_SUBJECT, "Stamp crash reports").putExtra(Intent.EXTRA_TEXT, text)
+                context.startActivity(Intent.createChooser(send, "Share crash reports"))
+            },
+        ) {
+            IconButton(onClick = {
+                clearing.launch(kotlinx.coroutines.Dispatchers.IO) { com.marcusrosado.stamp.CrashLog.clear(context) }
+                crashes = 0
+            }) { Icon(Icons.Filled.Delete, contentDescription = "Delete crash reports") }
+        }
+    }
     Pref("Your data", "Stays on this phone")
     Category("Map data")
     Pref("Country shapes", "Natural Earth, public domain")
