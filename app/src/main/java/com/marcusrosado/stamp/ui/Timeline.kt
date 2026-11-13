@@ -122,7 +122,7 @@ class TimelineActions(
     val onStopDates: (place: String, arrived: PartialDate?, left: PartialDate?) -> Unit,
     val onMove: (place: String, by: Int) -> Unit,
     /** Sets how the user went from one stop to the next, and a flight's airports; no ways clears it. */
-    val onLeg: (from: String, to: String, ways: List<com.marcusrosado.stamp.data.Travel>, via: List<String>, around: Boolean) -> Unit,
+    val onLeg: (from: String, to: String, steps: List<com.marcusrosado.stamp.data.Step>, around: Boolean) -> Unit,
     /** Sets where the trip set out from, a city or pin id; null is home. */
     val onStart: (place: String?) -> Unit = {},
     /** Sets where the trip went back to; null is home. */
@@ -211,8 +211,8 @@ fun VisitTimeline(
     fun legRow(from: String, to: String, litAt: Int) {
         val l = trip.legBetween(from, to)
         LegLine(
-            ways = l?.ways.orEmpty(),
-            via = l?.via.orEmpty(),
+            leg = l,
+            stops = l?.steps.orEmpty().dropLast(1).map { st -> st.to?.let { journey.stopLabel(it, visit) } },
             question = if (to == com.marcusrosado.stamp.data.Leg.END && trip.end == null) "How did you get home?"
                 else "How did you get to ${nameOf(to)}?",
             where = if (to == com.marcusrosado.stamp.data.Leg.END && trip.end == null) "home" else "to ${nameOf(to)}",
@@ -466,10 +466,12 @@ fun VisitTimeline(
                 toName = b?.name ?: nameOf(to),
                 from = a?.let { it.lat to it.lon },
                 to = b?.let { it.lat to it.lon },
-                initial = l?.ways.orEmpty(),
-                initialVia = l?.via.orEmpty(),
+                initial = l?.steps.orEmpty(),
                 airports = journey.airports,
-                onDone = { ways, via, around -> actions.onLeg(from, to, ways, via, around); leg = null },
+                places = places,
+                stopPoint = { journey.stopPoint(it, visit) },
+                stopName = { (placeOf(it, visit, places) ?: journey.place(it))?.name },
+                onDone = { steps, around -> actions.onLeg(from, to, steps, around); leg = null },
                 initialAround = l?.around == true,
                 onDismiss = { leg = null },
                 fromHome = from == com.marcusrosado.stamp.data.Leg.START && trip.start == null && journey.homeFor(trip) != null,

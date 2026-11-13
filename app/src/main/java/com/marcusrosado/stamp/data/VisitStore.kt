@@ -464,13 +464,13 @@ class VisitStore(private val file: File) {
 
     /**
      * Sets how the user got from stop [from] to stop [to], [Leg.START] and [Leg.END] included,
-     * and the airports a flight went through; no ways clears it.
+     * as the steps it took; no step with a way or a stop clears it.
      */
-    fun setLeg(tripId: String, from: String, to: String, ways: List<Travel>, via: List<String> = emptyList(), around: Boolean = false) = changeTrip(tripId) { t ->
+    fun setLeg(tripId: String, from: String, to: String, steps: List<Step>, around: Boolean = false) = changeTrip(tripId) { t ->
         if ((from to to) !in t.legEnds) return@changeTrip t
         val rest = t.legs.filterNot { it.from == from && it.to == to }
-        val keep = if (Travel.Plane in ways) via else emptyList()
-        t.copy(legs = if (ways.isEmpty()) rest else rest + Leg(from, to, ways.distinct(), keep, around && Travel.Plane in ways))
+        val kept = Leg.tidy(steps)
+        t.copy(legs = if (kept.isEmpty()) rest else rest + Leg(from, to, kept, around && kept.any { it.way == Travel.Plane }))
     }
 
     /** Sets where a trip set out from, a city or pin id; null is home. */
@@ -679,8 +679,9 @@ class VisitStore(private val file: File) {
         // Only legs between stops that still follow each other are kept.
         t.currentLegs.takeIf { it.isNotEmpty() }?.let { legs ->
             put("legs", JSONArray(legs.map { l ->
-                JSONObject().put("from", l.from).put("to", l.to).put("ways", JSONArray(l.ways.map { it.key }))
-                    .apply { if (l.via.isNotEmpty()) put("via", JSONArray(l.via)); if (l.around) put("around", true) }
+                JSONObject().put("from", l.from).put("to", l.to)
+                    .put("steps", JSONArray(l.steps.map { st -> JSONObject().apply { st.way?.let { put("way", it.key) }; st.to?.let { put("to", it) } } }))
+                    .apply { if (l.around) put("around", true) }
             }))
         }
         if (t.dayPlaces.isNotEmpty()) put("days", JSONObject(t.dayPlaces.filterKeys { it in t.cities }.mapValues { JSONArray(it.value) }))
@@ -725,10 +726,20 @@ class VisitStore(private val file: File) {
         legs = t.optJSONArray("legs")?.let { a ->
             (0 until a.length()).mapNotNull { k ->
                 val l = a.optJSONObject(k) ?: return@mapNotNull null
-                val ways = strings(l.optJSONArray("ways")).mapNotNull { Travel.of(it) }
                 val from = l.optString("from"); val to = l.optString("to")
-                if (from.isEmpty() || to.isEmpty() || ways.isEmpty()) null
-                else Leg(from, to, ways, strings(l.optJSONArray("via")).map { it.uppercase() }, l.optBoolean("around"))
+                val around = l.optBoolean("around")
+                val steps = l.optJSONArray("steps")
+                when {
+                    from.isEmpty() || to.isEmpty() -> null
+                    steps != null -> Leg.tidy((0 until steps.length()).mapNotNull { i ->
+                        steps.optJSONObject(i)?.let { st -> Step(Travel.of(st.optString("way")), st.optString("to").ifEmpty { null }) }
+                    }).takeIf { it.isNotEmpty() }?.let { Leg(from, to, it, around) }
+                    // Saved before legs had steps: its ways and its one flight's airports.
+                    else -> Leg.fromWays(
+                        from, to, strings(l.optJSONArray("ways")).mapNotNull { Travel.of(it) },
+                        strings(l.optJSONArray("via")).map { it.uppercase() }, around,
+                    )
+                }
             }
         }.orEmpty(),
         start = t.optString("start").ifEmpty { null },

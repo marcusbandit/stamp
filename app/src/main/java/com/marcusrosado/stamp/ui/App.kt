@@ -319,7 +319,7 @@ private fun App(
                 },
                 onStopDates = app.visits::setStopDates,
                 onMoveStop = app.visits::moveStop,
-                onLeg = { t, from, to, ways, via, around -> app.visits.setLeg(t, from, to, ways, via, around) },
+                onLeg = { t, from, to, steps, around -> app.visits.setLeg(t, from, to, steps, around) },
                 onTripStart = app.visits::setTripStart,
                 onAddDayPlace = app.visits::addDayPlace,
                 onAddDayPin = app.visits::addDayPin,
@@ -404,10 +404,14 @@ private fun App(
             val plain = Journey(visits, places, airports)
             val codes = visits.values.filter { it.state == TravelState.Visited }.flatMap { v -> v.trips.map { it to v } }.distinctBy { it.first.id }
                 .flatMap { (t, v) ->
-                    t.legEnds.filter { (a, b) -> t.legBetween(a, b)?.ways.orEmpty().any { com.marcusrosado.stamp.data.RouteNet.kindOf(it) != null } }
-                        .flatMap { (a, b) -> listOfNotNull(plain.endPoint(t, v, a), plain.endPoint(t, v, b)) }
+                    t.legEnds.mapNotNull { (a, b) -> t.legBetween(a, b) }
+                        .filter { l -> l.ways.any { com.marcusrosado.stamp.data.RouteNet.kindOf(it) != null } }
+                        .flatMap { l ->
+                            listOfNotNull(plain.endPoint(t, v, l.from), plain.endPoint(t, v, l.to)).map { it.lat to it.lon } +
+                                l.steps.mapNotNull { st -> st.to?.let { plain.stopPoint(it, v) } }
+                        }
                 }
-                .mapNotNull { p -> atlas.locate(p.lat, p.lon)?.let { land -> land.alpha2.ifEmpty { null } ?: atlas.byId[land.country]?.alpha2?.ifEmpty { null } } }
+                .mapNotNull { (lat, lon) -> atlas.locate(lat, lon)?.let { land -> land.alpha2.ifEmpty { null } ?: atlas.byId[land.country]?.alpha2?.ifEmpty { null } } }
                 .toSet()
             if (codes.isNotEmpty()) app.routePacks.want(codes)
         }

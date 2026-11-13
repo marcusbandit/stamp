@@ -31,73 +31,61 @@ import androidx.compose.ui.unit.dp
 import com.marcusrosado.stamp.data.Travel
 
 /**
- * A leg drawn flat the way the map draws it: each way's own line in turn, a flight's airports
- * as codes along it with the ground on either side, and the way's icon gliding from one end to
- * the other and starting over, so the timeline moves like the map does. It only animates while
- * it is on screen; the list drops it once it scrolls away.
+ * A leg drawn flat the way the map draws it: each step's own line in turn, the stops between
+ * them named along it where there is room and dots where there is not, and the way's icon
+ * gliding from one end to the other and starting over, so the timeline moves like the map does.
+ * [ways] holds each step's way, null where the user has not said; [stops] the names of the
+ * stops between the steps, null for one with no name. It only animates while it is on screen;
+ * the list drops it once it scrolls away.
  */
 @Composable
-fun TravelStrip(ways: List<Travel>, via: List<String>, modifier: Modifier = Modifier, gap: Color = MaterialTheme.colorScheme.surface) {
+fun TravelStrip(ways: List<Travel?>, stops: List<String?>, modifier: Modifier = Modifier, gap: Color = MaterialTheme.colorScheme.surface) {
     val p = LocalMapPalette.current
-    val painters = ways.distinct().associateWith { w -> key(w) { rememberVectorPainter(w.icon) } }
+    val painters = ways.filterNotNull().distinct().associateWith { w -> key(w) { rememberVectorPainter(w.icon) } }
     val measurer = rememberTextMeasurer()
-    val codeStyle = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold, color = p.travel(Travel.Plane))
-    val plane = ways.indexOf(Travel.Plane)
-    val flight = plane >= 0 && via.size >= 2
+    val nameStyle = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
+    val steps = ways.ifEmpty { listOf(null) }
+    val between = (0 until steps.size - 1).map { stops.getOrNull(it) }
     // Measured once per leg, not on every frame of the glide.
-    val labels = remember(via, codeStyle, flight) { if (flight) via.map { measurer.measure(it, codeStyle) } else emptyList() }
+    val labels = remember(between, nameStyle) { between.map { n -> n?.let { measurer.measure(it, nameStyle, maxLines = 1) } } }
     val dot = MaterialTheme.colorScheme.onSurfaceVariant
-    val stretches = if (flight) via.size - 1 + (ways.size - 1) else ways.size.coerceAtLeast(1)
     val t by rememberInfiniteTransition(label = "glide").animateFloat(
-        0f, 1f, infiniteRepeatable(tween(2400 + 1100 * stretches, easing = LinearEasing), RepeatMode.Restart), label = "t",
+        0f, 1f, infiniteRepeatable(tween(2400 + 1100 * steps.size, easing = LinearEasing), RepeatMode.Restart), label = "t",
     )
     Canvas(modifier.height(30.dp)) {
         val y = size.height / 2
         val r = 9.dp.toPx()
         val pad = 6.dp.toPx()
+        val least = 22.dp.toPx()
+        val room = size.width - 2 * r
+        // Names where they fit with a little line either side: all of them, else only the
+        // airports' codes, else none.
+        fun fits(shown: List<Boolean>) =
+            labels.indices.sumOf { if (shown[it]) labels[it]!!.size.width + 2 * pad.toDouble() else 0.0 } + least * steps.size <= room
+        val all = labels.map { it != null }
+        val codes = labels.indices.map { all[it] && between[it]!!.length <= 3 && between[it]!!.all { c -> c.isUpperCase() } }
+        val shown = listOf(all, codes).firstOrNull { fits(it) } ?: labels.map { false }
+        val taken = labels.indices.sumOf { if (shown[it]) labels[it]!!.size.width + 2 * pad.toDouble() else 0.0 }.toFloat()
+        val each = (room - taken) / steps.size
         // The stretches of line, each with its way, from left to right.
         val segs = ArrayList<Triple<Float, Float, Travel?>>()
-        fun ground(from: Float, to: Float, list: List<Travel>) {
-            if (list.isEmpty() || to - from < 1f) return
-            val each = (to - from) / list.size
-            list.forEachIndexed { i, w -> segs += Triple(from + each * i, from + each * (i + 1), w) }
-        }
-        if (flight) {
-            val before = ways.take(plane)
-            val after = ways.drop(plane + 1)
-            // The flight takes the middle when there is ground travel either side of it.
-            val a = if (before.isEmpty()) 0f else size.width * 0.22f
-            val b = if (after.isEmpty()) size.width else size.width * 0.78f
-            val widths = labels.map { it.size.width.toFloat() }
-            val room = (b - a) - widths.sum()
-            // Codes evenly spaced by the gaps between them; too many to fit, the layovers are dots.
-            val tight = labels.size > 2 && room / (labels.size - 1) < pad * 2 + 16.dp.toPx()
-            val shown = if (tight) listOf(0, labels.size - 1) else labels.indices.toList()
-            val gapBetween = ((b - a) - shown.sumOf { widths[it].toDouble() }.toFloat()) / (shown.size - 1)
-            var x = a
-            val boxes = shown.map { i -> val box = x to x + widths[i]; x += widths[i] + gapBetween; i to box }
-            ground(r, a - pad, before)
-            for (k in 0 until boxes.size - 1) segs += Triple(boxes[k].second.second + pad, boxes[k + 1].second.first - pad, Travel.Plane)
-            ground(b + pad, size.width - r, after)
-            for ((s0, s1, w) in segs) drawWay(w, s0, s1, y, p, gap)
-            for ((i, box) in boxes) {
-                val l = labels[i]
-                drawText(l, topLeft = Offset(box.first, y - l.size.height / 2f))
+        val marks = ArrayList<Pair<Float, Int>>()
+        var pen = r
+        steps.forEachIndexed { i, w ->
+            segs += Triple(pen, pen + each, w)
+            pen += each
+            if (i < labels.size) {
+                if (shown[i]) { marks += pen + pad to i; pen += labels[i]!!.size.width + 2 * pad }
+                else marks += pen to -1
             }
-            if (tight) {
-                val (s0, s1, _) = segs.first { it.third == Travel.Plane }
-                for (k in 1 until labels.size - 1) endDot(Offset(s0 + (s1 - s0) * k / (labels.size - 1), y), gap, codeStyle.color)
-            }
-            if (before.isNotEmpty()) endDot(Offset(r, y), gap, dot)
-            if (after.isNotEmpty()) endDot(Offset(size.width - r, y), gap, dot)
-        } else {
-            ground(r, size.width - r, ways)
-            if (segs.isEmpty()) segs += Triple(r, size.width - r, null)
-            for ((s0, s1, w) in segs) drawWay(w, s0, s1, y, p, gap)
-            // The two ends, and where one way hands over to the next.
-            for (s in segs) endDot(Offset(s.first, y), gap, dot)
-            endDot(Offset(segs.last().second, y), gap, dot)
         }
+        for ((s0, s1, w) in segs) drawWay(w, s0, s1, y, p, gap)
+        for ((at, i) in marks) {
+            if (i < 0) endDot(Offset(at, y), gap, dot)
+            else labels[i]!!.let { l -> drawText(l, topLeft = Offset(at, y - l.size.height / 2f)) }
+        }
+        endDot(Offset(r, y), gap, dot)
+        endDot(Offset(size.width - r, y), gap, dot)
         // The icon on its way: eased off the start, faded in and out at the ends.
         val total = segs.sumOf { (it.second - it.first).coerceAtLeast(0f).toDouble() }.toFloat()
         if (total <= 0f) return@Canvas
