@@ -38,8 +38,8 @@ object CrashLog {
     fun reports(context: Context): List<File> =
         dir(context).listFiles { f -> f.name.endsWith(".txt") }.orEmpty().sortedByDescending { it.name }
 
-    /** Every kept report as one text, newest first, for sharing. */
-    fun text(context: Context): String = reports(context).joinToString("\n\n") { it.readText() }
+    /** The newest few reports as one text for sharing, kept small enough to hand to another app. */
+    fun text(context: Context): String = reports(context).take(3).joinToString("\n\n") { it.readText() }.take(50_000)
 
     fun clear(context: Context) {
         reports(context).forEach { it.delete() }
@@ -65,12 +65,19 @@ object CrashLog {
         reports(context).drop(KEEP).forEach { it.delete() }
     }
 
-    /** The app's own last log lines; an app may always read its own. */
+    /**
+     * The app's own last log lines; an app may always read its own. Given two seconds at most,
+     * so a stuck logcat never keeps a crashing app from ending.
+     */
     private fun ownLog(): String = runCatching {
         val p = ProcessBuilder("logcat", "-d", "-t", "300", "--pid=${Process.myPid()}")
             .redirectErrorStream(true).start()
-        val out = p.inputStream.bufferedReader().readText()
-        p.waitFor(2, TimeUnit.SECONDS)
+        var out = "(not readable)\n"
+        val reader = Thread { out = runCatching { p.inputStream.bufferedReader().readText() }.getOrDefault(out) }
+        reader.isDaemon = true
+        reader.start()
+        reader.join(2_000)
+        if (!p.waitFor(100, TimeUnit.MILLISECONDS)) p.destroy()
         out
     }.getOrDefault("(not readable)\n")
 }

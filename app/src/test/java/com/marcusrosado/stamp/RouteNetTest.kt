@@ -76,4 +76,32 @@ class RouteNetTest {
         assertNotNull(both.follow(Travel.Train, 50.0 to 5.0, 50.0 to 7.0))
         assertNull(west.follow(Travel.Train, 50.0 to 5.0, 50.0 to 7.0))
     }
+
+    @Test fun aMergedNetworkKeepsEachSegmentsOwnPoints() {
+        // Two countries, each with a bend; after the merge each bend is still where it was.
+        val west = RouteNet.read(pack(listOf(50.0 to 5.0, 50.0 to 6.0), listOf(Triple(0, 1, 0 to listOf(50.4 to 5.5)))))
+        val east = RouteNet.read(pack(listOf(50.0 to 6.0, 50.0 to 7.0), listOf(Triple(0, 1, 0 to listOf(49.6 to 6.5)))))
+        val line = RouteNet.merge(listOf(west, east)).follow(Travel.Train, 50.0 to 5.0, 50.0 to 7.0)!!
+        assertTrue(line.any { Math.abs(it.first - 50.4) < 1e-4 && Math.abs(it.second - 5.5) < 1e-4 })
+        assertTrue(line.any { Math.abs(it.first - 49.6) < 1e-4 && Math.abs(it.second - 6.5) < 1e-4 })
+    }
+
+    @Test fun aLegThroughAThirdCountryUsesItsNetwork() {
+        // A to C by rail only joins through B, whose network neither end lies in.
+        val a = RouteNet.read(pack(listOf(50.0 to 5.0, 50.0 to 5.9), listOf(Triple(0, 1, 0 to emptyList()))))
+        val b = RouteNet.read(pack(listOf(50.0 to 5.9, 50.0 to 7.1), listOf(Triple(0, 1, 0 to emptyList()))))
+        val c = RouteNet.read(pack(listOf(50.0 to 7.1, 50.0 to 8.0), listOf(Triple(0, 1, 0 to emptyList()))))
+        val lines = com.marcusrosado.stamp.data.RouteLines(mapOf("AA" to a, "BB" to b, "CC" to c))
+        assertNotNull(lines.follow(Travel.Train, 50.0 to 5.0, 50.0 to 8.0))
+    }
+
+    @Test fun thinningKeepsTheShapeAndDropsTheRest() {
+        val straight = (0..100).map { 55.0 to 10.0 + it * 0.01 }
+        assertEquals(2, RouteNet.simplify(straight, 0.0015).size)
+        val bent = straight.take(50) + (0..50).map { 55.0 + it * 0.01 to 10.5 }
+        val thin = RouteNet.simplify(bent, 0.0015)
+        assertTrue(thin.size in 3..4)
+        assertEquals(bent.first(), thin.first())
+        assertEquals(bent.last(), thin.last())
+    }
 }

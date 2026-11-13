@@ -32,13 +32,15 @@ class RouteNet private constructor(
     private val west = nodeLon.minOrNull() ?: 0
     private val east = nodeLon.maxOrNull() ?: 0
 
-    /** Whether [p] lies within the network's box, give or take [marginDeg] degrees. */
-    fun covers(p: Pair<Double, Double>, marginDeg: Double = 0.3): Boolean {
+    /** Whether the network's box meets the box from [a] to [b], give or take [marginDeg] degrees. */
+    fun meets(a: Pair<Double, Double>, b: Pair<Double, Double>, marginDeg: Double = 0.3): Boolean {
         if (segA.isEmpty()) return false
         val m = (marginDeg * 1e5).toInt()
-        val lat = (p.first * 1e5).toInt()
-        val lon = (p.second * 1e5).toInt()
-        return lat in (south - m)..(north + m) && lon in (west - m)..(east + m)
+        val s = (minOf(a.first, b.first) * 1e5).toInt() - m
+        val n = (maxOf(a.first, b.first) * 1e5).toInt() + m
+        val w = (minOf(a.second, b.second) * 1e5).toInt() - m
+        val e = (maxOf(a.second, b.second) * 1e5).toInt() + m
+        return n >= south && s <= north && e >= west && w <= east
     }
 
     private val segKm = FloatArray(segA.size) { s -> length(s) }
@@ -425,21 +427,27 @@ class RouteNet private constructor(
             else -> null
         }
 
-        /** The line with only the points that keep it within [eps] degrees of itself; Ramer, Douglas and Peucker. */
+        /**
+         * The line with only the points that keep it within [eps] degrees of latitude of itself;
+         * Ramer, Douglas and Peucker. Longitude is scaled to its width at the line's middle, so
+         * the tolerance is the same distance whichever way the line runs.
+         */
         fun simplify(line: List<Pair<Double, Double>>, eps: Double): List<Pair<Double, Double>> {
             if (line.size < 3) return line
+            val k = cos(Math.toRadians(line[line.size / 2].first)).coerceAtLeast(0.1)
             val keep = BooleanArray(line.size)
             keep[0] = true; keep[line.size - 1] = true
             val stack = ArrayDeque<Pair<Int, Int>>()
             stack.addLast(0 to line.size - 1)
             while (stack.isNotEmpty()) {
                 val (a, b) = stack.removeLast()
-                val (y1, x1) = line[a]; val (y2, x2) = line[b]
+                val y1 = line[a].first; val x1 = line[a].second * k
+                val y2 = line[b].first; val x2 = line[b].second * k
                 val dx = x2 - x1; val dy = y2 - y1
                 val n = sqrt(dx * dx + dy * dy).takeIf { it > 0 } ?: 1e-12
                 var far = 0.0; var at = -1
                 for (i in a + 1 until b) {
-                    val (y, x) = line[i]
+                    val y = line[i].first; val x = line[i].second * k
                     val d = kotlin.math.abs(dy * (x - x1) - dx * (y - y1)) / n
                     if (d > far) { far = d; at = i }
                 }
@@ -539,18 +547,19 @@ class RouteNet private constructor(
 
 /**
  * The rail and road networks of every country kept on the phone, each on its own. A leg uses
- * only the networks of the countries its ends are in, joined for the moment when it crosses a
- * border, so memory holds each country once and never one big merged copy of them all.
+ * the networks whose ground its stretch of map crosses, the countries it passes through
+ * included, joined for the moment when there are several, so memory holds each country once
+ * and never one big merged copy of them all. The last few joins are kept for the next leg.
  */
 class RouteLines(private val nets: Map<String, RouteNet>) {
     private val joined = object : LinkedHashMap<String, RouteNet>(4, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, RouteNet>) = size > 2
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, RouteNet>) = size > 3
     }
 
     @Synchronized
     fun follow(way: Travel, from: Pair<Double, Double>, to: Pair<Double, Double>): List<Pair<Double, Double>>? {
         if (RouteNet.kindOf(way) == null) return null
-        val pick = nets.filterValues { it.covers(from) || it.covers(to) }.toSortedMap()
+        val pick = nets.filterValues { it.meets(from, to) }.toSortedMap()
         val net = when (pick.size) {
             0 -> return null
             1 -> pick.values.first()

@@ -70,6 +70,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.Backup
 import androidx.compose.material.icons.outlined.Home
@@ -94,6 +95,7 @@ import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.rememberTopAppBarState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -651,14 +653,26 @@ private fun AboutPage() {
     Pref("Version", BuildConfig.VERSION_NAME)
     // Crash reports stay on the phone; sharing them is the user's own step.
     val context = LocalContext.current
-    val crashes = remember { com.marcusrosado.stamp.CrashLog.reports(context).size }
+    var crashes by remember { mutableStateOf(0) }
+    val clearing = androidx.compose.runtime.rememberCoroutineScope()
+    LaunchedEffect(Unit) {
+        crashes = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { com.marcusrosado.stamp.CrashLog.reports(context).size }
+    }
     if (crashes > 0) {
-        Pref("Share crash reports", if (crashes == 1) "1 saved" else "$crashes saved", onClick = {
-            val text = com.marcusrosado.stamp.CrashLog.text(context).take(100_000)
-            val send = Intent(Intent.ACTION_SEND).setType("text/plain")
-                .putExtra(Intent.EXTRA_SUBJECT, "Stamp crash reports").putExtra(Intent.EXTRA_TEXT, text)
-            context.startActivity(Intent.createChooser(send, "Share crash reports"))
-        })
+        Pref(
+            "Share crash reports", if (crashes == 1) "1 saved" else "$crashes saved",
+            onClick = {
+                val text = com.marcusrosado.stamp.CrashLog.text(context)
+                val send = Intent(Intent.ACTION_SEND).setType("text/plain")
+                    .putExtra(Intent.EXTRA_SUBJECT, "Stamp crash reports").putExtra(Intent.EXTRA_TEXT, text)
+                context.startActivity(Intent.createChooser(send, "Share crash reports"))
+            },
+        ) {
+            IconButton(onClick = {
+                clearing.launch(kotlinx.coroutines.Dispatchers.IO) { com.marcusrosado.stamp.CrashLog.clear(context) }
+                crashes = 0
+            }) { Icon(Icons.Filled.Delete, contentDescription = "Delete crash reports") }
+        }
     }
     Pref("Your data", "Stays on this phone")
     Category("Map data")

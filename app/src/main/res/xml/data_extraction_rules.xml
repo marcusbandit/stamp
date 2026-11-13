@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12 and newer: crash reports stay on the phone, in cloud backup and device moves alike. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="external" path="crashes" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="external" path="crashes" />
+    </device-transfer>
+</data-extraction-rules>
