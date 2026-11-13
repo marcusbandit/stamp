@@ -90,13 +90,20 @@ class JourneyTest {
         val home = 55.68 to 12.57
         val tokyo = 35.68 to 139.69
         val cph = 55.62 to 12.66; val hel = 60.32 to 24.96; val hnd = 35.55 to 139.79
-        val r = LegPath.route(home, tokyo, listOf(Travel.Plane), listOf(cph, hel, hnd))
+        val r = LegPath.route(home, tokyo, listOf(Travel.Plane), listOf(cph, hel, hnd), fromHome = true, toHome = true)
         val ways = r.map { it.second }
-        // Home to the airport not said, two flights, the airport to the hotel not said.
-        assertEquals(listOf(null, Travel.Plane, Travel.Plane, null), ways)
+        // The way there and home: two flights, starting and ending at the airports, with nothing
+        // drawn from the door.
+        assertEquals(listOf(Travel.Plane, Travel.Plane), ways)
         fun near(a: Pair<Double, Double>, b: Pair<Double, Double>) = Math.abs(a.first - b.first) < 1e-6 && Math.abs(a.second - b.second) < 1e-6
-        assertTrue(near(cph, r[1].first.first()))
-        assertTrue(near(hnd, r[2].first.last()))
+        assertTrue(near(cph, r[0].first.first()))
+        assertTrue(near(hnd, r[1].first.last()))
+        // A train from the airport on into town still draws.
+        val on = LegPath.route(home, tokyo, listOf(Travel.Plane, Travel.Train), listOf(cph, hnd), fromHome = true)
+        assertEquals(listOf(Travel.Plane, Travel.Train), on.map { it.second })
+        // Mid-trip, a stop stays joined to its airport.
+        val mid = LegPath.route(home, tokyo, listOf(Travel.Plane), listOf(cph, hnd))
+        assertEquals(listOf(null, Travel.Plane, null), mid.map { it.second })
     }
 
     @Test fun aFlightCanGoTheOtherWayRoundTheGlobe() {

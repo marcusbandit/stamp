@@ -93,6 +93,8 @@ fun WorldMap(
      */
     coveredEnd: androidx.compose.ui.unit.Dp = androidx.compose.ui.unit.Dp(0f),
     coveredBottom: androidx.compose.ui.unit.Dp = androidx.compose.ui.unit.Dp(0f),
+    /** Opens the trips on a tapped line; null leaves lines to taps on the country under them. */
+    onRoute: ((List<String>) -> Unit)? = null,
     /** False while a page covers the whole map: its icons stop gliding until it shows again. */
     animate: Boolean = true,
 ) {
@@ -110,6 +112,7 @@ fun WorldMap(
     val outline by rememberUpdatedState(remember(atlas, split, fine) { Outline(atlas, split, fine) })
     val selected by rememberUpdatedState(selectedId)
     val tapKey by rememberUpdatedState(if (split) "id" else "country")
+    val routeTap by rememberUpdatedState(onRoute.takeIf { showRoutes })
 
     val mapView = remember {
         MapView(context).apply {
@@ -120,6 +123,9 @@ fun WorldMap(
             var moving = false
             var stoppedMotion = false
             var beforeTap: String? = null
+            // Trips on a line just tapped, opened once the tap is sure not to be the first of a
+            // double tap, which means zoom.
+            var tappedTrips: List<String>? = null
             val taps = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
                 override fun onDown(e: MotionEvent): Boolean {
                     // A finger that stops a fling or a fly-to is not choosing a country.
@@ -131,6 +137,17 @@ fun WorldMap(
                     if (!selectable) return false
                     if (stoppedMotion) return false
                     val m = map ?: return false
+                    // A line first, with a little slack since lines are thin; a tap clear of any line
+                    // still picks the country under it.
+                    tappedTrips = null
+                    if (routeTap != null) {
+                        val slack = 10 * context.resources.displayMetrics.density
+                        val box = android.graphics.RectF(e.x - slack, e.y - slack, e.x + slack, e.y + slack)
+                        val trips = m.queryRenderedFeatures(box, *ROUTE_LAYERS.filter { it != "route-icons" }.toTypedArray())
+                            .flatMap { f -> f.getStringProperty("trips")?.split(',').orEmpty() }
+                            .filter { it.isNotEmpty() }.distinct()
+                        if (trips.isNotEmpty()) { tappedTrips = trips; return false }
+                    }
                     // Both fills, since only one of them draws away from the switch-over zoom.
                     val id = m.queryRenderedFeatures(PointF(e.x, e.y), LAYER_FILL_FINE, LAYER_FILL).firstOrNull()?.getStringProperty(tapKey)
                     beforeTap = selected
@@ -141,7 +158,13 @@ fun WorldMap(
                     return false
                 }
 
+                override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
+                    tappedTrips?.let { trips -> tappedTrips = null; routeTap?.invoke(trips) }
+                    return false
+                }
+
                 override fun onDoubleTap(e: MotionEvent): Boolean {
+                    tappedTrips = null
                     if (!selectable) return false
                     // The first tap of a double tap already changed the selection; a double tap
                     // means zoom, so put it back.
@@ -237,8 +260,8 @@ fun WorldMap(
         val m = map ?: return@LaunchedEffect
         val src = s.getSourceAs<GeoJsonSource>(SOURCE_ROUTE_ICONS) ?: return@LaunchedEffect
         val none = FeatureCollection.fromFeatures(emptyList())
-        val glides = if (showRoutes) routes.filter { it.way != null && it.points.size >= 2 }.distinct()
-            .map { r -> Glide(r, phase = (r.hashCode() and 0xFFFF) / 65536.0) } else emptyList()
+        val glides = if (showRoutes) routes.filter { it.way != null && it.points.size >= 2 }.distinctBy { it.points to it.way }
+            .map { r -> Glide(r, phase = ((r.points to r.way).hashCode() and 0xFFFF) / 65536.0) } else emptyList()
         if (glides.isEmpty()) { src.setGeoJson(none); return@LaunchedEffect }
         var last = 0L
         var shown = false
@@ -256,7 +279,7 @@ fun WorldMap(
                 continue
             }
             val t = (now - clock) / 1e9
-            src.setGeoJson(FeatureCollection.fromFeatures(seen.map { it.at(t) }))
+            src.setGeoJson(FeatureCollection.fromFeatures(seen.map { it.at(t, bounds) }))
             shown = true
         }
     }
