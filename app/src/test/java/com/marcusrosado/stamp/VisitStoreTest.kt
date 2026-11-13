@@ -289,7 +289,9 @@ class VisitStoreTest {
         val trip = s.visits.value["JPN"]!!.trips.single().id
         for (c in listOf("a", "b", "c")) s.addCity("JPN", trip, c)
         s.setStopDates(trip, "c", PartialDate(2025, 2, 1), null)
-        s.moveStop(trip, "c", -2)
+        s.setStopOrder(trip, listOf("c", "a", "b"))
+        // A list that is not the same stops changes nothing.
+        s.setStopOrder(trip, listOf("c", "a"))
         s.addMemories(trip, listOf(Memory("", place = "c", text = "Snow on the temple roofs", takenMs = 5)))
         val again = store().visits.value["JPN"]!!.trips.single()
         assertEquals(listOf("c", "a", "b"), again.cities)

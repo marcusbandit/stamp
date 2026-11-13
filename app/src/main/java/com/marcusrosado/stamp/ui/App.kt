@@ -318,7 +318,7 @@ private fun App(
                     focus = Focus(lat, lon, CITY_ZOOM)
                 },
                 onStopDates = app.visits::setStopDates,
-                onMoveStop = app.visits::moveStop,
+                onStopOrder = app.visits::setStopOrder,
                 onLeg = { t, from, to, steps, around -> app.visits.setLeg(t, from, to, steps, around) },
                 onTripStart = app.visits::setTripStart,
                 onAddDayPlace = app.visits::addDayPlace,

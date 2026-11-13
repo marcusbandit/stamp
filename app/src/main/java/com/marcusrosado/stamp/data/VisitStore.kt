@@ -479,13 +479,13 @@ class VisitStore(private val file: File) {
     /** Sets where a trip went back to, a city or pin id; null is home. */
     fun setTripEnd(tripId: String, place: String?) = changeTrip(tripId) { it.copy(end = place) }
 
-    /** Moves a stop [by] places earlier (negative) or later in the trip's route. */
-    fun moveStop(tripId: String, place: String, by: Int) = changeTrip(tripId) { t ->
-        val i = t.cities.indexOf(place)
-        if (i < 0) return@changeTrip t
-        val j = (i + by).coerceIn(0, t.cities.size - 1)
-        if (i == j) return@changeTrip t
-        t.copy(cities = t.cities.toMutableList().apply { add(j, removeAt(i)) })
+    /**
+     * Puts a trip's stops in the order [cities], which holds the same stops rearranged; any
+     * other list is ignored, so a stop added or removed meanwhile is never lost.
+     */
+    fun setStopOrder(tripId: String, cities: List<String>) = changeTrip(tripId) { t ->
+        if (cities.size != t.cities.size || cities.toSet() != t.cities.toSet() || cities == t.cities) t
+        else t.copy(cities = cities)
     }
 
     fun addMemories(tripId: String, add: List<Memory>) = changeTrip(tripId) { t ->
