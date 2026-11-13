@@ -94,7 +94,7 @@ class Journey(
         val to = endPoint(trip, visit, b) ?: return emptyList()
         val via = leg?.via.orEmpty().mapNotNull { airport(it)?.let { ap -> ap.lat to ap.lon } }
         val follow = lines?.let { net -> { w: Travel, x: Pair<Double, Double>, y: Pair<Double, Double> -> net.follow(w, x, y) } }
-        return LegPath.route(from.lat to from.lon, to.lat to to.lon, leg?.ways.orEmpty(), via, follow)
+        return LegPath.route(from.lat to from.lon, to.lat to to.lon, leg?.ways.orEmpty(), via, follow, leg?.around == true)
             .map { (points, way) -> MapRoute(points, way) } +
             via.map { MapRoute(listOf(it), null, ghost = true) }
     }

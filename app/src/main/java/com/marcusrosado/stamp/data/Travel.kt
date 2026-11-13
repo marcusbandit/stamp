@@ -42,6 +42,8 @@ data class Leg(
      * where it landed. Ghost points: they draw the line and mark nothing.
      */
     val via: List<String> = emptyList(),
+    /** The flight went the long way round the globe, as said where it could have gone either way. */
+    val around: Boolean = false,
 ) {
     companion object {
         /** Where a trip set out from, as the start of its first leg. */
@@ -57,31 +59,52 @@ typealias Follow = (Travel, Pair<Double, Double>, Pair<Double, Double>) -> List<
 /** The line a leg draws on the map, as latitude and longitude. */
 object LegPath {
     /**
-     * A flight follows the great circle and bows a little to the left of the way it flew, so
-     * even a short hop reads as a flight and the way back draws beside the way out. Everything
-     * else is a straight line.
+     * A flight draws as the same gentle arc wherever it goes: a curve in the map's own flat
+     * projection that bows to the left of the way it flew by a fixed share of its length, so a
+     * short hop reads as a flight, a long one never swings up to the pole, and the way back
+     * draws beside the way out. With [around] a flight that spans much of the globe goes the
+     * other way round it. Everything else is a straight line.
      */
-    fun points(a: Pair<Double, Double>, b: Pair<Double, Double>, way: Travel?): List<Pair<Double, Double>> {
+    fun points(a: Pair<Double, Double>, b: Pair<Double, Double>, way: Travel?, around: Boolean = false): List<Pair<Double, Double>> {
         if (way != Travel.Plane || a == b) return listOf(a, nearest(a, b))
-        val n = 48
-        val arc = greatCircle(a, b, n)
-        // The bow, in a flat frame where a degree of longitude is shrunk to its width at the
-        // middle latitude, so it is the same size whichever way the flight goes.
-        val k = cos(Math.toRadians((a.first + b.first) / 2)).coerceAtLeast(0.2)
-        val dx = (arc.last().second - arc.first().second) * k
-        val dy = arc.last().first - arc.first().first
+        val end = if (around && spansFar(a, b)) farthest(a, b) else nearest(a, b)
+        val x1 = a.second; val x2 = end.second
+        val y1 = mercY(a.first); val y2 = mercY(end.first)
+        val dx = x2 - x1
+        val dy = y2 - y1
         val len = hypot(dx, dy)
-        if (len == 0.0) return arc
-        // Left of the direction of travel.
-        val nx = -dy / len
-        val ny = dx / len
-        val bow = len * BOW
-        return arc.mapIndexed { i, (lat, lon) ->
-            val s = sin(PI * i / n) * bow
+        if (len == 0.0) return listOf(a, end)
+        // Left of the direction of travel; a quadratic curve whose middle sits BOW out.
+        val cx = (x1 + x2) / 2 - dy / len * len * BOW * 2
+        val cy = (y1 + y2) / 2 + dx / len * len * BOW * 2
+        val n = 48
+        return (0..n).map { i ->
+            val t = i.toDouble() / n
+            val u = 1 - t
+            val x = u * u * x1 + 2 * u * t * cx + t * t * x2
+            val y = u * u * y1 + 2 * u * t * cy + t * t * y2
             // Kept off the poles, where the map's projection ends.
-            (lat + ny * s).coerceIn(-85.0, 85.0) to (lon + nx * s / k)
+            latOf(y).coerceIn(-85.0, 85.0) to x
         }
     }
+
+    /** True when a flight between [a] and [b] spans far enough round the globe to have gone either way. */
+    fun spansFar(a: Pair<Double, Double>, b: Pair<Double, Double>): Boolean =
+        kotlin.math.abs(nearest(a, b).second - a.second) >= FAR_DEGREES
+
+    /** [b] with its longitude moved to go the long way round from [a]. */
+    private fun farthest(a: Pair<Double, Double>, b: Pair<Double, Double>): Pair<Double, Double> {
+        val short = nearest(a, b).second
+        return b.first to (if (short >= a.second) short - 360 else short + 360)
+    }
+
+    /** Latitude as the map's flat projection spaces it, in degree-like units. */
+    private fun mercY(lat: Double) = Math.toDegrees(kotlin.math.ln(kotlin.math.tan(PI / 4 + Math.toRadians(lat.coerceIn(-85.0, 85.0)) / 2)))
+
+    private fun latOf(y: Double) = Math.toDegrees(2 * kotlin.math.atan(kotlin.math.exp(Math.toRadians(y))) - PI / 2)
+
+    /** How far apart in longitude two ends must be before a flight could have gone either way. */
+    const val FAR_DEGREES = 100.0
 
     /**
      * A leg taken several ways, cut into that many even stretches along the line between its
@@ -110,37 +133,20 @@ object LegPath {
     fun route(
         a: Pair<Double, Double>, b: Pair<Double, Double>, ways: List<Travel>, via: List<Pair<Double, Double>>,
         follow: Follow? = null,
+        around: Boolean = false,
     ): List<Pair<List<Pair<Double, Double>>, Travel?>> {
         val plane = ways.indexOf(Travel.Plane)
-        if (plane < 0 || via.size < 2) return parts(a, b, ways, follow)
+        if (plane < 0 || via.size < 2) {
+            // A flight with no airports named goes straight from place to place.
+            if (around && ways == listOf(Travel.Plane)) return listOf(points(a, b, Travel.Plane, around = true) to Travel.Plane)
+            return parts(a, b, ways, follow)
+        }
         fun ground(x: Pair<Double, Double>, y: Pair<Double, Double>, w: List<Travel>) =
             if (x == y || Distance.km(x, y) < 1.0) emptyList()
             else if (w.isEmpty()) listOf(listOf(x, nearest(x, y)) to null) else parts(x, y, w, follow)
         return ground(a, via.first(), ways.take(plane)) +
-            via.zipWithNext().map { (x, y) -> points(x, y, Travel.Plane) to Travel.Plane } +
+            via.zipWithNext().map { (x, y) -> points(x, y, Travel.Plane, around) to Travel.Plane } +
             ground(via.last(), b, ways.drop(plane + 1))
-    }
-
-    /** Points along the great circle, with longitudes kept continuous across the date line. */
-    fun greatCircle(a: Pair<Double, Double>, b: Pair<Double, Double>, n: Int): List<Pair<Double, Double>> {
-        val la1 = Math.toRadians(a.first); val lo1 = Math.toRadians(a.second)
-        val la2 = Math.toRadians(b.first); val lo2 = Math.toRadians(b.second)
-        val d = 2 * asin(sqrt(sin((la2 - la1) / 2).let { it * it } + cos(la1) * cos(la2) * sin((lo2 - lo1) / 2).let { it * it }))
-        if (d < 1e-9) return listOf(a, b)
-        var last = a.second
-        return (0..n).map { i ->
-            val f = i.toDouble() / n
-            val p = sin((1 - f) * d) / sin(d)
-            val q = sin(f * d) / sin(d)
-            val x = p * cos(la1) * cos(lo1) + q * cos(la2) * cos(lo2)
-            val y = p * cos(la1) * sin(lo1) + q * cos(la2) * sin(lo2)
-            val z = p * sin(la1) + q * sin(la2)
-            var lon = Math.toDegrees(atan2(y, x))
-            while (lon - last > 180) lon -= 360
-            while (lon - last < -180) lon += 360
-            last = lon
-            Math.toDegrees(atan2(z, hypot(x, y))) to lon
-        }
     }
 
     /** [b] with its longitude moved by whole turns to lie within half a turn of [a]'s, so a line between them takes the short way, across the date line if need be. */
@@ -152,5 +158,5 @@ object LegPath {
     }
 
     /** How far a flight bows out, as a share of its length. */
-    const val BOW = 0.12
+    const val BOW = 0.08
 }

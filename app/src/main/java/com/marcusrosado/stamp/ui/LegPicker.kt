@@ -102,13 +102,15 @@ fun LegPicker(
     initial: List<Travel>,
     initialVia: List<String>,
     airports: Airports?,
-    onDone: (ways: List<Travel>, via: List<String>) -> Unit,
+    onDone: (ways: List<Travel>, via: List<String>, around: Boolean) -> Unit,
     onDismiss: () -> Unit,
     /** True when an end is the user's home: it reads "Home", with the address under it. */
     fromHome: Boolean = false,
     toHome: Boolean = false,
+    initialAround: Boolean = false,
 ) {
     var ways by remember { mutableStateOf(initial) }
+    var around by remember { mutableStateOf(initialAround) }
     // Where the flight took off and landed, and the layovers between, kept apart so picking
     // one never moves another.
     var dep by remember { mutableStateOf(initialVia.firstOrNull()) }
@@ -166,17 +168,32 @@ fun LegPicker(
                         }
                         Pill(text = "Layover", color = MaterialTheme.colorScheme.onSurfaceVariant, add = true, onClick = { picking = AirportSlot.NewStop })
                     }
+                    // Only a flight that spans much of the globe could have gone either way.
+                    val hops = (listOfNotNull(dep) + stops + listOfNotNull(arr)).mapNotNull { airports?.get(it)?.let { ap -> ap.lat to ap.lon } }
+                        .takeIf { it.size >= 2 } ?: listOfNotNull(from, to)
+                    if (hops.zipWithNext().any { (x, y) -> com.marcusrosado.stamp.data.LegPath.spansFar(x, y) }) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(top = 12.dp).clip(RoundedCornerShape(12.dp)).clickable { around = !around },
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Flew the other way round", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
+                                Text("Off is the shortest way", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            androidx.compose.material3.Switch(checked = around, onCheckedChange = { around = it })
+                        }
+                    }
                 }
             }
         },
         dismissButton = {
-            if (initial.isNotEmpty()) TextButton(onClick = { onDone(emptyList(), emptyList()) }) { Text("Clear") }
+            if (initial.isNotEmpty()) TextButton(onClick = { onDone(emptyList(), emptyList(), false) }) { Text("Clear") }
             else TextButton(onClick = onDismiss) { Text("Cancel") }
         },
         confirmButton = {
             TextButton(onClick = {
                 val d = dep; val r = arr
-                onDone(ways, if (Travel.Plane in ways && d != null && r != null) listOf(d) + stops + r else emptyList())
+                onDone(ways, if (Travel.Plane in ways && d != null && r != null) listOf(d) + stops + r else emptyList(), around && Travel.Plane in ways)
             }) { Text("Done") }
         },
     )

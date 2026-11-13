@@ -122,7 +122,7 @@ class TimelineActions(
     val onStopDates: (place: String, arrived: PartialDate?, left: PartialDate?) -> Unit,
     val onMove: (place: String, by: Int) -> Unit,
     /** Sets how the user went from one stop to the next, and a flight's airports; no ways clears it. */
-    val onLeg: (from: String, to: String, ways: List<com.marcusrosado.stamp.data.Travel>, via: List<String>) -> Unit,
+    val onLeg: (from: String, to: String, ways: List<com.marcusrosado.stamp.data.Travel>, via: List<String>, around: Boolean) -> Unit,
     /** Sets where the trip set out from, a city or pin id; null is home. */
     val onStart: (place: String?) -> Unit = {},
     /** Sets where the trip went back to; null is home. */
@@ -170,15 +170,17 @@ fun VisitTimeline(
             info.visibleItemsInfo.filter { isNode(it.key) }.lastOrNull { it.offset <= line }?.key as? String
         }
     }
-    val order = listOf("start") + trip.cities.map { "stop-$it" } + "end"
+    // Homes read in the order they were moved into; a trip's stops in the order travelled.
+    val stops = if (lived) trip.cities.sortedWith(compareBy(nullsLast()) { trip.arrived[it] }) else trip.cities
+    val order = listOf("start") + stops.map { "stop-$it" } + "end"
     // Every item of the list in order, so a dot on the track scrolls to its stop by key.
     val itemKeys = buildList {
         add("hero"); add("start")
         val journeys = !lived && trip.cities.isNotEmpty()
         if (journeys) add("leg-start-${trip.cities.first()}")
-        trip.cities.forEachIndexed { i, p ->
+        stops.forEachIndexed { i, p ->
             add("stop-$p")
-            trip.cities.getOrNull(i + 1)?.let { add("leg-$p-$it") }
+            if (!lived) stops.getOrNull(i + 1)?.let { add("leg-$p-$it") }
         }
         add("add-stop")
         if (journeys) add("leg-${trip.cities.last()}-end")
@@ -187,7 +189,7 @@ fun VisitTimeline(
     val reachedAt = reached?.let { order.indexOf(it) } ?: -1
     // The stop reached; past the last one the map stays on it rather than flying back to the first.
     val at = (reached?.takeIf { it.startsWith("stop-") }?.removePrefix("stop-")
-        ?: trip.cities.lastOrNull()?.takeIf { reached == "end" } ?: trip.cities.firstOrNull())
+        ?: stops.lastOrNull()?.takeIf { reached == "end" } ?: stops.firstOrNull())
         ?.let { placeOf(it, visit, places) }?.let { it.lat to it.lon }
     var editingDates by remember { mutableStateOf(false) }
     var stopDates by remember { mutableStateOf<String?>(null) }
@@ -221,7 +223,7 @@ fun VisitTimeline(
     // The stop a memory is being added to; "" is the visit as a whole.
     var adding by remember { mutableStateOf<String?>(null) }
     var viewing by remember { mutableStateOf<Memory?>(null) }
-    val noun = if (lived) "Stay" else "Visit"
+    val noun = "Visit"
     val hero = trip.memories.firstOrNull { it.media != null && !it.video }
     Dialog(
         onDismissRequest = onDismiss,
@@ -245,8 +247,10 @@ fun VisitTimeline(
                         country = country,
                         // A trip across borders names every place it went: "Germany → Austria → Italy".
                         where = trip.lands.map(landName).distinct().takeIf { it.size > 1 }?.joinToString("  →  ") ?: country.name,
-                        title = "$noun $number",
-                        dates = rangeLabel(trip.date, trip.until, trip.now),
+                        // Living somewhere is not a numbered stay: it is where the user lives or lived.
+                        title = if (lived) (if (trip.now) "Living here" else "Lived here") else "$noun $number",
+                        // "Living here" needs no "Living here now" under it.
+                        dates = if (lived && trip.now && trip.date == null) null else rangeLabel(trip.date, trip.until, trip.now),
                         photo = hero,
                         onBack = onDismiss,
                         onDates = { editingDates = true },
@@ -260,7 +264,7 @@ fun VisitTimeline(
                 val loose = trip.memories.filter { it.place == null || it.place !in trip.cities }
                 item(key = "start") {
                     Node(
-                        icon = { Icon(Icons.Outlined.Flight, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                        icon = { Icon(if (lived) Icons.Outlined.Home else Icons.Outlined.Flight, contentDescription = null, modifier = Modifier.size(18.dp)) },
                         first = true,
                         last = false,
                         lit = reachedAt >= 0,
@@ -273,8 +277,8 @@ fun VisitTimeline(
                             )
                         }
                         DateLine(
-                            label = trip.date?.let { "Arrived in ${country.name} · ${it.label}" }
-                                ?: "When did you get there?",
+                            label = if (lived) trip.date?.let { "Moved here · ${it.label}" } ?: "When did you move here?"
+                                else trip.date?.let { "Arrived in ${country.name} · ${it.label}" } ?: "When did you get there?",
                             muted = trip.date == null,
                             onClick = { editingDates = true },
                         )
@@ -286,10 +290,12 @@ fun VisitTimeline(
                     val first = trip.cities.first()
                     item(key = "leg-start-$first") { legRow(com.marcusrosado.stamp.data.Leg.START, first, litAt = 1) }
                 }
-                trip.cities.forEachIndexed { i, place ->
+                stops.forEachIndexed { i, place ->
                     item(key = "stop-$place") {
                         val info = placeOf(place, visit, places)
-                        val (from, to) = trip.stopDates(place)
+                        // A home's dates are the ones the user gave: guessing a move-out from another
+                        // home makes no sense, since two can be lived in at once.
+                        val (from, to) = if (lived) (trip.arrived[place] to false) to (trip.left[place] to false) else trip.stopDates(place)
                         Node(
                             icon = { Text("${i + 1}", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold) },
                             first = false,
@@ -313,7 +319,8 @@ fun VisitTimeline(
                                 }
                                 // Where the user slept, once the stop has other places to choose from.
                                 if (days.isNotEmpty()) BedButton(slept = bed == own, onClick = { actions.onSlept(place, own) })
-                                if (trip.cities.size > 1) {
+                                // Homes keep the order they were moved into; only a trip's stops move.
+                                if (!lived && trip.cities.size > 1) {
                                     StopMenu(
                                         canEarlier = i > 0,
                                         canLater = i < trip.cities.size - 1,
@@ -340,7 +347,7 @@ fun VisitTimeline(
                             )
                         }
                     }
-                    trip.cities.getOrNull(i + 1)?.let { next ->
+                    if (!lived) stops.getOrNull(i + 1)?.let { next ->
                         item(key = "leg-$place-$next") { legRow(place, next, litAt = i + 2) }
                     }
                 }
@@ -351,7 +358,15 @@ fun VisitTimeline(
                         last = false,
                         faint = true,
                     ) {
-                        TextButton(onClick = actions.onAddStop) { Text(if (trip.cities.isEmpty()) "Add the first city" else "Add a stop") }
+                        TextButton(onClick = actions.onAddStop) {
+                            Text(
+                                when {
+                                    lived -> if (trip.cities.isEmpty()) "Add where you lived" else "Add another home"
+                                    trip.cities.isEmpty() -> "Add the first city"
+                                    else -> "Add a stop"
+                                },
+                            )
+                        }
                     }
                 }
                 if (journeyed && trip.cities.isNotEmpty()) {
@@ -433,7 +448,7 @@ fun VisitTimeline(
             }
         }
         stopDates?.let { place ->
-            val (from, to) = trip.stopDates(place)
+            val (from, to) = if (lived) (trip.arrived[place] to false) to (trip.left[place] to false) else trip.stopDates(place)
             RangeDialog(
                 placeOf(place, visit, places)?.name ?: "This stop", "Arrived", "Left",
                 trip.arrived[place], trip.left[place],
@@ -455,7 +470,8 @@ fun VisitTimeline(
                 initial = l?.ways.orEmpty(),
                 initialVia = l?.via.orEmpty(),
                 airports = journey.airports,
-                onDone = { ways, via -> actions.onLeg(from, to, ways, via); leg = null },
+                onDone = { ways, via, around -> actions.onLeg(from, to, ways, via, around); leg = null },
+                initialAround = l?.around == true,
                 onDismiss = { leg = null },
                 fromHome = from == com.marcusrosado.stamp.data.Leg.START && trip.start == null && journey.homeFor(trip) != null,
                 toHome = to == com.marcusrosado.stamp.data.Leg.END && trip.end == null && journey.homeAtEnd(trip) != null,

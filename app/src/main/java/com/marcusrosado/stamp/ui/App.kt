@@ -319,7 +319,7 @@ private fun App(
                 },
                 onStopDates = app.visits::setStopDates,
                 onMoveStop = app.visits::moveStop,
-                onLeg = { t, from, to, ways, via -> app.visits.setLeg(t, from, to, ways, via) },
+                onLeg = { t, from, to, ways, via, around -> app.visits.setLeg(t, from, to, ways, via, around) },
                 onTripStart = app.visits::setTripStart,
                 onAddDayPlace = app.visits::addDayPlace,
                 onAddDayPin = app.visits::addDayPin,
@@ -417,7 +417,8 @@ private fun App(
         val mapRoutes by produceState(emptyList<MapRoute>(), journey) {
             value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
                 // A trip that crosses borders shows on every country it touched; draw it once.
-                journey.visits.values.filter { it.state.counts }
+                // Homes are where the user lived, not a journey: no lines between them.
+                journey.visits.values.filter { it.state == TravelState.Visited }
                     .flatMap { v -> v.trips.map { it to v } }
                     .distinctBy { (t, _) -> t.id }
                     .flatMap { (t, v) -> ensureActive(); journey.routes(t, v) }

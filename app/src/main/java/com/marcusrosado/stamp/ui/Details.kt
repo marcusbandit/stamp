@@ -92,7 +92,7 @@ class DetailActions(
     val onShowOnMap: (lat: Double, lon: Double) -> Unit,
     val onStopDates: (tripId: String, place: String, arrived: PartialDate?, left: PartialDate?) -> Unit,
     val onMoveStop: (tripId: String, place: String, by: Int) -> Unit,
-    val onLeg: (tripId: String, from: String, to: String, ways: List<com.marcusrosado.stamp.data.Travel>, via: List<String>) -> Unit,
+    val onLeg: (tripId: String, from: String, to: String, ways: List<com.marcusrosado.stamp.data.Travel>, via: List<String>, around: Boolean) -> Unit,
     val onTripStart: (tripId: String, place: String?) -> Unit = { _, _ -> },
     val onAddDayPlace: (tripId: String, stop: String, place: String) -> Unit = { _, _, _ -> },
     val onAddDayPin: (tripId: String, stop: String, pin: Pin) -> Unit = { _, _, _ -> },
@@ -113,7 +113,7 @@ val StarGold = Color(0xFFF2B33D)
 fun visitsLabel(n: Int): String = if (n == 1) "1 visit" else "$n visits"
 
 /** "1 stay", "3 stays". */
-fun staysLabel(n: Int): String = if (n == 1) "1 stay" else "$n stays"
+fun staysLabel(n: Int): String = if (n == 1) "Once" else "$n times"
 
 /** "2015 to 2019", "Since 2019 · now", "From 2015", "Until 2019", or null with no dates. */
 fun stayLabel(t: Trip): String? = when {
@@ -169,22 +169,21 @@ fun TripsSection(
     // Minus only takes away a visit with nothing on it; one with a date or cities goes
     // through its own remove button, which asks first.
     val lastEmpty = trips.lastOrNull { it.isBlank }.takeIf { trips.size > 1 }
-    val noun = if (lived) "Stay" else "Visit"
+    val noun = "Visit"
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text(if (lived) "Stays" else "Visits", fontWeight = FontWeight.Medium)
-                Text(
-                    if (lived) staysLabel(trips.size) else visitsLabel(trips.size),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Text(if (lived) "Lived here" else "Visits", fontWeight = FontWeight.Medium)
+                // Lived here once needs no count under it; moving back gives one.
+                (if (lived) staysLabel(trips.size).takeIf { trips.size > 1 } else visitsLabel(trips.size))?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
             FilledTonalIconButton(onClick = { lastEmpty?.let(onRemove) }, enabled = lastEmpty != null) {
-                Icon(Icons.Filled.Remove, contentDescription = if (lived) "One stay fewer" else "One visit fewer")
+                Icon(Icons.Filled.Remove, contentDescription = if (lived) "One time fewer" else "One visit fewer")
             }
             FilledTonalIconButton(onClick = onAdd) {
-                Icon(Icons.Filled.Add, contentDescription = if (lived) "One more stay" else "One more visit")
+                Icon(Icons.Filled.Add, contentDescription = if (lived) "Lived here another time" else "One more visit")
             }
         }
         trips.forEachIndexed { i, t ->
@@ -199,7 +198,8 @@ fun TripsSection(
                     Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { onOpenTimeline(t) },
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text("$noun ${i + 1}", modifier = Modifier.width(72.dp), style = MaterialTheme.typography.bodyMedium)
+                    // Living somewhere is not a numbered stay: it says whether the user still does.
+                    if (!lived) Text("$noun ${i + 1}", modifier = Modifier.width(72.dp), style = MaterialTheme.typography.bodyMedium)
                     val when_ = if (lived) stayLabel(t) else rangeLabel(t.date, t.until)
                     Text(
                         when_ ?: if (lived) "Add dates" else "Add a date",
@@ -209,12 +209,13 @@ fun TripsSection(
                     // The only visit of a visited country stays; there is nothing to remove.
                     if (trips.size > 1) {
                         IconButton(onClick = { if (t.isBlank) onRemove(t) else removing = t }) {
-                            Icon(Icons.Filled.Close, contentDescription = "Remove ${noun.lowercase()} ${i + 1}", modifier = Modifier.size(18.dp))
+                            Icon(Icons.Filled.Close, contentDescription = if (lived) "Remove this time living here" else "Remove ${noun.lowercase()} ${i + 1}", modifier = Modifier.size(18.dp))
                         }
                     }
                 }
                 VisitSummary(
                     t,
+                    lived = lived,
                     cityName = cityName,
                     onOpen = { onOpenTimeline(t) },
                     onPickCity = { onPickCity(t) },
@@ -225,7 +226,7 @@ fun TripsSection(
     removing?.let { t ->
         SeamAlertDialog(
             onDismissRequest = { removing = null },
-            title = { Text("Remove this ${noun.lowercase()}?") },
+            title = { Text(if (lived) "Remove this time living here?" else "Remove this ${noun.lowercase()}?") },
             // Everything that goes with it, photos included, so nothing is lost by surprise.
             text = {
                 Text(
@@ -247,7 +248,7 @@ fun TripsSection(
  * timeline. Inviting rather than empty when nothing is kept yet.
  */
 @Composable
-private fun VisitSummary(t: Trip, cityName: (String) -> String, onOpen: () -> Unit, onPickCity: () -> Unit) {
+private fun VisitSummary(t: Trip, lived: Boolean, cityName: (String) -> String, onOpen: () -> Unit, onPickCity: () -> Unit) {
     val media = t.memories.filter { it.media != null }
     Column(Modifier.padding(end = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (media.isNotEmpty()) {
@@ -266,7 +267,9 @@ private fun VisitSummary(t: Trip, cityName: (String) -> String, onOpen: () -> Un
         }
         if (t.cities.isNotEmpty()) {
             Text(
-                t.cities.joinToString("  →  ") { cityName(it) },
+                // Homes are a list in the order moved into, not a route between them.
+                if (lived) t.cities.sortedWith(compareBy(nullsLast()) { t.arrived[it] }).joinToString("  ·  ") { cityName(it) }
+                else t.cities.joinToString("  →  ") { cityName(it) },
                 style = MaterialTheme.typography.bodyLarge,
                 modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable(onClick = onOpen).padding(vertical = 2.dp),
             )
@@ -279,7 +282,7 @@ private fun VisitSummary(t: Trip, cityName: (String) -> String, onOpen: () -> Un
             )
             AssistChip(
                 onClick = onPickCity,
-                label = { Text("Add city") },
+                label = { Text(if (lived) "Add home" else "Add city") },
                 leadingIcon = { Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(16.dp)) },
             )
         }

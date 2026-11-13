@@ -257,7 +257,7 @@ fun CountryDetail(
                 onDates = { actions.onUpdateTrip(it) },
                 onStopDates = { p, a, l -> actions.onStopDates(tripId, p, a, l) },
                 onMove = { p, by -> actions.onMoveStop(tripId, p, by) },
-                onLeg = { from, to, ways, via -> actions.onLeg(tripId, from, to, ways, via) },
+                onLeg = { from, to, ways, via, around -> actions.onLeg(tripId, from, to, ways, via, around) },
                 onStart = { actions.onTripStart(tripId, it) },
                 onEnd = { actions.onTripEnd(tripId, it) },
                 onAddDayPlace = { stop -> dayFor = tripId to stop },
