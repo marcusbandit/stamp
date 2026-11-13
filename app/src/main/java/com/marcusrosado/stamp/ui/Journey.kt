@@ -35,16 +35,33 @@ class Journey(
     /** The home lived in when [trip] began, or null when no address was given. */
     fun homeFor(trip: Trip): Home? = Homes.at(visits, trip.date)
 
-    /** Where [trip] set out from: the place it names, else home when it began. */
+    /** Where [trip] set out from: the place it names, else the home town when it began. */
     fun startOf(trip: Trip): PlaceInfo? =
-        trip.start?.let { place(it) } ?: homeFor(trip)?.let { placeOf(it.place, it.visit, places) }
+        trip.start?.let { place(it) } ?: homeFor(trip)?.let { townOf(it) }
+
+    private val towns = HashMap<String, PlaceInfo?>()
+
+    /**
+     * The town a home is in, as a trip sets out from it: the biggest within 20 km, where the
+     * main station and the airport are, not the front door. A home that is a town is itself.
+     */
+    fun townOf(home: Home): PlaceInfo? = synchronized(towns) {
+        towns.getOrPut(home.place) {
+            val at = placeOf(home.place, home.visit, places) ?: return@getOrPut null
+            if (!isPin(home.place)) return@getOrPut at
+            val town = places?.byId?.values
+                ?.filter { com.marcusrosado.stamp.data.Distance.km(at.lat to at.lon, it.lat to it.lon) < 20 }
+                ?.maxByOrNull { it.population }
+            town?.let { placeOf(it.id, null, places) } ?: at
+        }
+    }
 
     /** The home lived in when [trip] ended. */
     fun homeAtEnd(trip: Trip): Home? = Homes.at(visits, trip.until ?: trip.date)
 
     /** Where [trip] went back to: the place it names, else home when it ended. */
     fun endOf(trip: Trip): PlaceInfo? =
-        trip.end?.let { place(it) } ?: homeAtEnd(trip)?.let { placeOf(it.place, it.visit, places) }
+        trip.end?.let { place(it) } ?: homeAtEnd(trip)?.let { townOf(it) }
 
     /** One end of a leg: a stop, or where the trip set out from or went back to. */
     fun endPoint(trip: Trip, visit: Visit?, id: String): PlaceInfo? = when (id) {
@@ -81,7 +98,7 @@ class Journey(
         val others = trip.placesAt(stop).filter { it != bed }
         return others.mapNotNull { id ->
             val p = placeOf(id, visit, places) ?: place(id) ?: return@mapNotNull null
-            MapRoute(listOf(base.lat to base.lon, LegPath.nearest(base.lat to base.lon, p.lat to p.lon)), null)
+            MapRoute(listOf(base.lat to base.lon, LegPath.nearest(base.lat to base.lon, p.lat to p.lon)), null, trip = trip.id)
         }
     }
 
@@ -97,8 +114,8 @@ class Journey(
         val via = leg?.via.orEmpty().mapNotNull { airport(it)?.let { ap -> ap.lat to ap.lon } }
         val follow = lines?.let { net -> { w: Travel, x: Pair<Double, Double>, y: Pair<Double, Double> -> net.follow(w, x, y) } }
         return LegPath.route(from.lat to from.lon, to.lat to to.lon, leg?.ways.orEmpty(), via, follow, leg?.around == true)
-            .map { (points, way) -> MapRoute(points, way) } +
-            via.map { MapRoute(listOf(it), null, ghost = true) }
+            .map { (points, way) -> MapRoute(points, way, trip = trip.id) } +
+            via.map { MapRoute(listOf(it), null, ghost = true, trip = trip.id) }
     }
 }
 

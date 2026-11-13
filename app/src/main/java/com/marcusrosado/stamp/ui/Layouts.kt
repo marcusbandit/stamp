@@ -452,6 +452,7 @@ private fun StampMap(
     val selected = state.selected
     WorldMap(
         animate = animate,
+        onRoute = if (selectable) state.onOpenTrip else null,
         atlas = state.atlas,
         visits = state.visits,
         showRoutes = state.routes,

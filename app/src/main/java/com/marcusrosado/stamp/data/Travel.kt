@@ -140,7 +140,8 @@ object LegPath {
         if (plane < 0 || via.size < 2) return parts(a, b, ways, follow, around)
         fun ground(x: Pair<Double, Double>, y: Pair<Double, Double>, w: List<Travel>) =
             if (x == y || Distance.km(x, y) < 1.0) emptyList()
-            else if (w.isEmpty()) listOf(listOf(x, nearest(x, y)) to null) else parts(x, y, w, follow)
+            // With no way said, the flight starts at its airport: no line from the door to it.
+            else if (w.isEmpty()) emptyList() else parts(x, y, w, follow)
         return ground(a, via.first(), ways.take(plane)) +
             via.zipWithNext().let { hops ->
                 // The other way round is one long flight across the globe, not every hop of it.

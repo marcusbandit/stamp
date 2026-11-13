@@ -415,14 +415,18 @@ private fun App(
         // Every trip's lines, worked out once for every map and off the main thread: following
         // the rails can take a moment the first time. The last lines stay up meanwhile.
         val mapRoutes by produceState(emptyList<MapRoute>(), journey) {
-            value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            suspend fun draw(j: Journey) = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
                 // A trip that crosses borders shows on every country it touched; draw it once.
-                journey.visits.values.filter { it.state.counts }
+                j.visits.values.filter { it.state.counts }
                     .flatMap { v -> v.trips.map { it to v } }
                     .distinctBy { (t, _) -> t.id }
-                    .flatMap { (t, v) -> ensureActive(); journey.routes(t, v) }
+                    .flatMap { (t, v) -> ensureActive(); j.routes(t, v) }
                     .distinct()
             }
+            // Straight lines at once the first time, then the rails and roads once followed,
+            // so the map never sits empty while a network is searched.
+            if (value.isEmpty() && journey.lines != null) value = draw(Journey(journey.visits, journey.places, journey.airports))
+            value = draw(journey)
         }
         androidx.compose.runtime.CompositionLocalProvider(LocalJourney provides journey, LocalMapRoutes provides mapRoutes) {
             when (state.posture) {

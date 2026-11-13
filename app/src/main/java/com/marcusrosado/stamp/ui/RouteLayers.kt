@@ -35,7 +35,13 @@ import kotlin.math.tan
  * [ghost] is a single point the line passes through, such as a layover's airport, drawn as a
  * hollow dot that marks nothing.
  */
-data class MapRoute(val points: List<Pair<Double, Double>>, val way: Travel?, val ghost: Boolean = false)
+data class MapRoute(
+    val points: List<Pair<Double, Double>>,
+    val way: Travel?,
+    val ghost: Boolean = false,
+    /** The trip the line belongs to, so a tap on it can open that trip. */
+    val trip: String? = null,
+)
 
 internal const val SOURCE_ROUTES = "routes"
 internal const val SOURCE_ROUTE_ICONS = "route-icons"
@@ -107,7 +113,7 @@ internal fun routeFeatures(routes: List<MapRoute>): FeatureCollection = FeatureC
             r.ghost && r.points.isNotEmpty() -> Feature.fromGeometry(Point.fromLngLat(r.points[0].second, r.points[0].first))
             r.points.size >= 2 -> Feature.fromGeometry(LineString.fromLngLats(r.points.map { (lat, lon) -> Point.fromLngLat(lon, lat) }))
             else -> null
-        }?.apply { addStringProperty("way", r.way?.key ?: "") }
+        }?.apply { addStringProperty("way", r.way?.key ?: ""); addStringProperty("trip", r.trip ?: "") }
     },
 )
 
@@ -206,12 +212,48 @@ internal class Glide(route: MapRoute, private val phase: Double) {
         return (-1..1).any { k -> east + 360 * k >= w && west + 360 * k <= e }
     }
 
+    /**
+     * The stretch of the leg in view, as distances along it: zoomed in on part of a long leg,
+     * the icon crosses only what can be seen and starts over at its edge, in the same time the
+     * whole leg takes zoomed out, so it never spends most of its loop off screen.
+     */
+    private fun inView(b: LatLngBounds): Pair<Double, Double> {
+        val total = along.last()
+        if (total <= 0) return 0.0 to 0.0
+        val w = b.longitudeWest
+        val e = if (b.longitudeEast < w) b.longitudeEast + 360 else b.longitudeEast
+        var first = -1.0
+        var last = -1.0
+        val n = 96
+        for (k in 0..n) {
+            val d = total * k / n
+            val (x, y) = pointAt(d)
+            val lat = latOf(y)
+            if (lat < b.latitudeSouth || lat > b.latitudeNorth) continue
+            if ((-1..1).none { j -> x + 360 * j in w..e }) continue
+            if (first < 0) first = d
+            last = d
+        }
+        // A short leg seen whole, or one crossing the view between two samples: all of it.
+        if (first < 0 || last - first < total / n) return 0.0 to total
+        return first to last
+    }
+
+    private fun pointAt(d: Double): Pair<Double, Double> {
+        var i = along.indexOfFirst { it >= d }.coerceAtLeast(1)
+        if (i >= xs.size) i = xs.size - 1
+        val seg = (along[i] - along[i - 1]).takeIf { it > 0 } ?: 1.0
+        val k = ((d - along[i - 1]) / seg).coerceIn(0.0, 1.0)
+        return (xs[i - 1] + (xs[i] - xs[i - 1]) * k) to (ys[i - 1] + (ys[i] - ys[i - 1]) * k)
+    }
+
     /** The icon at [t] seconds: where it is, which way it heads, and how faded it is. */
-    fun at(t: Double): Feature {
+    fun at(t: Double, b: LatLngBounds): Feature {
         val f = ((t / seconds + phase) % 1.0)
         // Eased so it sets off and arrives gently, and faded in and out at the ends.
         val e = f * f * (3 - 2 * f)
-        val target = e * along.last()
+        val (from, to) = inView(b)
+        val target = from + e * (to - from)
         var i = along.indexOfFirst { it >= target }.coerceAtLeast(1)
         if (i >= xs.size) i = xs.size - 1
         val seg = (along[i] - along[i - 1]).takeIf { it > 0 } ?: 1.0

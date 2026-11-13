@@ -93,6 +93,8 @@ fun WorldMap(
      */
     coveredEnd: androidx.compose.ui.unit.Dp = androidx.compose.ui.unit.Dp(0f),
     coveredBottom: androidx.compose.ui.unit.Dp = androidx.compose.ui.unit.Dp(0f),
+    /** Opens a trip from a tap on its line; null leaves lines to taps on the country under them. */
+    onRoute: ((String) -> Unit)? = null,
     /** False while a page covers the whole map: its icons stop gliding until it shows again. */
     animate: Boolean = true,
 ) {
@@ -110,6 +112,7 @@ fun WorldMap(
     val outline by rememberUpdatedState(remember(atlas, split, fine) { Outline(atlas, split, fine) })
     val selected by rememberUpdatedState(selectedId)
     val tapKey by rememberUpdatedState(if (split) "id" else "country")
+    val routeTap by rememberUpdatedState(onRoute.takeIf { showRoutes })
 
     val mapView = remember {
         MapView(context).apply {
@@ -131,6 +134,14 @@ fun WorldMap(
                     if (!selectable) return false
                     if (stoppedMotion) return false
                     val m = map ?: return false
+                    // A line first, with some slack around it, since lines are thin to hit.
+                    routeTap?.let { open ->
+                        val slack = 14 * context.resources.displayMetrics.density
+                        val box = android.graphics.RectF(e.x - slack, e.y - slack, e.x + slack, e.y + slack)
+                        val trip = m.queryRenderedFeatures(box, *ROUTE_LAYERS.filter { it != "route-icons" }.toTypedArray())
+                            .firstNotNullOfOrNull { f -> f.getStringProperty("trip")?.takeIf { it.isNotEmpty() } }
+                        if (trip != null) { open(trip); return false }
+                    }
                     // Both fills, since only one of them draws away from the switch-over zoom.
                     val id = m.queryRenderedFeatures(PointF(e.x, e.y), LAYER_FILL_FINE, LAYER_FILL).firstOrNull()?.getStringProperty(tapKey)
                     beforeTap = selected
@@ -256,7 +267,7 @@ fun WorldMap(
                 continue
             }
             val t = (now - clock) / 1e9
-            src.setGeoJson(FeatureCollection.fromFeatures(seen.map { it.at(t) }))
+            src.setGeoJson(FeatureCollection.fromFeatures(seen.map { it.at(t, bounds) }))
             shown = true
         }
     }
