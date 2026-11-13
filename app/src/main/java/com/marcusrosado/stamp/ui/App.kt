@@ -402,7 +402,7 @@ private fun App(
         LaunchedEffect(visits, places, airports, follow) {
             if (!follow) { app.routePacks.clear(); return@LaunchedEffect }
             val plain = Journey(visits, places, airports)
-            val codes = visits.values.flatMap { v -> v.trips.map { it to v } }.distinctBy { it.first.id }
+            val codes = visits.values.filter { it.state == TravelState.Visited }.flatMap { v -> v.trips.map { it to v } }.distinctBy { it.first.id }
                 .flatMap { (t, v) ->
                     t.legEnds.filter { (a, b) -> t.legBetween(a, b)?.ways.orEmpty().any { com.marcusrosado.stamp.data.RouteNet.kindOf(it) != null } }
                         .flatMap { (a, b) -> listOfNotNull(plain.endPoint(t, v, a), plain.endPoint(t, v, b)) }
@@ -417,8 +417,7 @@ private fun App(
         val mapRoutes by produceState(emptyList<MapRoute>(), journey) {
             value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
                 // A trip that crosses borders shows on every country it touched; draw it once.
-                // Homes are where the user lived, not a journey: no lines between them.
-                journey.visits.values.filter { it.state == TravelState.Visited }
+                journey.visits.values.filter { it.state.counts }
                     .flatMap { v -> v.trips.map { it to v } }
                     .distinctBy { (t, _) -> t.id }
                     .flatMap { (t, v) -> ensureActive(); journey.routes(t, v) }

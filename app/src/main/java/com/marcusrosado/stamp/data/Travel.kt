@@ -1,12 +1,7 @@
 package com.marcusrosado.stamp.data
 
 import kotlin.math.PI
-import kotlin.math.asin
-import kotlin.math.atan2
-import kotlin.math.cos
 import kotlin.math.hypot
-import kotlin.math.sin
-import kotlin.math.sqrt
 
 /** A way of getting from one stop to the next. The key is what the save file holds. */
 enum class Travel(val key: String, val label: String) {
@@ -75,8 +70,8 @@ object LegPath {
         val len = hypot(dx, dy)
         if (len == 0.0) return listOf(a, end)
         // Left of the direction of travel; a quadratic curve whose middle sits BOW out.
-        val cx = (x1 + x2) / 2 - dy / len * len * BOW * 2
-        val cy = (y1 + y2) / 2 + dx / len * len * BOW * 2
+        val cx = (x1 + x2) / 2 - dy * BOW * 2
+        val cy = (y1 + y2) / 2 + dx * BOW * 2
         val n = 48
         return (0..n).map { i ->
             val t = i.toDouble() / n
@@ -98,10 +93,16 @@ object LegPath {
         return b.first to (if (short >= a.second) short - 360 else short + 360)
     }
 
-    /** Latitude as the map's flat projection spaces it, in degree-like units. */
-    private fun mercY(lat: Double) = Math.toDegrees(kotlin.math.ln(kotlin.math.tan(PI / 4 + Math.toRadians(lat.coerceIn(-85.0, 85.0)) / 2)))
+    /** Latitude as the map's flat projection spaces it, in radians; the map's gliding icons use it too. */
+    fun mercator(lat: Double) = kotlin.math.ln(kotlin.math.tan(PI / 4 + Math.toRadians(lat.coerceIn(-85.0, 85.0)) / 2))
 
-    private fun latOf(y: Double) = Math.toDegrees(2 * kotlin.math.atan(kotlin.math.exp(Math.toRadians(y))) - PI / 2)
+    /** The latitude of a height on the map's flat projection, the inverse of [mercator]. */
+    fun latitude(y: Double) = Math.toDegrees(2 * kotlin.math.atan(kotlin.math.exp(y)) - PI / 2)
+
+    // The same in degree-like units, so a height compares with longitude.
+    private fun mercY(lat: Double) = Math.toDegrees(mercator(lat))
+
+    private fun latOf(y: Double) = latitude(Math.toRadians(y))
 
     /** How far apart in longitude two ends must be before a flight could have gone either way. */
     const val FAR_DEGREES = 100.0
@@ -111,16 +112,16 @@ object LegPath {
      * stops, each drawn its own way. One way, or none, is the whole leg.
      */
     fun parts(
-        a: Pair<Double, Double>, b: Pair<Double, Double>, ways: List<Travel>, follow: Follow? = null,
+        a: Pair<Double, Double>, b: Pair<Double, Double>, ways: List<Travel>, follow: Follow? = null, around: Boolean = false,
     ): List<Pair<List<Pair<Double, Double>>, Travel?>> {
         // One way from place to place can follow the real line; split stretches stay straight,
         // since the points between them are only guesses.
         if (ways.size == 1) follow?.invoke(ways[0], a, b)?.let { return listOf(it to ways[0]) }
-        if (ways.size <= 1) return listOf(points(a, b, ways.firstOrNull()) to ways.firstOrNull())
+        if (ways.size <= 1) return listOf(points(a, b, ways.firstOrNull(), around) to ways.firstOrNull())
         val end = nearest(a, b)
         fun at(f: Double) = (a.first + (end.first - a.first) * f) to (a.second + (end.second - a.second) * f)
         return ways.mapIndexed { i, w ->
-            points(at(i.toDouble() / ways.size), at((i + 1).toDouble() / ways.size), w) to w
+            points(at(i.toDouble() / ways.size), at((i + 1).toDouble() / ways.size), w, around) to w
         }
     }
 
@@ -136,16 +137,16 @@ object LegPath {
         around: Boolean = false,
     ): List<Pair<List<Pair<Double, Double>>, Travel?>> {
         val plane = ways.indexOf(Travel.Plane)
-        if (plane < 0 || via.size < 2) {
-            // A flight with no airports named goes straight from place to place.
-            if (around && ways == listOf(Travel.Plane)) return listOf(points(a, b, Travel.Plane, around = true) to Travel.Plane)
-            return parts(a, b, ways, follow)
-        }
+        if (plane < 0 || via.size < 2) return parts(a, b, ways, follow, around)
         fun ground(x: Pair<Double, Double>, y: Pair<Double, Double>, w: List<Travel>) =
             if (x == y || Distance.km(x, y) < 1.0) emptyList()
             else if (w.isEmpty()) listOf(listOf(x, nearest(x, y)) to null) else parts(x, y, w, follow)
         return ground(a, via.first(), ways.take(plane)) +
-            via.zipWithNext().map { (x, y) -> points(x, y, Travel.Plane, around) to Travel.Plane } +
+            via.zipWithNext().let { hops ->
+                // The other way round is one long flight across the globe, not every hop of it.
+                val longest = hops.indices.maxByOrNull { kotlin.math.abs(nearest(hops[it].first, hops[it].second).second - hops[it].first.second) }
+                hops.mapIndexed { i, (x, y) -> points(x, y, Travel.Plane, around && i == longest) to Travel.Plane }
+            } +
             ground(via.last(), b, ways.drop(plane + 1))
     }
 

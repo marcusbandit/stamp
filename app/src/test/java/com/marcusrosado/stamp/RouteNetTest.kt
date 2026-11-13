@@ -65,7 +65,7 @@ class RouteNetTest {
     @Test fun withNoLineJoiningThemTheLegStaysStraight() {
         assertNull(net.follow(Travel.Train, 55.0 to 10.0, 56.5 to 20.5))
         assertNull(net.follow(Travel.Walk, 55.0 to 10.0, 55.0 to 11.0))
-        val parts = LegPath.parts(55.0 to 10.0, 56.5 to 20.5, listOf(Travel.Train)) { w, a, b -> net.follow(w, a, b) }
+        val parts = LegPath.parts(55.0 to 10.0, 56.5 to 20.5, listOf(Travel.Train), follow = { w, a, b -> net.follow(w, a, b) })
         assertEquals(listOf(55.0 to 10.0, 56.5 to 20.5), parts.single().first)
     }
 

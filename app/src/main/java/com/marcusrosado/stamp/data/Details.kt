@@ -112,6 +112,10 @@ data class Trip(
     /** Where the user slept at [stop]: its own place unless they said otherwise. */
     fun bedOf(stop: String): String = slept[stop] ?: placeIdOf(stop)
 
+    /** A stay's homes in the order they were moved into, undated ones last. */
+    val homesInOrder: List<String>
+        get() = cities.sortedWith(compareBy(nullsLast()) { arrived[it] })
+
     /** Every place of [stop]: its own, then the ones gone to from it. */
     fun placesAt(stop: String): List<String> = listOf(placeIdOf(stop)) + dayPlaces[stop].orEmpty()
 

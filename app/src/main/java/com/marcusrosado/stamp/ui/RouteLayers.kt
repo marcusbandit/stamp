@@ -228,7 +228,7 @@ internal class Glide(route: MapRoute, private val phase: Double) {
     }
 
     private companion object {
-        fun mercY(lat: Double) = ln(tan(PI / 4 + Math.toRadians(lat.coerceIn(-85.0, 85.0)) / 2))
-        fun latOf(y: Double) = Math.toDegrees(2 * atan(exp(y)) - PI / 2)
+        fun mercY(lat: Double) = com.marcusrosado.stamp.data.LegPath.mercator(lat)
+        fun latOf(y: Double) = com.marcusrosado.stamp.data.LegPath.latitude(y)
     }
 }

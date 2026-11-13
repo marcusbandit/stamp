@@ -171,7 +171,7 @@ fun VisitTimeline(
         }
     }
     // Homes read in the order they were moved into; a trip's stops in the order travelled.
-    val stops = if (lived) trip.cities.sortedWith(compareBy(nullsLast()) { trip.arrived[it] }) else trip.cities
+    val stops = remember(trip, lived) { if (lived) trip.homesInOrder else trip.cities }
     val order = listOf("start") + stops.map { "stop-$it" } + "end"
     // Every item of the list in order, so a dot on the track scrolls to its stop by key.
     val itemKeys = buildList {
@@ -223,7 +223,6 @@ fun VisitTimeline(
     // The stop a memory is being added to; "" is the visit as a whole.
     var adding by remember { mutableStateOf<String?>(null) }
     var viewing by remember { mutableStateOf<Memory?>(null) }
-    val noun = "Visit"
     val hero = trip.memories.firstOrNull { it.media != null && !it.video }
     Dialog(
         onDismissRequest = onDismiss,
@@ -248,7 +247,7 @@ fun VisitTimeline(
                         // A trip across borders names every place it went: "Germany → Austria → Italy".
                         where = trip.lands.map(landName).distinct().takeIf { it.size > 1 }?.joinToString("  →  ") ?: country.name,
                         // Living somewhere is not a numbered stay: it is where the user lives or lived.
-                        title = if (lived) (if (trip.now) "Living here" else "Lived here") else "$noun $number",
+                        title = if (lived) (if (trip.now) "Living here" else "Lived here") else "Visit $number",
                         // "Living here" needs no "Living here now" under it.
                         dates = if (lived && trip.now && trip.date == null) null else rangeLabel(trip.date, trip.until, trip.now),
                         photo = hero,

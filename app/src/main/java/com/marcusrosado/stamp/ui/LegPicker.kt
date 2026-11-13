@@ -119,6 +119,14 @@ fun LegPicker(
     var picking by remember { mutableStateOf<AirportSlot?>(null) }
     val palette = LocalMapPalette.current
     val flying = Travel.Plane in ways && airports != null
+    // Only a flight that spans much of the globe could have gone either way, judged on the line
+    // the map will draw: between the airports once both ends are named, else place to place.
+    val farFlight = flying && run {
+        val named = listOfNotNull(dep, arr).size == 2
+        val hops = if (named) (listOfNotNull(dep) + stops + listOfNotNull(arr)).mapNotNull { airports?.get(it)?.let { ap -> ap.lat to ap.lon } }
+        else listOfNotNull(from, to)
+        hops.zipWithNext().any { (x, y) -> com.marcusrosado.stamp.data.LegPath.spansFar(x, y) }
+    }
     // A flight just picked starts out between the big airports nearest each end. One saved
     // before airports could be named keeps none until the user picks them.
     val newFlight = Travel.Plane !in initial
@@ -168,18 +176,12 @@ fun LegPicker(
                         }
                         Pill(text = "Layover", color = MaterialTheme.colorScheme.onSurfaceVariant, add = true, onClick = { picking = AirportSlot.NewStop })
                     }
-                    // Only a flight that spans much of the globe could have gone either way.
-                    val hops = (listOfNotNull(dep) + stops + listOfNotNull(arr)).mapNotNull { airports?.get(it)?.let { ap -> ap.lat to ap.lon } }
-                        .takeIf { it.size >= 2 } ?: listOfNotNull(from, to)
-                    if (hops.zipWithNext().any { (x, y) -> com.marcusrosado.stamp.data.LegPath.spansFar(x, y) }) {
+                    if (farFlight) {
                         Row(
                             Modifier.fillMaxWidth().padding(top = 12.dp).clip(RoundedCornerShape(12.dp)).clickable { around = !around },
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Column(Modifier.weight(1f)) {
-                                Text("Flew the other way round", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
-                                Text("Off is the shortest way", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
+                            Text("Flew the other way round", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
                             androidx.compose.material3.Switch(checked = around, onCheckedChange = { around = it })
                         }
                     }
@@ -193,7 +195,7 @@ fun LegPicker(
         confirmButton = {
             TextButton(onClick = {
                 val d = dep; val r = arr
-                onDone(ways, if (Travel.Plane in ways && d != null && r != null) listOf(d) + stops + r else emptyList(), around && Travel.Plane in ways)
+                onDone(ways, if (Travel.Plane in ways && d != null && r != null) listOf(d) + stops + r else emptyList(), around && farFlight)
             }) { Text("Done") }
         },
     )
