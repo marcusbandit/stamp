@@ -271,9 +271,10 @@ private fun AirportEnd(airport: Airport?, place: String, end: Boolean, onClick: 
                 )
             } else {
                 // Three blanks for the three letters still to come.
-                Row(Modifier.height(32.dp), horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.Bottom) {
+                Row(Modifier.height(26.dp), horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.Bottom) {
                     repeat(3) { Box(Modifier.width(15.dp).height(2.dp).background(MaterialTheme.colorScheme.primary)) }
                 }
+                Spacer(Modifier.height(6.dp))
             }
             Text(
                 airport?.town?.ifBlank { null } ?: if (airport == null) "Pick airport" else place,
