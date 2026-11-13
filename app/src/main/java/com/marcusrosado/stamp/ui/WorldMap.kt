@@ -203,6 +203,7 @@ fun WorldMap(
                 }
             })
             setOnTouchListener { _, e -> taps.onTouchEvent(e); false }
+            val view = this
             getMapAsync { m ->
                 m.uiSettings.apply {
                     isLogoEnabled = false
@@ -211,7 +212,18 @@ fun WorldMap(
                     isTiltGesturesEnabled = false
                     isCompassEnabled = false
                 }
-                m.setMinZoomPreference(0.0)
+                // Zoomed all the way out, the world still fills the map from top to bottom: a
+                // shorter world leaves empty sea above or below it, and once a card has moved
+                // the map up, all of that gap sits at the bottom. The world is 512 dp tall at
+                // zoom 0, so the least zoom follows the map's height, folded or not.
+                fun fillHeight() {
+                    val h = view.height / view.resources.displayMetrics.density
+                    if (h > 0) m.setMinZoomPreference(kotlin.math.max(0.0, kotlin.math.ln(h / 512.0) / kotlin.math.ln(2.0)))
+                }
+                fillHeight()
+                view.addOnLayoutChangeListener { _, _, top, _, bottom, _, oldTop, _, oldBottom ->
+                    if (bottom - top != oldBottom - oldTop) fillHeight()
+                }
                 // Deep enough to see one city's streets' worth of area. The 1:10m country shapes
                 // take over from mid zoom, and the city outlines and dots stay sharp.
                 m.setMaxZoomPreference(12.0)
