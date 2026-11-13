@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Android 11 and older: everything the user made is backed up; crash reports are not. -->
+<!-- Android 11 and older: everything the user made is backed up. Crash reports live in the
+     external files folder, which is not included, so they stay on the phone. -->
 <full-backup-content>
     <include domain="file" path="." />
     <include domain="sharedpref" path="." />
     <include domain="database" path="." />
-    <exclude domain="external" path="crashes" />
 </full-backup-content>
