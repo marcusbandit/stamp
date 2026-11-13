@@ -250,39 +250,36 @@ private fun PlaceEnd(big: String, small: String, end: Boolean, modifier: Modifie
 }
 
 /**
- * One end of a flight as a button: the airport's code, big, or three blank slots waiting for
- * one, framed like the buttons below so it plainly takes a tap.
+ * One end of a flight as a button, filled like the tiles under it: the airport's code, big,
+ * with its town, or Pick airport while there is none.
  */
 @Composable
 private fun AirportEnd(airport: Airport?, place: String, end: Boolean, onClick: () -> Unit, modifier: Modifier) {
-    val align = if (end) Alignment.End else Alignment.Start
     Surface(
         onClick = onClick,
-        shape = RoundedCornerShape(14.dp),
-        color = Color.Transparent,
-        border = BorderStroke(1.dp, if (airport == null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHighest,
         modifier = modifier,
     ) {
-        Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), horizontalAlignment = align) {
+        Column(
+            Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            horizontalAlignment = if (end) Alignment.End else Alignment.Start,
+        ) {
             if (airport != null) {
                 Text(
                     airport.code, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurface, maxLines = 1,
                 )
+                Text(
+                    airport.town.ifBlank { place }, style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                )
             } else {
-                // Three blanks for the three letters still to come.
-                Row(Modifier.height(26.dp), horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.Bottom) {
-                    repeat(3) { Box(Modifier.width(15.dp).height(2.dp).background(MaterialTheme.colorScheme.primary)) }
-                }
-                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Pick airport", style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary, maxLines = 1,
+                )
             }
-            Text(
-                airport?.town?.ifBlank { null } ?: if (airport == null) "Pick airport" else place,
-                style = MaterialTheme.typography.labelMedium,
-                color = if (airport == null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
         }
     }
 }
