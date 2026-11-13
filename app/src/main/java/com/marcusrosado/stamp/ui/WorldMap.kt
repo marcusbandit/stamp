@@ -227,7 +227,8 @@ fun WorldMap(
         }
     }
 
-    LaunchedEffect(style, visits, palette, split, plain) {
+    val regionCountryIds = remember(regionLayer?.shapes) { regionLayer?.shapes.orEmpty().map { it.first }.distinct() }
+    LaunchedEffect(style, visits, palette, split, plain, regionCountryIds) {
         val s = style ?: return@LaunchedEffect
         if (plain) {
             for (id in listOf(LAYER_FILL, LAYER_FILL_FINE)) s.getLayerAs<FillLayer>(id)?.setProperties(PropertyFactory.fillColor(Expression.color(palette.land.toArgb())))
@@ -246,7 +247,14 @@ fun WorldMap(
         } else {
             Expression.match(Expression.get(if (split) "id" else "country"), Expression.color(palette.land.toArgb()), *stops.toTypedArray())
         }
-        for (id in listOf(LAYER_FILL, LAYER_FILL_FINE)) s.getLayerAs<FillLayer>(id)?.setProperties(PropertyFactory.fillColor(fill))
+        // A country drawn as its regions is plain underneath, so coast its regions leave out
+        // shows no mark of its own.
+        val shown = if (regionCountryIds.isEmpty()) fill else Expression.switchCase(
+            Expression.`in`(Expression.get("country"), Expression.literal(regionCountryIds.toTypedArray())),
+            Expression.color(palette.land.toArgb()),
+            fill,
+        )
+        for (id in listOf(LAYER_FILL, LAYER_FILL_FINE)) s.getLayerAs<FillLayer>(id)?.setProperties(PropertyFactory.fillColor(shown))
     }
 
     LaunchedEffect(style, showRoutes) {
@@ -349,12 +357,22 @@ fun WorldMap(
         }
         s.getSourceAs<GeoJsonSource>(SOURCE_REGIONS)?.setGeoJson(json)
     }
-    LaunchedEffect(style, regionLayer?.marks, palette) {
+    LaunchedEffect(style, regionLayer?.marks, regionLayer?.countryMarks, palette) {
         val s = style ?: return@LaunchedEffect
         val marks = regionLayer?.marks.orEmpty()
-        val fill = if (marks.isEmpty()) Expression.color(palette.land.toArgb())
+        // A region not been to, in a country that is marked, takes a faint wash of the country's
+        // mark, so the country still reads as one place with its regions to go.
+        val faint = regionLayer?.countryMarks.orEmpty()
+        val base = if (faint.isEmpty()) Expression.color(palette.land.toArgb())
         else Expression.match(
-            Expression.get("region"), Expression.color(palette.land.toArgb()),
+            Expression.get("country"), Expression.color(palette.land.toArgb()),
+            *faint.map { (id, st) ->
+                Expression.stop(id, Expression.color(androidx.compose.ui.graphics.lerp(palette.land, palette.of(st), 0.22f).toArgb()))
+            }.toTypedArray(),
+        )
+        val fill = if (marks.isEmpty()) base
+        else Expression.match(
+            Expression.get("region"), base,
             *marks.map { (id, st) -> Expression.stop(id, Expression.color(palette.of(st).toArgb())) }.toTypedArray(),
         )
         s.getLayerAs<FillLayer>(LAYER_REGIONS)?.setProperties(PropertyFactory.fillColor(fill))
@@ -516,6 +534,8 @@ class RegionLayer(
     /** Each region with the id of the country it belongs to. */
     val shapes: List<Pair<String, com.marcusrosado.stamp.data.RegionShape>>,
     val marks: Map<String, TravelState>,
+    /** Each country's own mark, by country id. */
+    val countryMarks: Map<String, TravelState> = emptyMap(),
 )
 
 private fun regionFeature(countryId: String, r: com.marcusrosado.stamp.data.RegionShape): Feature {

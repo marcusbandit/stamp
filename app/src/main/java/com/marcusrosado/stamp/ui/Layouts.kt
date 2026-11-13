@@ -532,7 +532,10 @@ private fun StampMap(
     }
     WorldMap(
         animate = animate,
-        regionLayer = if (regionIds.isEmpty()) null else RegionLayer(shapes, marks),
+        regionLayer = if (regionIds.isEmpty()) null else RegionLayer(
+            shapes, marks,
+            remember(regionIds, state.visits) { regionIds.mapNotNull { id -> state.atlas.markOf(id, state.visits, false)?.let { id to it } }.toMap() },
+        ),
         complete = complete,
         plain = state.mapView == com.marcusrosado.stamp.data.MapView.Cities,
         wantCities = wantCities,
