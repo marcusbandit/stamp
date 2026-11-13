@@ -397,19 +397,24 @@ private fun App(
             },
             app = app,
         )
-        // The packs of every country a leg by rail or road starts or ends in, the way there
-        // from a home in another country included. Switched off, the kept packs go.
+        // The packs of every country a step by rail or road starts or ends in, the way there
+        // from a home in another country included; a layover reached and left only by plane
+        // needs none. Switched off, the kept packs go.
         LaunchedEffect(visits, places, airports, follow) {
             if (!follow) { app.routePacks.clear(); return@LaunchedEffect }
             val plain = Journey(visits, places, airports)
             val codes = visits.values.filter { it.state == TravelState.Visited }.flatMap { v -> v.trips.map { it to v } }.distinctBy { it.first.id }
                 .flatMap { (t, v) ->
-                    t.legEnds.mapNotNull { (a, b) -> t.legBetween(a, b) }
-                        .filter { l -> l.ways.any { com.marcusrosado.stamp.data.RouteNet.kindOf(it) != null } }
-                        .flatMap { l ->
-                            listOfNotNull(plain.endPoint(t, v, l.from), plain.endPoint(t, v, l.to)).map { it.lat to it.lon } +
-                                l.steps.mapNotNull { st -> st.to?.let { plain.stopPoint(it, v) } }
+                    t.legEnds.mapNotNull { (a, b) -> t.legBetween(a, b) }.flatMap { l ->
+                        // Stop k of the leg: its start, the end of each step, its end.
+                        fun stop(k: Int): Pair<Double, Double>? = when (k) {
+                            0 -> plain.endPoint(t, v, l.from)?.let { it.lat to it.lon }
+                            l.steps.size -> plain.endPoint(t, v, l.to)?.let { it.lat to it.lon }
+                            else -> l.steps[k - 1].to?.let { plain.stopPoint(it, v) }
                         }
+                        l.steps.indices.filter { i -> l.steps[i].way?.let { com.marcusrosado.stamp.data.RouteNet.kindOf(it) } != null }
+                            .flatMap { i -> listOfNotNull(stop(i), stop(i + 1)) }
+                    }
                 }
                 .mapNotNull { (lat, lon) -> atlas.locate(lat, lon)?.let { land -> land.alpha2.ifEmpty { null } ?: atlas.byId[land.country]?.alpha2?.ifEmpty { null } } }
                 .toSet()

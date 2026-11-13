@@ -123,7 +123,10 @@ class TimelineActions(
     val onStopDates: (place: String, arrived: PartialDate?, left: PartialDate?) -> Unit,
     /** Puts the trip's stops in a new order. */
     val onStopOrder: (cities: List<String>) -> Unit,
-    /** Sets how the user went from one stop to the next, and a flight's airports; no ways clears it. */
+    /**
+     * Sets how the user went from one stop to the next, as its steps, each with its way and the
+     * stop it ended at; steps with no way said and no stop named clear the leg.
+     */
     val onLeg: (from: String, to: String, steps: List<com.marcusrosado.stamp.data.Step>, around: Boolean) -> Unit,
     /** Sets where the trip set out from, a city or pin id; null is home. */
     val onStart: (place: String?) -> Unit = {},
