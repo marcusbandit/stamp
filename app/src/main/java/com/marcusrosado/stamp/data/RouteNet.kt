@@ -83,7 +83,10 @@ class RouteNet private constructor(
             val crow = Distance.km(from, to)
             var along = 0.0
             for (i in 1 until line.size) along += Distance.km(line[i - 1], line[i])
-            along <= crow * 2.2 + 15
+            // Generous enough for the real long way round, Copenhagen to Berlin by rail runs
+            // through Jutland at well over twice the straight line, and still no detour to a
+            // line far off for a short ride.
+            along <= crow * 2.6 + 20
         }
         // Thinned to about 150 m before it is kept: a followed line runs to thousands of
         // points, far finer than the map draws, and every trip holds its own.

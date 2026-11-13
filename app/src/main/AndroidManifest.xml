@@ -35,6 +35,8 @@
         android:label="@string/app_name"
         android:supportsRtl="true"
         android:theme="@style/Theme.Stamp">
+        <!-- Lets the shell take a heap dump of the release build, to find what holds memory. -->
+        <profileable android:shell="true" />
         <!-- configChanges keeps the activity alive across fold, unfold and rotate.
              Compose recomposes from the new window size instead of a full restart. -->
         <activity
