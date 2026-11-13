@@ -502,14 +502,12 @@ private fun MapPage(state: AppState) {
     }
     Category("On the map")
     SwitchPref("Routes between cities", "Lines in the order visited", state.routes, state.onRoutes)
-    if (state.routes) {
-        SwitchPref(
-            "Follow railways and roads",
-            "Downloads the main rail lines and motorways of countries you travel in",
-            state.followLines, state.onFollowLines,
-        )
-        TravelLegend(Modifier.padding(start = 24.dp, end = 24.dp, top = 4.dp, bottom = 12.dp))
-    }
+    if (state.routes) TravelLegend(Modifier.padding(start = 24.dp, end = 24.dp, top = 4.dp, bottom = 12.dp))
+    SwitchPref(
+        "Follow railways and roads",
+        "Downloads the main rail lines and motorways of countries you travel in",
+        state.followLines, state.onFollowLines,
+    )
     // Where the phone is: on asks for the rough location if the phone has not allowed it yet.
     val context = LocalContext.current
     val askHere = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->

@@ -30,54 +30,62 @@ class RoutePacks(private val dir: File, private val scope: CoroutineScope) {
     private val missing = HashSet<String>()
 
     /**
-     * Makes sure the packs for [codes] (ISO alpha-2) are on the phone and in [net]. Packs
-     * already kept load from storage; the rest download one at a time. With [download] false,
-     * only kept packs load.
+     * Makes sure the packs for [codes] (ISO alpha-2) are on the phone and in [net]: those kept
+     * load from storage and show at once, then the rest download one at a time, each showing
+     * as soon as it is in. A country that fails is not asked for again until the next launch.
      */
-    fun want(codes: Set<String>, download: Boolean) {
+    fun want(codes: Set<String>) {
         scope.launch(Dispatchers.IO) {
             lock.withLock {
                 val need = codes.map { it.uppercase() }.filter { it.length == 2 && it !in loaded && it !in missing }
                 if (need.isEmpty()) return@withLock
-                var changed = false
                 dir.mkdirs()
-                for (cc in need) {
+                val (kept, fetch) = need.partition { File(dir, "$it.bin.gz").exists() }
+                kept.forEach { load(it) }
+                publish()
+                for (cc in fetch) {
                     val file = File(dir, "$cc.bin.gz")
-                    if (!file.exists() && download) fetch(cc, file)
-                    if (!file.exists()) continue
-                    val net = runCatching { RouteNet.read(file.readBytes()) }.getOrNull()
-                    if (net == null) {
-                        file.delete()
-                        missing += cc
-                        continue
-                    }
-                    loaded = loaded + (cc to net)
-                    changed = true
+                    if (!fetch(cc, file)) { missing += cc; continue }
+                    if (load(cc)) publish()
                 }
-                if (changed) _net.value = RouteNet.merge(loaded.values.toList())
             }
         }
     }
 
-    private fun fetch(cc: String, file: File) {
+    private fun load(cc: String): Boolean {
+        val file = File(dir, "$cc.bin.gz")
+        val net = runCatching { RouteNet.read(file.readBytes()) }.getOrNull()
+        if (net == null) {
+            file.delete()
+            missing += cc
+            return false
+        }
+        loaded = loaded + (cc to net)
+        return true
+    }
+
+    private fun publish() {
+        if (loaded.isNotEmpty()) _net.value = RouteNet.merge(loaded.values.toList())
+    }
+
+    /** Downloads one country's pack into [file]; false when there is none or it failed. */
+    private fun fetch(cc: String, file: File): Boolean =
         runCatching {
             val c = URL("$BASE$cc.bin.gz").openConnection() as HttpURLConnection
             c.connectTimeout = 15_000
             c.readTimeout = 60_000
             c.setRequestProperty("User-Agent", "Stamp")
             try {
-                if (c.responseCode == 404) { missing += cc; return }
-                if (c.responseCode !in 200..299) return
+                if (c.responseCode !in 200..299) return@runCatching false
                 val part = File(dir, "$cc.part")
                 c.inputStream.use { input -> part.outputStream().use { input.copyTo(it) } }
                 part.renameTo(file)
             } finally {
                 c.disconnect()
             }
-        }
-    }
+        }.getOrDefault(false)
 
-    /** Throws away every kept pack, as from Settings. */
+    /** Throws away every kept pack, when the user switches following lines off. */
     fun clear() {
         scope.launch(Dispatchers.IO) {
             lock.withLock {

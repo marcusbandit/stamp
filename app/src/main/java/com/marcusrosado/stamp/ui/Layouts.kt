@@ -456,20 +456,7 @@ private fun StampMap(
         visits = state.visits,
         showRoutes = state.routes,
         split = state.split,
-        routes = LocalJourney.current.let { journey ->
-            // Worked out off the main thread: following the rails can take a moment the first
-            // time. The last lines stay up meanwhile, so an edit never blanks the map.
-            androidx.compose.runtime.produceState(emptyList<MapRoute>(), journey) {
-                value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
-                    // A trip that crosses borders shows on every country it touched; draw it once.
-                    journey.visits.values.filter { it.state.counts }
-                        .flatMap { v -> v.trips.map { it to v } }
-                        .distinctBy { (t, _) -> t.id }
-                        .flatMap { (t, v) -> journey.routes(t, v) }
-                        .distinct()
-                }
-            }.value
-        },
+        routes = LocalMapRoutes.current,
         photos = remember(state.visits, state.places, state.mapPhotos) {
             if (!state.mapPhotos) return@remember emptyList()
             // The first photo kept at each place; places only, not the visit as a whole.

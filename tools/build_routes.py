@@ -49,17 +49,20 @@ def fetch(url, path):
 
 
 def extract_url(index, cc):
-    """The one Geofabrik extract that covers country [cc], the biggest when there are several."""
+    """The Geofabrik extract that covers country [cc]: its own when it has one, the whole
+    country rather than a region of it; else the smallest shared one, such as Malaysia,
+    Singapore and Brunei together."""
     best = None
     for f in index["features"]:
         p = f["properties"]
         codes = p.get("iso3166-1:alpha2") or []
         pbf = (p.get("urls") or {}).get("pbf")
-        if cc in codes and pbf and len(codes) == 1:
-            # A country beats its own regions: the shortest id path is the whole country.
+        if cc in codes and pbf:
+            # Fewest countries first; then a country beats its own regions.
             depth = p["id"].count("/") + (1 if p.get("parent") else 0)
-            if best is None or depth < best[0]:
-                best = (depth, pbf)
+            key = (len(codes), depth)
+            if best is None or key < best[0]:
+                best = (key, pbf)
     return best[1] if best else None
 
 
@@ -181,18 +184,21 @@ def main():
     if not os.path.exists(idx_path) or time.time() - os.path.getmtime(idx_path) > 7 * 86400:
         fetch(INDEX_URL, idx_path)
     index = json.load(open(idx_path))
-    for cc in (c.upper() for c in a.codes):
+    codes = [c.upper() for c in a.codes]
+    urls = {cc: extract_url(index, cc) for cc in codes}
+    for i, cc in enumerate(codes):
         out_path = os.path.join(a.out, cc + ".bin.gz")
-        url = extract_url(index, cc)
+        url = urls[cc]
         if not url:
             print(cc, "no extract", flush=True)
             continue
-        pbf = os.path.join(a.cache, cc + ".osm.pbf")
+        # A shared extract serves each of its countries with the same pack.
+        pbf = os.path.join(a.cache, os.path.basename(url))
         t0 = time.time()
         if not os.path.exists(pbf):
             fetch(url, pbf)
         n, r, d = build(pbf, out_path)
-        if not a.keep:
+        if not a.keep and url not in [urls[c] for c in codes[i + 1:]]:
             os.remove(pbf)
         print(cc, n, "nodes", r, "rail", d, "road", os.path.getsize(out_path) // 1024, "KB",
               int(time.time() - t0), "s", flush=True)

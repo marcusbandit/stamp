@@ -53,7 +53,14 @@ class RouteNet private constructor(
         val kind = kindOf(way) ?: return null
         val key = "$kind:${from.first},${from.second}:${to.first},${to.second}"
         cache[key]?.let { return it.ifEmpty { null } }
-        val found = route(kind, from, to)
+        // A way far longer than the stops are apart is a detour to some distant line, not the
+        // line the user took: the leg stays straight.
+        val found = route(kind, from, to)?.takeIf { line ->
+            val crow = Distance.km(from, to)
+            var along = 0.0
+            for (i in 1 until line.size) along += Distance.km(line[i - 1], line[i])
+            along <= crow * 2.2 + 15
+        }
         cache[key] = found.orEmpty()
         return found
     }
@@ -119,7 +126,10 @@ class RouteNet private constructor(
             if (!on(kind, i)) continue
             val cy = nodeLat[i] / cell
             val cx = nodeLon[i] / cell
-            for (dy in -1..1) for (dx in -1..1) {
+            // A degree of longitude shrinks towards the poles: look as many cells sideways as
+            // the same distance takes.
+            val wide = lonCells(1, nodeLat[i])
+            for (dy in -1..1) for (dx in -wide..wide) {
                 val list = grid[key(cy + dy, cx + dx)] ?: continue
                 for (j in list) {
                     if (j == i || linked(kind, i, j)) continue
@@ -170,7 +180,8 @@ class RouteNet private constructor(
             if (parts[i] != pa || !on(kind, i)) continue
             val cy = nodeLat[i] / cell
             val cx = nodeLon[i] / cell
-            for (dy in -span..span) for (dx in -span..span) {
+            val wide = lonCells(span, nodeLat[i])
+            for (dy in -span..span) for (dx in -wide..wide) {
                 val list = grid[key(cy + dy, cx + dx)] ?: continue
                 for (j in list) {
                     val d = km(nodeLat[i], nodeLon[i], nodeLat[j], nodeLon[j])
@@ -189,23 +200,38 @@ class RouteNet private constructor(
         return false
     }
 
+    private var dist = FloatArray(0)
+    private var via = IntArray(0)
+    private val touched = ArrayList<Int>()
+
+    /** Grid cells of longitude that cover as far as [cells] cells of latitude do at [lat]. */
+    private fun lonCells(cells: Int, lat: Int): Int =
+        kotlin.math.ceil(cells / cos(Math.toRadians(lat / 1e5)).coerceAtLeast(0.1)).toInt()
+
     /** The line along the network from junction [a] to junction [b], which share a piece. */
     private fun path(kind: Byte, a: Int, b: Int): List<Pair<Double, Double>>? {
         if (a == b) return listOf(point(nodeLat[a], nodeLon[a]))
         val straight = km(nodeLat[a], nodeLon[a], nodeLat[b], nodeLon[b])
         // A* over the junctions, by length along the line.
         val n = nodeLat.size
-        val dist = FloatArray(n) { Float.MAX_VALUE }
-        val via = IntArray(n) { -1 }
+        // Kept between searches and reset only where the last one wrote.
+        if (dist.size != n) { dist = FloatArray(n) { Float.MAX_VALUE }; via = IntArray(n) { -1 } }
+        for (i in touched) { dist[i] = Float.MAX_VALUE; via[i] = -1 }
+        touched.clear()
+        val dist = dist
+        val via = via
         val heap = Heap(n)
         val (tStart, tTo, tCost) = transfers(kind)
         // Through a change of line there is no segment to walk back along: -2 - the junction.
         dist[a] = 0f
+        touched += a
         heap.push(a, h(a, b))
         while (heap.size > 0) {
             val u = heap.pop()
             if (u == b) break
             val du = dist[u]
+            // A junction already reached a shorter way was pushed again; skip the old entry.
+            if (heap.lastKey > du + h(u, b) + 1e-3f) continue
             // Far longer than the way as the crow flies: not a sensible route, give up.
             if (du > straight * 3 + 50) return null
             for (k in adjStart[u] until adjStart[u + 1]) {
@@ -214,6 +240,7 @@ class RouteNet private constructor(
                 val v = if (segA[s] == u) segB[s] else segA[s]
                 val dv = du + segKm[s]
                 if (dv < dist[v]) {
+                    if (dist[v] == Float.MAX_VALUE) touched += v
                     dist[v] = dv
                     via[v] = s
                     heap.push(v, dv + h(v, b))
@@ -223,6 +250,7 @@ class RouteNet private constructor(
                 val v = tTo[k]
                 val dv = du + tCost[k]
                 if (dv < dist[v]) {
+                    if (dist[v] == Float.MAX_VALUE) touched += v
                     dist[v] = dv
                     via[v] = -2 - u
                     heap.push(v, dv + h(v, b))
@@ -308,6 +336,9 @@ class RouteNet private constructor(
         private var keys = FloatArray(ids.size)
         var size = 0
 
+        /** The priority of the junction [pop] returned last. */
+        var lastKey = 0f
+
         fun push(id: Int, key: Float) {
             if (size == ids.size) { ids = ids.copyOf(size * 2); keys = keys.copyOf(size * 2) }
             var i = size++
@@ -321,6 +352,7 @@ class RouteNet private constructor(
 
         fun pop(): Int {
             val top = ids[0]
+            lastKey = keys[0]
             val lastId = ids[--size]
             val lastKey = keys[size]
             var i = 0
@@ -351,9 +383,14 @@ class RouteNet private constructor(
 
         private fun point(lat: Int, lon: Int) = lat / 1e5 to lon / 1e5
 
+        /**
+         * [Distance.km] for junctions in whole 1e-5 degrees, kept apart so the searches over
+         * hundreds of thousands of junctions make no pairs. The short way round the date line.
+         */
         private fun km(la1: Int, lo1: Int, la2: Int, lo2: Int): Double {
             val k = cos(Math.toRadians((la1 + la2) / 2e5))
-            val dx = (lo2 - lo1) / 1e5 * k * 111.0
+            val dLon = Math.floorMod(lo2 - lo1 + 18_000_000, 36_000_000) - 18_000_000
+            val dx = dLon / 1e5 * k * 111.0
             val dy = (la2 - la1) / 1e5 * 111.0
             return sqrt(dx * dx + dy * dy)
         }

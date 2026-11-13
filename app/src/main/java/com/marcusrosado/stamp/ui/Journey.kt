@@ -101,3 +101,6 @@ class Journey(
 }
 
 val LocalJourney = compositionLocalOf { Journey(emptyMap(), null, null) }
+
+/** Every trip's lines as the maps draw them, worked out once for all of them. */
+val LocalMapRoutes = compositionLocalOf { emptyList<MapRoute>() }
