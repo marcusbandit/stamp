@@ -155,13 +155,6 @@ fun LegPicker(
         text = {
             Column {
                 WayGrid(ways, onTap = { w -> ways = if (w in ways) ways - w else ways + w })
-                Spacer(Modifier.height(10.dp))
-                Text(
-                    if (ways.size > 1) "In the order you took them. Tap one again to take it off."
-                    else "Took more than one? Tap them in order.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
                 if (flying) {
                     Spacer(Modifier.height(16.dp))
                     // The layovers, between takeoff and landing.

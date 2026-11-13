@@ -19,10 +19,10 @@ import java.net.URL
  * country's two-letter code is asked for; nothing about the user is sent.
  */
 class RoutePacks(private val dir: File, private val scope: CoroutineScope) {
-    private val _net = MutableStateFlow<RouteNet?>(null)
+    private val _net = MutableStateFlow<RouteLines?>(null)
 
-    /** The countries wanted so far, merged into one network; null before any is loaded. */
-    val net: StateFlow<RouteNet?> = _net.asStateFlow()
+    /** The countries wanted so far, each kept on its own; null before any is loaded. */
+    val net: StateFlow<RouteLines?> = _net.asStateFlow()
 
     private val lock = Mutex()
     private var loaded: Map<String, RouteNet> = emptyMap()
@@ -65,7 +65,7 @@ class RoutePacks(private val dir: File, private val scope: CoroutineScope) {
     }
 
     private fun publish() {
-        if (loaded.isNotEmpty()) _net.value = RouteNet.merge(loaded.values.toList())
+        if (loaded.isNotEmpty()) _net.value = RouteLines(loaded)
     }
 
     /** Downloads one country's pack into [file]; false when there is none or it failed. */
