@@ -309,6 +309,23 @@ class VisitStore(private val file: File) {
         return t.id
     }
 
+    /**
+     * Takes one visit to city [cityId] back: the newest visit that is only that city, with no
+     * dates or memories. It goes, unless it is its country's only visit, which keeps its place
+     * as a visit with no city. False when no such visit exists, so nothing the user told is lost.
+     */
+    @Synchronized
+    fun forgetCityVisit(cityId: String): Boolean {
+        val t = trips.lastOrNull { it.cities == listOf(cityId) && it.date == null && it.until == null && it.memories.isEmpty() && !it.now }
+            ?: return false
+        val home = t.home
+        val others = trips.count { it.id != t.id && home != null && home in it.lands }
+        trips = if (others > 0) trips.filterNot { it.id == t.id }
+        else trips.map { if (it.id == t.id) it.copy(cities = emptyList(), dayPlaces = emptyMap(), slept = emptyMap(), legs = emptyList()) else it }
+        save()
+        return true
+    }
+
     /** One more visit to [id], starting there, with nothing filled in yet. */
     @Synchronized
     fun addTrip(id: String) {

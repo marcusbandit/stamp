@@ -108,6 +108,10 @@ fun WorldMap(
     wantCities: List<Pair<Double, Double>> = emptyList(),
     /** A tapped region, as its country id and region id; null leaves taps to the countries. */
     onRegion: ((String, String) -> Unit)? = null,
+    /** Every city worth a dot, for the cities view: more of them as the map zooms in. */
+    allCities: List<CityDot> = emptyList(),
+    /** A tapped city of [allCities], by id; null leaves taps to the countries. */
+    onCity: ((String) -> Unit)? = null,
     /** False while a page covers the whole map: its icons stop gliding until it shows again. */
     animate: Boolean = true,
 ) {
@@ -127,6 +131,7 @@ fun WorldMap(
     val tapKey by rememberUpdatedState(if (split) "id" else "country")
     val routeTap by rememberUpdatedState(onRoute.takeIf { showRoutes })
     val regionTap by rememberUpdatedState(onRegion.takeIf { regionLayer != null })
+    val cityTap by rememberUpdatedState(onCity.takeIf { allCities.isNotEmpty() })
 
     val mapView = remember {
         MapView(context).apply {
@@ -157,6 +162,13 @@ fun WorldMap(
                     if (routeTap != null) {
                         val trips = nearestRoutes(m, e.x, e.y, context.resources.displayMetrics.density)
                         if (trips.isNotEmpty()) { tappedTrips = trips; return false }
+                    }
+                    // In the cities view a city under the finger takes the tap, with a little slack.
+                    cityTap?.let { onC ->
+                        val slack = 12 * context.resources.displayMetrics.density
+                        val f = m.queryRenderedFeatures(android.graphics.RectF(e.x - slack, e.y - slack, e.x + slack, e.y + slack), *ALL_CITY_LAYERS)
+                            .minByOrNull { f -> (f.geometry() as? Point)?.let { p -> val s = m.projection.toScreenLocation(org.maplibre.android.geometry.LatLng(p.latitude(), p.longitude())); (s.x - e.x) * (s.x - e.x) + (s.y - e.y) * (s.y - e.y) } ?: Float.MAX_VALUE }
+                        f?.getStringProperty("id")?.let { onC(it); return false }
                     }
                     // A region of a country drawn as its regions takes the tap before its country.
                     regionTap?.let { onReg ->
@@ -249,12 +261,14 @@ fun WorldMap(
         }
         // A country drawn as its regions is plain underneath, so coast its regions leave out
         // shows no mark of its own.
-        val shown = if (regionCountryIds.isEmpty()) fill else Expression.switchCase(
-            Expression.`in`(Expression.get("country"), Expression.literal(regionCountryIds.toTypedArray())),
-            Expression.color(palette.land.toArgb()),
-            fill,
-        )
+        // Nothing of it at all: its regions are cut from the same shape and cover all of it.
+        val inRegions = Expression.`in`(Expression.get("country"), Expression.literal(regionCountryIds.toTypedArray()))
+        val shown = if (regionCountryIds.isEmpty()) fill else Expression.switchCase(inRegions, Expression.rgba(0, 0, 0, 0), fill)
         for (id in listOf(LAYER_FILL, LAYER_FILL_FINE)) s.getLayerAs<FillLayer>(id)?.setProperties(PropertyFactory.fillColor(shown))
+        // Its own border too: the regions draw their outline, coast included.
+        for (id in listOf("countries-border", "countries-border-fine")) {
+            s.getLayerAs<org.maplibre.android.style.layers.LineLayer>(id)?.setFilter(Expression.not(inRegions))
+        }
     }
 
     LaunchedEffect(style, showRoutes) {
@@ -381,6 +395,26 @@ fun WorldMap(
         val s = style ?: return@LaunchedEffect
         val filter = Expression.`in`(Expression.get("country"), Expression.literal(complete.toTypedArray()))
         for (id in COMPLETE_LAYERS) s.getLayerAs<org.maplibre.android.style.layers.LineLayer>(id)?.setFilter(filter)
+    }
+    LaunchedEffect(style, allCities) {
+        val s = style ?: return@LaunchedEffect
+        val json = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            FeatureCollection.fromFeatures(allCities.map { c ->
+                Feature.fromGeometry(Point.fromLngLat(c.lon, c.lat)).apply {
+                    addStringProperty("id", c.id)
+                    addNumberProperty("pop", c.population)
+                    addBooleanProperty("mine", c.mine)
+                }
+            })
+        }
+        s.getSourceAs<GeoJsonSource>(SOURCE_ALL_CITIES)?.setGeoJson(json)
+    }
+    // In the cities view the cities been to carry the visited colour and stand out.
+    LaunchedEffect(style, plain, palette) {
+        val s = style ?: return@LaunchedEffect
+        s.getLayerAs<org.maplibre.android.style.layers.CircleLayer>("cities")?.setProperties(
+            PropertyFactory.circleColor(Expression.color((if (plain) palette.visited else palette.selected).toArgb())),
+        )
     }
     LaunchedEffect(style, wantCities) {
         val s = style ?: return@LaunchedEffect
@@ -528,6 +562,27 @@ private const val SOURCE_REGIONS = "regions"
 private const val SOURCE_WANT_CITIES = "want-cities"
 private const val LAYER_REGIONS = "regions-fill"
 private val COMPLETE_LAYERS = listOf("complete-glow", "complete-line", "complete-glow-fine", "complete-line-fine")
+private const val SOURCE_ALL_CITIES = "all-cities"
+
+/** A city as the cities view draws it: a dot, more of them as the map zooms in. */
+class CityDot(val id: String, val lat: Double, val lon: Double, val population: Int, val mine: Boolean)
+
+// Bigger cities first: a dot for every city over a million from the start, smaller ones as the
+// map zooms in. A city on a visit or wanted shows from the start whatever its size.
+private val CITY_STEPS = listOf(0.0 to 1_000_000, 3.0 to 250_000, 4.5 to 80_000, 6.0 to 0)
+private val ALL_CITY_LAYERS = CITY_STEPS.indices.map { "all-cities-$it" }.toTypedArray()
+
+private fun allCityLayersJson(p: MapPalette) = CITY_STEPS.mapIndexed { i, (zoom, least) ->
+    val most = CITY_STEPS.getOrNull(i - 1)?.second
+    val filter = when {
+        i == 0 -> """["any", ["==", ["get", "mine"], true], [">=", ["get", "pop"], $least]]"""
+        else -> """["all", ["!=", ["get", "mine"], true], [">=", ["get", "pop"], $least], ["<", ["get", "pop"], $most]]"""
+    }
+    """    { "id": "all-cities-$i", "type": "circle", "source": "$SOURCE_ALL_CITIES", "minzoom": $zoom, "filter": $filter,
+      "paint": { "circle-radius": ["interpolate", ["linear"], ["zoom"], 1, 1.8, 6, 3.2, 9, 4.5],
+                 "circle-color": "${hex(p.selected)}", "circle-opacity": 0.55,
+                 "circle-stroke-color": "${hex(p.ocean)}", "circle-stroke-width": 0.6 } }"""
+}.joinToString(",\n")
 
 /** Which countries draw as their regions, the shapes of those regions, and each region's mark. */
 class RegionLayer(
@@ -596,7 +651,8 @@ private fun styleJson(p: MapPalette) = """
     "$SOURCE_ROUTE_ICONS": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
     "$SOURCE_PHOTOS": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
     "$SOURCE_REGIONS": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
-    "$SOURCE_WANT_CITIES": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } }
+    "$SOURCE_WANT_CITIES": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
+    "$SOURCE_ALL_CITIES": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } }
   },
   "layers": [
     { "id": "ocean", "type": "background", "paint": { "background-color": "${hex(p.ocean)}" } },
@@ -615,8 +671,7 @@ private fun styleJson(p: MapPalette) = """
     { "id": "$LAYER_REGIONS", "type": "fill", "source": "$SOURCE_REGIONS",
       "paint": { "fill-color": "${hex(p.land)}", "fill-antialias": true } },
     { "id": "regions-border", "type": "line", "source": "$SOURCE_REGIONS",
-      "paint": { "line-color": "${hex(p.border)}", "line-width": ["interpolate", ["linear"], ["zoom"], 2, 0.4, 6, 1.0],
-                 "line-opacity": 0.85 } },
+      "paint": { "line-color": "${hex(p.border)}", "line-width": 0.7 } },
     { "id": "complete-glow", "type": "line", "source": "countries", "maxzoom": $FINE_FULL, "filter": ["in", ["get", "country"], ["literal", []]],
       "paint": { "line-color": "$GOLD", "line-width": 7, "line-blur": 5, "line-opacity": 0.55 } },
     { "id": "complete-line", "type": "line", "source": "countries", "maxzoom": $FINE_FULL, "filter": ["in", ["get", "country"], ["literal", []]],
@@ -640,6 +695,7 @@ private fun styleJson(p: MapPalette) = """
     { "id": "$LAYER_SELECTED-fine", "type": "line", "source": "$SOURCE_SELECTED_FINE", "minzoom": $FINE_FULL,
       "paint": { "line-color": "${hex(p.selected)}", "line-width": 2.2 } },
 ${routeLayersJson(p)},
+${allCityLayersJson(p)},
     { "id": "cities", "type": "circle", "source": "$SOURCE_CITIES",
       "paint": { "circle-radius": ["interpolate", ["linear"], ["zoom"], 1, 2.5, 6, 5],
                  "circle-color": "${hex(p.selected)}",

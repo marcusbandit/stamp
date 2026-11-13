@@ -4,13 +4,19 @@ Natural Earth's admin 1 states and provinces are public domain. The app names it
 GeoNames does ("JP.15"), so each Natural Earth shape is matched to a GeoNames region: by its own
 GeoNames code when the app knows that code, else by the region most of the cities inside it are
 in, weighted by population. Shapes that land on the same region are joined, so France's
-departments become its regions. A country's regions are simplified together as one coverage, so
-a border two regions share stays one line.
+departments become its regions.
+
+The regions are cut from the very country shape the map draws (countries_10m.geojson), and every
+piece of that country no region reaches, an island or a stretch of coast, joins the region it
+borders most, or else the nearest. So a country drawn as its regions is exactly its regions, with
+nothing of the country left to show between them. They are simplified together as one coverage,
+so a border two regions share stays one line.
 
   curl -LO https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_admin_1_states_provinces.geojson
   uv pip install --python tools/.venv/bin/python shapely
   tools/.venv/bin/python -I tools/build_regions.py ne_10m_admin_1_states_provinces.geojson \
-      app/src/main/assets/cities.tsv app/src/main/assets/regions.tsv app/src/main/assets/regions
+      app/src/main/assets/cities.tsv app/src/main/assets/regions.tsv \
+      app/src/main/assets/countries_10m.geojson app/src/main/assets/regions
 
 Format, one file per country, all integers as unsigned LEB128 varints and coordinates as
 zigzag deltas in units of 1e-4 degrees:
@@ -29,7 +35,7 @@ from shapely.geometry import MultiPolygon, Point, Polygon, shape
 from shapely.ops import unary_union
 from shapely.strtree import STRtree
 
-TOLERANCE = 0.01  # degrees, about a kilometre: fine for a phone map of a whole country
+TOLERANCE = 0.004  # degrees, under half a kilometre, close to the country shape's own detail
 SCALE = 1e4
 
 
@@ -56,7 +62,32 @@ def polygons(g):
     return [p for p in getattr(g, "geoms", []) if isinstance(p, Polygon)]
 
 
-def main(ne_path, cities_path, regions_path, out_dir):
+def fill_country(country, codes, geoms):
+    """[geoms] cut to [country], with every piece of it left over joined to a region."""
+    cut = [g.intersection(country) for g in geoms]
+    covered = unary_union([g for g in cut if not g.is_empty])
+    left = polygons(country.difference(covered))
+    extra = defaultdict(list)
+    for piece in left:
+        if piece.area <= 0:
+            continue
+        best, shared = None, 0.0
+        for i, g in enumerate(cut):
+            if g.is_empty:
+                continue
+            n = piece.boundary.intersection(g.boundary).length
+            if n > shared:
+                best, shared = i, n
+        if best is None:
+            dist = [(g.distance(piece), i) for i, g in enumerate(cut) if not g.is_empty]
+            if not dist:
+                continue
+            best = min(dist)[1]
+        extra[best].append(piece)
+    return [unary_union([g] + extra[i]) if extra[i] else g for i, g in enumerate(cut)]
+
+
+def main(ne_path, cities_path, regions_path, countries_path, out_dir):
     known = set()
     for line in open(regions_path, encoding="utf-8"):
         p = line.rstrip("\n").split("\t")
@@ -101,6 +132,13 @@ def main(ne_path, cities_path, regions_path, out_dir):
             continue
         shapes[cc].append((code, g))
 
+    land = defaultdict(list)
+    for f in json.load(open(countries_path, encoding="utf-8"))["features"]:
+        a2 = (f["properties"].get("a2") or "").upper()
+        if len(a2) == 2:
+            g = shape(f["geometry"])
+            land[a2].append(g if g.is_valid else g.buffer(0))
+
     os.makedirs(out_dir, exist_ok=True)
     total = 0
     for cc, items in sorted(shapes.items()):
@@ -109,6 +147,8 @@ def main(ne_path, cities_path, regions_path, out_dir):
             joined[code].append(g)
         codes = sorted(joined)
         geoms = [unary_union(joined[c]) for c in codes]
+        if land.get(cc):
+            geoms = fill_country(unary_union(land[cc]), codes, geoms)
         try:
             simple = list(shapely.coverage_simplify(geoms, TOLERANCE))
         except Exception:
@@ -140,4 +180,4 @@ def main(ne_path, cities_path, regions_path, out_dir):
 
 
 if __name__ == "__main__":
-    main(*sys.argv[1:5])
+    main(*sys.argv[1:6])

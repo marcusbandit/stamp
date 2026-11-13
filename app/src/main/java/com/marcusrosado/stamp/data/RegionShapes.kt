@@ -7,7 +7,35 @@ class RegionShape(
     /** The region's GeoNames id, such as "JP.15". */
     val id: String,
     val polygons: List<List<DoubleArray>>,
-)
+) {
+    // The box around it, so most points are ruled out without walking a ring.
+    private val box: DoubleArray = DoubleArray(4).also { b ->
+        b[0] = 90.0; b[1] = 180.0; b[2] = -90.0; b[3] = -180.0
+        for (ring in polygons.flatten()) for (k in 0 until ring.size / 2) {
+            val la = ring[2 * k]; val lo = ring[2 * k + 1]
+            if (la < b[0]) b[0] = la; if (lo < b[1]) b[1] = lo; if (la > b[2]) b[2] = la; if (lo > b[3]) b[3] = lo
+        }
+    }
+
+    /** True when the point lies inside the region: inside a polygon's outer ring and none of its holes. */
+    fun contains(lat: Double, lon: Double): Boolean {
+        if (lat < box[0] || lat > box[2] || lon < box[1] || lon > box[3]) return false
+        return polygons.any { rings -> rings.count { inside(it, lat, lon) } % 2 == 1 }
+    }
+
+    private fun inside(ring: DoubleArray, lat: Double, lon: Double): Boolean {
+        var hit = false
+        val n = ring.size / 2
+        var j = n - 1
+        for (i in 0 until n) {
+            val yi = ring[2 * i]; val xi = ring[2 * i + 1]
+            val yj = ring[2 * j]; val xj = ring[2 * j + 1]
+            if ((yi > lat) != (yj > lat) && lon < (xj - xi) * (lat - yi) / (yj - yi) + xi) hit = !hit
+            j = i
+        }
+        return hit
+    }
+}
 
 /**
  * The outlines of each country's regions, as tools/build_regions.py writes them: one small file

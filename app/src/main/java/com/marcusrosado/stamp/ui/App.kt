@@ -116,6 +116,12 @@ class AppState(
     val onRegion: (countryId: String, regionId: String, state: TravelState?) -> Unit = { _, _, _ -> },
     /** Says the user wants to go to a city of a country, or no longer does. */
     val onCityWant: (countryId: String, cityId: String, on: Boolean) -> Unit = { _, _, _ -> },
+    /** The countries drawn as their regions, with their shapes and marks. */
+    val regionView: RegionView = RegionView.EMPTY,
+    /** Takes one visit to a city back; false when none can go without losing what the user told. */
+    val onForgetCity: (cityId: String) -> Boolean = { false },
+    /** One more visit to a city, as a new visit with just that city. */
+    val onBeenToCity: (cityId: String) -> Unit = {},
     /** A region or a found city shown over the map, or none. */
     val spot: Spot? = null,
     val onSpot: (Spot?) -> Unit = {},
@@ -263,6 +269,12 @@ private fun App(
     val scan by app.scanner.state.collectAsStateWithLifecycle()
     // A damaged city list only costs the city features, never the app.
     val places by produceState<Places?>(null) { value = runCatching { app.places.await() }.getOrNull() }
+    // Regions are read and placed off the main thread, again whenever the marks change.
+    val regionView by androidx.compose.runtime.produceState(RegionView.EMPTY, mapView, visits, places, atlas) {
+        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            runCatching { buildRegionView(mapView, atlas, visits, places, app.regionShapes) }.getOrDefault(RegionView.EMPTY)
+        }
+    }
     val airports by produceState<com.marcusrosado.stamp.data.Airports?>(null) { value = runCatching { app.airports.await() }.getOrNull() }
     // Like the city list above it: a damaged file costs the outlines, never the app.
     val cityAreas by produceState(com.marcusrosado.stamp.data.CityAreas.EMPTY) {
@@ -396,6 +408,9 @@ private fun App(
             onSplitRegions = app.visits::setSplitRegions,
             onRegion = app.visits::setRegion,
             onCityWant = app.visits::setCityWant,
+            regionView = regionView,
+            onForgetCity = app.visits::forgetCityVisit,
+            onBeenToCity = { c -> app.visits.newTripAt(c) },
             spot = spot,
             onSpot = { spot = it; if (it != null) selectedId = null },
             followLines = follow,

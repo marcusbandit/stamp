@@ -22,7 +22,9 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Timeline
 import androidx.compose.material.icons.outlined.Bookmark
 import androidx.compose.material.icons.outlined.Flag
@@ -74,23 +76,60 @@ fun regionCountries(view: MapView, atlas: Atlas, visits: Map<String, Visit>): Li
         vs.any { it.splitRegions } || (view == MapView.Regions && vs.isNotEmpty())
     }
 
-/** Each region's mark: visited (lived in a lived country) through a city or by hand, else wanted. */
-fun regionMarks(countries: List<String>, atlas: Atlas, visits: Map<String, Visit>, places: Places?): Map<String, TravelState> {
-    val out = HashMap<String, TravelState>()
+/** What the map needs to draw countries as their regions, worked out together off the main thread. */
+class RegionView(
+    /** The countries drawn as regions. */
+    val countries: List<String>,
+    /** Each region with the id of its country. */
+    val shapes: List<Pair<String, RegionShape>>,
+    /** Each region's mark. */
+    val marks: Map<String, TravelState>,
+    /** Each drawn country's own mark. */
+    val countryMarks: Map<String, TravelState>,
+    /** Countries done in full, outlined in gold. */
+    val complete: Set<String>,
+) {
+    companion object {
+        val EMPTY = RegionView(emptyList(), emptyList(), emptyMap(), emptyMap(), emptySet())
+    }
+}
+
+/**
+ * Every region's mark. A region is been to (lived in, in a lived country) when any place on a
+ * visit lies in it, a city, an address, a pin, a day trip, where a trip set out from or went back
+ * to, or when the user said so; else wanted when the user said so.
+ */
+fun buildRegionView(view: MapView, atlas: Atlas, visits: Map<String, Visit>, places: Places?, rs: com.marcusrosado.stamp.data.RegionShapes): RegionView {
+    val countries = regionCountries(view, atlas, visits)
+    if (countries.isEmpty()) return if (view == MapView.Countries) RegionView.EMPTY.copyComplete(completeCountries(view, atlas, visits, emptyList(), emptyMap())) else RegionView.EMPTY
+    val shapes = countries.flatMap { id -> val a2 = atlas.byId[id]?.alpha2.orEmpty(); if (a2.length == 2) rs.of(a2).map { id to it } else emptyList() }
+    val byCountry = shapes.groupBy({ it.first }, { it.second })
+    val marks = HashMap<String, TravelState>()
     for (id in countries) {
+        val regions = byCountry[id].orEmpty()
         for (v in visitsOf(id, atlas, visits)) {
             val been = if (v.state == TravelState.Lived) TravelState.Lived else TravelState.Visited
-            for (r in v.wantRegions) out.putIfAbsent(r, TravelState.Want)
-            val seen = places?.regionsVisited(v)?.keys ?: v.regions
-            if (v.state.counts) for (r in seen) out[r] = been else for (r in v.regions) out[r] = been
+            for (r in v.wantRegions) marks.putIfAbsent(r, TravelState.Want)
+            val seen = HashSet<String>(v.regions)
+            if (v.state.counts) {
+                places?.regionsVisited(v)?.keys?.let { seen += it }
+                // Every place on a visit, placed on the map, lights the region it lies in.
+                val stops = v.trips.flatMap { t -> t.places + listOfNotNull(t.start, t.end) }.distinct()
+                for (stop in stops) {
+                    val p = placeOf(stop, v, places) ?: continue
+                    regions.firstOrNull { it.contains(p.lat, p.lon) }?.let { seen += it.id }
+                }
+            }
+            for (r in seen) marks[r] = been
         }
     }
-    return out
+    val countryMarks = countries.mapNotNull { id -> atlas.markOf(id, visits, false)?.let { id to it } }.toMap()
+    return RegionView(countries, shapes, marks, countryMarks, completeCountries(view, atlas, visits, shapes, marks))
 }
 
 /**
  * The countries done in full, outlined in gold. In the regions view, a country with every one
- * of its drawn regions visited; in the countries view, every country of a continent where each
+ * of its drawn regions been to; in the countries view, every country of a continent where each
  * one is visited or lived in.
  */
 fun completeCountries(
@@ -107,6 +146,8 @@ fun completeCountries(
         .flatten().map { it.id }.toSet()
     MapView.Cities -> emptySet()
 }
+
+private fun RegionView.copyComplete(c: Set<String>) = RegionView(countries, shapes, marks, countryMarks, c)
 
 /**
  * The view buttons along the bottom of the map: routes on or off, and what the map marks. Only
@@ -170,6 +211,10 @@ fun SpotPanel(
     onState: (TravelState?) -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
+    /** How many visits it was on, with a step either way; null shows no count. */
+    count: Int? = null,
+    onMore: () -> Unit = {},
+    onLess: (() -> Unit)? = null,
 ) {
     val palette = LocalMapPalette.current
     val cs = MaterialTheme.colorScheme
@@ -207,6 +252,22 @@ fun SpotPanel(
                                 color = if (on) palette.ocean else cs.onSurface,
                             )
                         }
+                    }
+                }
+            }
+            if (count != null && count > 0) {
+                Spacer(Modifier.height(8.dp))
+                Row(Modifier.padding(end = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        if (count == 1) "1 visit" else "$count visits",
+                        style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f),
+                    )
+                    androidx.compose.material3.FilledTonalIconButton(onClick = { onLess?.invoke() }, enabled = onLess != null) {
+                        Icon(Icons.Filled.Remove, contentDescription = "One visit fewer")
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    androidx.compose.material3.FilledTonalIconButton(onClick = onMore) {
+                        Icon(Icons.Filled.Add, contentDescription = "One more visit")
                     }
                 }
             }

@@ -516,30 +516,34 @@ private fun StampMap(
             onDismiss = { editing = null },
         )
     }
-    // The regions drawn, their marks, and what is done in full; the shapes are read off the main
-    // thread, a country's file at a time, and only for the countries drawn as regions.
-    val regionIds = remember(state.mapView, state.atlas, state.visits) { regionCountries(state.mapView, state.atlas, state.visits) }
-    val shapes by androidx.compose.runtime.produceState(emptyList<Pair<String, com.marcusrosado.stamp.data.RegionShape>>(), regionIds, state.regionShapes) {
-        val rs = state.regionShapes ?: return@produceState
-        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            regionIds.flatMap { id -> val a2 = state.atlas.byId[id]?.alpha2.orEmpty(); if (a2.length == 2) rs.of(a2).map { id to it } else emptyList() }
+    val rv = state.regionView
+    // The cities view's dots: every city of some size, and every one on a visit or wanted.
+    val cityView = state.mapView == com.marcusrosado.stamp.data.MapView.Cities
+    val allCities by androidx.compose.runtime.produceState(emptyList<CityDot>(), cityView, state.places, state.visits) {
+        val p = state.places
+        if (!cityView || p == null) { value = emptyList(); return@produceState }
+        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            val mine = state.visits.values.flatMap { it.cities + it.wantCities }.toSet()
+            p.byId.values.filter { it.population >= 15_000 || it.id in mine }
+                .map { CityDot(it.id, it.lat, it.lon, it.population, it.id in mine) }
         }
     }
-    val marks = remember(regionIds, state.visits, state.places) { regionMarks(regionIds, state.atlas, state.visits, state.places) }
-    val complete = remember(state.mapView, shapes, marks, state.visits) { completeCountries(state.mapView, state.atlas, state.visits, shapes, marks) }
     val wantCities = remember(state.visits, state.places) {
         state.visits.values.flatMap { v -> v.wantCities.mapNotNull { placeOf(it, v, state.places) } }.map { it.lat to it.lon }.distinct()
     }
     WorldMap(
         animate = animate,
-        regionLayer = if (regionIds.isEmpty()) null else RegionLayer(
-            shapes, marks,
-            remember(regionIds, state.visits) { regionIds.mapNotNull { id -> state.atlas.markOf(id, state.visits, false)?.let { id to it } }.toMap() },
-        ),
-        complete = complete,
+        regionLayer = if (rv.countries.isEmpty()) null else RegionLayer(rv.shapes, rv.marks, rv.countryMarks),
+        complete = rv.complete,
         plain = state.mapView == com.marcusrosado.stamp.data.MapView.Cities,
         wantCities = wantCities,
         onRegion = if (selectable) { cid, rid -> state.onSpot(Spot.Region(cid, rid)) } else null,
+        allCities = allCities,
+        onCity = if (selectable) { id ->
+            val c = state.places?.byId?.get(id)
+            val land = c?.let { state.atlas.landOf(it.lat, it.lon, it.country) }
+            if (c != null && land != null) state.onSpot(Spot.City(land.country, c.id, c.name, c.lat, c.lon))
+        } else null,
         onRoute = if (selectable) { entries ->
             // Within one trip a leg wins over the trip as a whole, such as a layover's dot or a
             // day trip beside it. One leg left: straight to it. Several: ask which.
@@ -666,26 +670,40 @@ private fun SpotFor(state: AppState, spot: Spot) {
     val vs = visitsOf(spot.countryId, state.atlas, state.visits)
     when (spot) {
         is Spot.Region -> {
-            val marks = regionMarks(listOf(spot.countryId), state.atlas, state.visits, state.places)
             SpotPanel(
                 title = state.places?.regionName(spot.regionId) ?: spot.regionId,
                 subtitle = country?.name.orEmpty(),
-                state = marks[spot.regionId]?.let { if (it == TravelState.Lived) TravelState.Visited else it },
+                state = state.regionView.marks[spot.regionId]?.let { if (it == TravelState.Lived) TravelState.Visited else it },
                 choices = listOf(TravelState.Visited, TravelState.Want),
                 onState = { s -> state.onRegion(spot.countryId, spot.regionId, s) },
                 onClose = { state.onSpot(null) },
             )
         }
         is Spot.City -> {
-            val been = vs.any { v -> v.state.counts && spot.cityId in v.cities }
+            // Been here once for every visit the city was on, whatever else those visits hold.
+            val count = vs.filter { it.state.counts }.sumOf { it.visitsTo(spot.cityId) }
+            val wanted = vs.any { spot.cityId in it.wantCities }
+            fun been() {
+                state.onBeenToCity(spot.cityId)
+                if (wanted) state.onCityWant(spot.countryId, spot.cityId, false)
+            }
             SpotPanel(
                 title = spot.name,
                 subtitle = listOfNotNull(state.places?.byId?.get(spot.cityId)?.let { state.places.regionOf(it) }, country?.name).joinToString(", "),
-                state = when { been -> TravelState.Visited; vs.any { spot.cityId in it.wantCities } -> TravelState.Want; else -> null },
-                // A city already been to has nothing left to want.
-                choices = if (been) listOf(TravelState.Visited) else listOf(TravelState.Want),
-                onState = { s -> if (!been) state.onCityWant(spot.countryId, spot.cityId, s == TravelState.Want) },
+                state = when { count > 0 -> TravelState.Visited; wanted -> TravelState.Want; else -> null },
+                choices = listOf(TravelState.Visited, TravelState.Want),
+                onState = { s ->
+                    when {
+                        s == TravelState.Visited && count == 0 -> been()
+                        s == TravelState.Want -> state.onCityWant(spot.countryId, spot.cityId, true)
+                        s == null && wanted -> state.onCityWant(spot.countryId, spot.cityId, false)
+                        // Been here already: the count below takes visits away, one at a time.
+                    }
+                },
                 onClose = { state.onSpot(null) },
+                count = count,
+                onMore = { been() },
+                onLess = { state.onForgetCity(spot.cityId) },
             )
         }
     }
