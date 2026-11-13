@@ -54,6 +54,8 @@ import com.marcusrosado.stamp.data.LegPath
 import com.marcusrosado.stamp.data.Places
 import com.marcusrosado.stamp.data.Step
 import com.marcusrosado.stamp.data.Travel
+import com.marcusrosado.stamp.data.Trip
+import com.marcusrosado.stamp.data.Visit
 
 /**
  * The stretch of the timeline between two stops: how the user got to the next one, named so
@@ -106,6 +108,42 @@ fun LegLine(leg: Leg?, stops: List<String?>, question: String, where: String, li
             }
         }
     }
+}
+
+/**
+ * The picker for the leg of [trip] from [from] to [to], the same from the timeline and from a
+ * line tapped on the map: its ends named and placed, Home where the trip set out from or came
+ * back to the user's home, and the stops along it named as the timeline names them.
+ */
+@Composable
+fun LegEditor(
+    trip: Trip,
+    visit: Visit?,
+    from: String,
+    to: String,
+    onDone: (steps: List<Step>, around: Boolean) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val journey = LocalJourney.current
+    val leg = trip.legBetween(from, to)
+    val a = journey.endPoint(trip, visit, from)
+    val b = journey.endPoint(trip, visit, to)
+    LegPicker(
+        fromName = a?.name ?: if (from == Leg.START) "Home" else "The stop before",
+        toName = b?.name ?: if (to == Leg.END) "Home" else "The next stop",
+        from = a?.let { it.lat to it.lon },
+        to = b?.let { it.lat to it.lon },
+        initial = leg?.steps.orEmpty(),
+        airports = journey.airports,
+        places = journey.places,
+        stopPoint = { journey.stopPoint(it, visit) },
+        stopName = { (placeOf(it, visit, journey.places) ?: journey.place(it))?.name },
+        onDone = onDone,
+        onDismiss = onDismiss,
+        fromHome = from == Leg.START && trip.start == null && journey.homeFor(trip) != null,
+        toHome = to == Leg.END && trip.end == null && journey.homeAtEnd(trip) != null,
+        initialAround = leg?.around == true,
+    )
 }
 
 /**

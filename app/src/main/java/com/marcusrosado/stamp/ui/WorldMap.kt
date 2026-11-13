@@ -94,10 +94,10 @@ fun WorldMap(
     coveredEnd: androidx.compose.ui.unit.Dp = androidx.compose.ui.unit.Dp(0f),
     coveredBottom: androidx.compose.ui.unit.Dp = androidx.compose.ui.unit.Dp(0f),
     /**
-     * Opens what a tapped line is: each trip on it with the leg it draws, as trip id and the
-     * leg's two ends; null leaves lines to taps on the country under them.
+     * Opens what a tapped line is: each trip on the line nearest the finger with the leg it
+     * draws; null leaves lines to taps on the country under them.
      */
-    onRoute: ((List<Triple<String, String, String>>) -> Unit)? = null,
+    onRoute: ((List<RouteTap>) -> Unit)? = null,
     /** False while a page covers the whole map: its icons stop gliding until it shows again. */
     animate: Boolean = true,
 ) {
@@ -128,7 +128,7 @@ fun WorldMap(
             var beforeTap: String? = null
             // Trips on a line just tapped, opened once the tap is sure not to be the first of a
             // double tap, which means zoom.
-            var tappedTrips: List<Triple<String, String, String>>? = null
+            var tappedTrips: List<RouteTap>? = null
             val taps = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
                 override fun onDown(e: MotionEvent): Boolean {
                     // A finger that stops a fling or a fly-to is not choosing a country.
@@ -144,16 +144,7 @@ fun WorldMap(
                     // still picks the country under it.
                     tappedTrips = null
                     if (routeTap != null) {
-                        // Closest first: a tight box, then a wider one, so where two legs meet
-                        // at a stop the one under the finger wins over its neighbour.
-                        val layers = ROUTE_LAYERS.filter { it != "route-icons" }.toTypedArray()
-                        val trips = listOf(3f, 10f).asSequence().map { dp ->
-                            val slack = dp * context.resources.displayMetrics.density
-                            m.queryRenderedFeatures(android.graphics.RectF(e.x - slack, e.y - slack, e.x + slack, e.y + slack), *layers)
-                                .flatMap { f -> f.getStringProperty("trips")?.split(',').orEmpty() }
-                                .mapNotNull { e -> e.split('|').takeIf { it.size == 3 && it[0].isNotEmpty() }?.let { Triple(it[0], it[1], it[2]) } }
-                                .distinct()
-                        }.firstOrNull { it.isNotEmpty() }.orEmpty()
+                        val trips = nearestRoutes(m, e.x, e.y, context.resources.displayMetrics.density)
                         if (trips.isNotEmpty()) { tappedTrips = trips; return false }
                     }
                     // Both fills, since only one of them draws away from the switch-over zoom.
@@ -600,6 +591,46 @@ private class Outline(private val atlas: Atlas, private val split: Boolean, priv
         }
         return Feature.fromGeometry(MultiPolygon.fromLngLats(polygons))
     }
+}
+
+/**
+ * The trips on the line nearest a tap at [x], [y] within 10 dp, and on any line just as near,
+ * such as the way out and the way back drawn over the same rails: what the tap means. Where two
+ * legs meet at a stop, the one under the finger wins over its neighbour.
+ */
+private fun nearestRoutes(m: MapLibreMap, x: Float, y: Float, density: Float): List<RouteTap> {
+    val slack = 10f * density
+    val layers = ROUTE_LAYERS.filter { it != "route-icons" }.toTypedArray()
+    val hits = m.queryRenderedFeatures(android.graphics.RectF(x - slack, y - slack, x + slack, y + slack), *layers)
+    if (hits.isEmpty()) return emptyList()
+    val proj = m.projection
+    // One world's width on screen, for a line drawn past the date line onto the next copy.
+    val world = (512.0 * Math.pow(2.0, m.cameraPosition.zoom) * density).toFloat()
+    fun along(f: Feature): List<List<Point>> = when (val g = f.geometry()) {
+        is LineString -> listOf(g.coordinates())
+        is org.maplibre.geojson.MultiLineString -> g.coordinates()
+        is Point -> listOf(listOf(g))
+        else -> emptyList()
+    }
+    fun gap(ax: Float, ay: Float, bx: Float, by: Float): Float {
+        val dx = bx - ax; val dy = by - ay
+        val len = dx * dx + dy * dy
+        val t = if (len == 0f) 0f else (((x - ax) * dx + (y - ay) * dy) / len).coerceIn(0f, 1f)
+        return kotlin.math.hypot(x - (ax + t * dx), y - (ay + t * dy))
+    }
+    fun distance(f: Feature): Float = along(f).filter { it.isNotEmpty() }.minOfOrNull { line ->
+        val pts = line.map { proj.toScreenLocation(LatLng(it.latitude(), it.longitude())) }
+        listOf(0f, world, -world).minOf { shift ->
+            if (pts.size == 1) kotlin.math.hypot(x - (pts[0].x + shift), y - pts[0].y)
+            else (1 until pts.size).minOf { i -> gap(pts[i - 1].x + shift, pts[i - 1].y, pts[i].x + shift, pts[i].y) }
+        }
+    } ?: Float.MAX_VALUE
+    val ranked = hits.map { it to distance(it) }
+    val best = ranked.minOf { it.second }
+    return ranked.filter { it.second <= best + 2f * density }
+        .flatMap { (f, _) -> f.getStringProperty("trips")?.split(',').orEmpty() }
+        .mapNotNull { RouteTap.decode(it) }
+        .distinct()
 }
 
 /** The legend and status bar along the top, in dp, which a fitted country stays clear of. */

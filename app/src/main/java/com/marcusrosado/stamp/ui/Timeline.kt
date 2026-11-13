@@ -477,24 +477,10 @@ fun VisitTimeline(
             )
         }
         leg?.let { (from, to) ->
-            val l = trip.legBetween(from, to)
-            val a = journey.endPoint(trip, visit, from)
-            val b = journey.endPoint(trip, visit, to)
-            LegPicker(
-                fromName = a?.name ?: nameOf(from),
-                toName = b?.name ?: nameOf(to),
-                from = a?.let { it.lat to it.lon },
-                to = b?.let { it.lat to it.lon },
-                initial = l?.steps.orEmpty(),
-                airports = journey.airports,
-                places = places,
-                stopPoint = { journey.stopPoint(it, visit) },
-                stopName = { (placeOf(it, visit, places) ?: journey.place(it))?.name },
+            LegEditor(
+                trip, visit, from, to,
                 onDone = { steps, around -> actions.onLeg(from, to, steps, around); leg = null },
-                initialAround = l?.around == true,
                 onDismiss = { leg = null },
-                fromHome = from == com.marcusrosado.stamp.data.Leg.START && trip.start == null && journey.homeFor(trip) != null,
-                toHome = to == com.marcusrosado.stamp.data.Leg.END && trip.end == null && journey.homeAtEnd(trip) != null,
             )
         }
         if (ordering) {
