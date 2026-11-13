@@ -40,7 +40,7 @@ class LegsTest {
         assertTrue(trip(store()).legs.isEmpty())
     }
 
-    @Test fun aLegLeftBehindByAReorderIsNotSaved() {
+    @Test fun aLegLeftBehindByAReorderIsBackWhenTheStopsAreAgain() {
         val s = store()
         s.set("JPN", TravelState.Visited)
         val id = trip(s).id
@@ -48,8 +48,11 @@ class LegsTest {
         s.setLeg(id, "tokyo", "osaka", listOf(Step(Travel.Train)))
         s.setLeg(id, "osaka", "kyoto", listOf(Step(Travel.Walk)))
         s.setStopOrder(id, listOf("tokyo", "kyoto", "osaka"))
-        val t = trip(store())
-        assertTrue(t.legs.isEmpty())
+        // Out of order, neither leg shows.
+        assertTrue(trip(store()).currentLegs.isEmpty())
+        s.setStopOrder(id, listOf("tokyo", "osaka", "kyoto"))
+        assertEquals(listOf(Travel.Train), trip(store()).waysBetween("tokyo", "osaka"))
+        assertEquals(listOf(Travel.Walk), trip(store()).waysBetween("osaka", "kyoto"))
     }
 
     @Test fun aRemovedStopTakesItsLegsWithItInThisSessionToo() {

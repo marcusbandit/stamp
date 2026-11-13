@@ -12,7 +12,8 @@ import java.util.concurrent.TimeUnit
 /**
  * Keeps a report of every crash on the phone: when, which build, which device, the stack trace,
  * how full the memory was and the app's own last log lines. Reports stay in the app's external
- * files folder, where adb can read them, and leave the phone only when the user shares them from
+ * files folder, where adb can read them, or in the no-backup folder when there is no external one,
+ * so no backup ever carries them. They leave the phone only when the user shares them from
  * Settings. The last [KEEP] are kept.
  */
 object CrashLog {
@@ -32,7 +33,7 @@ object CrashLog {
     }
 
     fun dir(context: Context): File =
-        File(context.getExternalFilesDir(null) ?: context.filesDir, "crashes")
+        File(context.getExternalFilesDir(null) ?: context.noBackupFilesDir, "crashes")
 
     /** The kept reports, newest first. */
     fun reports(context: Context): List<File> =

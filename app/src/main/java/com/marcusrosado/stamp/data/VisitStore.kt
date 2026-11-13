@@ -569,9 +569,9 @@ class VisitStore(private val file: File) {
                 slept = t.slept.filterValues { !lost(it) },
             )
         }
-        // A leg whose stops no longer follow each other is gone, here as on disk, so it never
-        // comes back when the stops line up again.
-        trips = trips.map { t -> t.currentLegs.let { keep -> if (keep.size == t.legs.size) t else t.copy(legs = keep) } }
+        // A leg goes with a stop it ran to or from. One whose stops were only reordered apart
+        // stays, unseen, and is back when the stops line up again.
+        trips = trips.map { t -> t.keptLegs.let { keep -> if (keep.size == t.legs.size) t else t.copy(legs = keep) } }
         val g = geo
         if (g != null) {
             trips = trips.map { t ->
@@ -676,8 +676,8 @@ class VisitStore(private val file: File) {
         if (t.cities.isNotEmpty()) put("cities", JSONArray(t.cities))
         if (t.arrived.isNotEmpty()) put("arrived", JSONObject(t.arrived.mapValues { it.value.key }))
         if (t.left.isNotEmpty()) put("left", JSONObject(t.left.mapValues { it.value.key }))
-        // Only legs between stops that still follow each other are kept.
-        t.currentLegs.takeIf { it.isNotEmpty() }?.let { legs ->
+        // Only legs whose stops are both still on the trip are kept.
+        t.keptLegs.takeIf { it.isNotEmpty() }?.let { legs ->
             put("legs", JSONArray(legs.map { l ->
                 JSONObject().put("from", l.from).put("to", l.to)
                     .put("steps", JSONArray(l.steps.map { st -> JSONObject().apply { st.way?.let { put("way", it.key) }; st.to?.let { put("to", it) } } }))

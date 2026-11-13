@@ -111,4 +111,11 @@ class RouteNetTest {
         val net = RouteNet.read(pack(listOf(55.0 to 10.0, 55.0 to 11.0), listOf(Triple(0, 1, 0 to listOf(55.7 to 10.5)))))
         assertNotNull(net.follow(Travel.Train, 55.0 to 10.0, 55.0 to 11.0))
     }
+
+    @Test fun aShortRideIsNeverPulledToALineFarOff() {
+        // Two towns about 13 km apart whose only line runs some 55 km north and back: far more
+        // than any real long way round, so the leg stays straight.
+        val net = RouteNet.read(pack(listOf(55.0 to 10.0, 55.0 to 10.2), listOf(Triple(0, 1, 0 to listOf(55.5 to 10.1)))))
+        assertNull(net.follow(Travel.Train, 55.0 to 10.0, 55.0 to 10.2))
+    }
 }

@@ -51,7 +51,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Hotel
-import androidx.compose.material.icons.filled.DragHandle
+import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.SubdirectoryArrowRight
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.PlayArrow
@@ -94,7 +94,9 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -123,7 +125,10 @@ class TimelineActions(
     val onStopDates: (place: String, arrived: PartialDate?, left: PartialDate?) -> Unit,
     /** Puts the trip's stops in a new order. */
     val onStopOrder: (cities: List<String>) -> Unit,
-    /** Sets how the user went from one stop to the next, and a flight's airports; no ways clears it. */
+    /**
+     * Sets how the user went from one stop to the next, as its steps, each with its way and the
+     * stop it ended at; steps with no way said and no stop named clear the leg.
+     */
     val onLeg: (from: String, to: String, steps: List<com.marcusrosado.stamp.data.Step>, around: Boolean) -> Unit,
     /** Sets where the trip set out from, a city or pin id; null is home. */
     val onStart: (place: String?) -> Unit = {},
@@ -164,12 +169,14 @@ fun VisitTimeline(
     val phone = androidx.compose.ui.platform.LocalConfiguration.current.smallestScreenWidthDp < 600
     var showMap by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(phone) }
     val list = androidx.compose.foundation.lazy.rememberLazyListState()
-    // The stop the reader has reached: the last node above a line a third of the way down.
+    // The stop the reader has reached: the last node above a line a third of the way down, or
+    // the end once the list is scrolled as far as it goes with the end in view.
     val reached by remember(trip) {
         androidx.compose.runtime.derivedStateOf {
             val info = list.layoutInfo
             val line = info.viewportStartOffset + (info.viewportEndOffset - info.viewportStartOffset) / 3
-            info.visibleItemsInfo.filter { isNode(it.key) }.lastOrNull { it.offset <= line }?.key as? String
+            if (!list.canScrollForward && info.visibleItemsInfo.any { it.key == "end" }) "end"
+            else info.visibleItemsInfo.filter { isNode(it.key) }.lastOrNull { it.offset <= line }?.key as? String
         }
     }
     // Homes read in the order they were moved into; a trip's stops in the order travelled.
@@ -188,6 +195,12 @@ fun VisitTimeline(
         if (journeys) add("leg-${trip.cities.last()}-end")
         add("end")
     }
+    // The line lights from the start down to the node reached: an item's line in from above once
+    // the journey has come this far, and its line on once it has passed it. Every item lights
+    // by its own place in the list, the add-stop row and the legs included.
+    val reachedItem = reached?.let { itemKeys.indexOf(it) } ?: -1
+    fun cameTo(key: String) = reachedItem >= itemKeys.indexOf(key)
+    fun passed(key: String) = reachedItem > itemKeys.indexOf(key)
     val reachedAt = reached?.let { order.indexOf(it) } ?: -1
     // The stop reached; past the last one the map stays on it rather than flying back to the first.
     val at = (reached?.takeIf { it.startsWith("stop-") }?.removePrefix("stop-")
@@ -201,7 +214,7 @@ fun VisitTimeline(
     var pickingEnd by remember { mutableStateOf<Boolean?>(null) }
     // The stops being put in order.
     var ordering by remember { mutableStateOf(false) }
-    val haptics = androidx.compose.ui.platform.LocalHapticFeedback.current
+    val haptics = LocalHapticFeedback.current
     val journey = LocalJourney.current
     // A visit is a journey from somewhere and back; a stay is where the user lived.
     val journeyed = !lived
@@ -213,7 +226,7 @@ fun VisitTimeline(
         else -> placeOf(id, visit, places)?.name ?: journey.place(id)?.name ?: "the next stop"
     }
     @Composable
-    fun legRow(from: String, to: String, litAt: Int) {
+    fun legRow(from: String, to: String, key: String) {
         val l = trip.legBetween(from, to)
         LegLine(
             leg = l,
@@ -221,7 +234,7 @@ fun VisitTimeline(
             question = if (to == com.marcusrosado.stamp.data.Leg.END && trip.end == null) "How did you get home?"
                 else "How did you get to ${nameOf(to)}?",
             where = if (to == com.marcusrosado.stamp.data.Leg.END && trip.end == null) "home" else "to ${nameOf(to)}",
-            lit = reachedAt >= litAt,
+            lit = passed(key),
             onClick = { leg = from to to },
         )
     }
@@ -271,7 +284,7 @@ fun VisitTimeline(
                         icon = { Icon(if (lived) Icons.Outlined.Home else Icons.Outlined.Flight, contentDescription = null, modifier = Modifier.size(18.dp)) },
                         first = true,
                         last = false,
-                        lit = reachedAt >= 1,
+                        lit = passed("start"),
                     ) {
                         if (journeyed) {
                             PlaceLine(
@@ -286,6 +299,8 @@ fun VisitTimeline(
                                     else trip.date?.let { "Arrived in ${country.name} · ${it.label}" } ?: "When did you get there?",
                                 muted = trip.date == null,
                                 onClick = { editingDates = true },
+                                // A long label wraps beside the memory button rather than pushing it out.
+                                modifier = Modifier.weight(1f, fill = false),
                             )
                             if (loose.isEmpty()) {
                                 Spacer(Modifier.width(8.dp))
@@ -297,7 +312,7 @@ fun VisitTimeline(
                 }
                 if (journeyed && trip.cities.isNotEmpty()) {
                     val first = trip.cities.first()
-                    item(key = "leg-start-$first") { legRow(com.marcusrosado.stamp.data.Leg.START, first, litAt = 1) }
+                    item(key = "leg-start-$first") { legRow(com.marcusrosado.stamp.data.Leg.START, first, "leg-start-$first") }
                 }
                 stops.forEachIndexed { i, place ->
                     item(key = "stop-$place") {
@@ -310,8 +325,8 @@ fun VisitTimeline(
                             first = false,
                             last = false,
                             accent = true,
-                            lit = reachedAt >= i + 2,
-                            reached = reachedAt >= i + 1,
+                            lit = passed("stop-$place"),
+                            reached = cameTo("stop-$place"),
                         ) {
                             val days = trip.dayPlaces[place].orEmpty()
                             val bed = trip.bedOf(place)
@@ -322,7 +337,7 @@ fun VisitTimeline(
                                 Column(
                                     Modifier.weight(1f).clip(RoundedCornerShape(12.dp)).combinedClickable(
                                         onClick = { actions.onOpenPlace(place) },
-                                        onLongClick = if (canOrder) ({ haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress); ordering = true }) else null,
+                                        onLongClick = if (canOrder) ({ haptics.performHapticFeedback(HapticFeedbackType.LongPress); ordering = true }) else null,
                                     ),
                                 ) {
                                     Text(
@@ -339,7 +354,7 @@ fun VisitTimeline(
                                 // Homes keep the order they were moved into; only a trip's stops move.
                                 if (canOrder) {
                                     IconButton(onClick = { ordering = true }, modifier = Modifier.size(40.dp)) {
-                                        Icon(Icons.Filled.DragHandle, contentDescription = "Reorder stops", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        Icon(Icons.Filled.SwapVert, contentDescription = "Reorder stops", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                                     }
                                 }
                             }
@@ -355,8 +370,16 @@ fun VisitTimeline(
                             Spacer(Modifier.height(6.dp))
                             val kept = trip.memories.filter { it.place == place }
                             // The dates, and beside them what the stop can still take, so a stop
-                            // with nothing more said is three short lines.
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            // with nothing more said is three short lines. The buttons wrap below
+                            // the dates when there is no room, 12 dp apart so their touch areas
+                            // never overlap, and stay clear of the track down the right edge.
+                            @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+                            androidx.compose.foundation.layout.FlowRow(
+                                Modifier.padding(end = 16.dp),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                                itemVerticalAlignment = Alignment.CenterVertically,
+                            ) {
                                 StopDatesPill(from, to, onClick = { stopDates = place })
                                 if (kept.isEmpty()) Bubble(Icons.Outlined.AddAPhoto, "Add a memory") { adding = place }
                                 if (!lived) Bubble(Icons.Filled.SubdirectoryArrowRight, "Add a day trip") { actions.onAddDayPlace(place) }
@@ -365,7 +388,7 @@ fun VisitTimeline(
                         }
                     }
                     if (!lived) stops.getOrNull(i + 1)?.let { next ->
-                        item(key = "leg-$place-$next") { legRow(place, next, litAt = i + 2) }
+                        item(key = "leg-$place-$next") { legRow(place, next, "leg-$place-$next") }
                     }
                 }
                 item(key = "add-stop") {
@@ -374,6 +397,8 @@ fun VisitTimeline(
                         first = false,
                         last = false,
                         faint = true,
+                        lit = passed("add-stop"),
+                        reached = cameTo("add-stop"),
                     ) {
                         TextButton(onClick = actions.onAddStop) {
                             Text(
@@ -388,14 +413,14 @@ fun VisitTimeline(
                 }
                 if (journeyed && trip.cities.isNotEmpty()) {
                     val last = trip.cities.last()
-                    item(key = "leg-$last-end") { legRow(last, com.marcusrosado.stamp.data.Leg.END, litAt = order.size - 1) }
+                    item(key = "leg-$last-end") { legRow(last, com.marcusrosado.stamp.data.Leg.END, "leg-$last-end") }
                 }
                 item(key = "end") {
                     Node(
                         icon = { Icon(Icons.Outlined.Home, contentDescription = null, modifier = Modifier.size(18.dp)) },
                         first = false,
                         last = true,
-                        reached = reachedAt >= order.size - 1,
+                        reached = cameTo("end"),
                     ) {
                         if (journeyed) {
                             PlaceLine(
@@ -477,28 +502,16 @@ fun VisitTimeline(
             )
         }
         leg?.let { (from, to) ->
-            val l = trip.legBetween(from, to)
-            val a = journey.endPoint(trip, visit, from)
-            val b = journey.endPoint(trip, visit, to)
-            LegPicker(
-                fromName = a?.name ?: nameOf(from),
-                toName = b?.name ?: nameOf(to),
-                from = a?.let { it.lat to it.lon },
-                to = b?.let { it.lat to it.lon },
-                initial = l?.steps.orEmpty(),
-                airports = journey.airports,
-                places = places,
-                stopPoint = { journey.stopPoint(it, visit) },
-                stopName = { (placeOf(it, visit, places) ?: journey.place(it))?.name },
+            LegEditor(
+                trip, visit, from, to,
                 onDone = { steps, around -> actions.onLeg(from, to, steps, around); leg = null },
-                initialAround = l?.around == true,
                 onDismiss = { leg = null },
-                fromHome = from == com.marcusrosado.stamp.data.Leg.START && trip.start == null && journey.homeFor(trip) != null,
-                toHome = to == com.marcusrosado.stamp.data.Leg.END && trip.end == null && journey.homeAtEnd(trip) != null,
             )
         }
         if (ordering) {
-            val cities = trip.cities
+            // The stops as they were when the dialog opened: the order it hands back indexes
+            // into these, whatever a scan does to the trip meanwhile.
+            val cities = remember { trip.cities }
             StopOrderDialog(
                 names = cities.map { placeOf(it, visit, places)?.name ?: journey.place(it)?.name ?: "Unknown place" },
                 onDone = { order -> actions.onStopOrder(order.map { cities[it] }); ordering = false },
@@ -633,7 +646,7 @@ private fun Node(
     val line = MaterialTheme.colorScheme.outlineVariant
     // The accent draws on downward as the journey reaches the node and passes it, in step
     // with the legs between, so it reads as one line from the start to where the user is.
-    val spec = androidx.compose.animation.core.tween<Float>(420, easing = androidx.compose.animation.core.FastOutSlowInEasing)
+    val spec = TRACK_DRAW
     val inDrawn by androidx.compose.animation.core.animateFloatAsState(if (reached) 1f else 0f, spec, label = "in")
     val outDrawn by androidx.compose.animation.core.animateFloatAsState(if (lit) 1f else 0f, spec, label = "out")
     val primary = MaterialTheme.colorScheme.primary
@@ -672,12 +685,12 @@ private fun Node(
 }
 
 @Composable
-private fun DateLine(label: String, muted: Boolean, onClick: () -> Unit) {
+private fun DateLine(label: String, muted: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
     Text(
         label,
         style = MaterialTheme.typography.titleMedium,
         color = if (muted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-        modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable(onClick = onClick).padding(vertical = 6.dp),
+        modifier = modifier.clip(RoundedCornerShape(8.dp)).clickable(onClick = onClick).padding(vertical = 6.dp),
     )
 }
 
@@ -722,8 +735,7 @@ private fun BedButton(slept: Boolean, onClick: () -> Unit) {
     }
 }
 
-/** Moving a stop earlier or later, kept in a menu so the stops themselves stay calm. */
-/** The small things a stop can still take, as quiet chips rather than empty tiles. */
+/** A round icon button beside a stop's dates, for something the stop can still take. */
 @Composable
 private fun Bubble(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit) {
     Surface(
@@ -731,7 +743,7 @@ private fun Bubble(icon: androidx.compose.ui.graphics.vector.ImageVector, label:
         shape = CircleShape,
         color = MaterialTheme.colorScheme.surface,
         border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        modifier = Modifier.size(36.dp),
+        modifier = Modifier.size(40.dp),
     ) {
         Box(contentAlignment = Alignment.Center) {
             Icon(icon, contentDescription = label, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
@@ -807,7 +819,7 @@ private fun DatePart(d: PartialDate?, guessed: Boolean) {
 /** A stop's photos, videos and moments in a row, ending with a tile that adds another. */
 @Composable
 private fun MemoryRow(memories: List<Memory>, onOpen: (Memory) -> Unit, onAdd: () -> Unit) {
-    // With nothing kept yet, a quiet chip asks instead of an empty tile on every stop.
+    // With nothing kept yet, the memory button beside the dates asks instead of an empty tile.
     if (memories.isEmpty()) return
     Spacer(Modifier.height(10.dp))
     // A plain scrolling row, not a lazy one: the timeline row around it measures its height.
@@ -1048,6 +1060,22 @@ private fun BigChoice(icon: androidx.compose.ui.graphics.vector.ImageVector, lab
 private fun MemoryViewer(memory: Memory, onSave: (Memory) -> Unit, onRemove: () -> Unit, onDismiss: () -> Unit) {
     val context = LocalContext.current
     var text by remember(memory.id) { mutableStateOf(memory.text) }
+    var removing by remember(memory.id) { mutableStateOf(false) }
+    if (removing) {
+        LossDialog(
+            Loss(
+                "Remove this memory?",
+                when {
+                    memory.media == null -> "What you wrote goes with it."
+                    else -> "The ${if (memory.video) "video" else "photo"} stays in your gallery" +
+                        if (memory.text.isNotBlank()) "; its note goes." else "."
+                },
+                "Remove",
+            ),
+            onConfirm = { removing = false; onRemove() },
+            onDismiss = { removing = false },
+        )
+    }
     val screen = 1600
     // A written moment emptied of its words is gone, not an empty tile.
     fun finish() {
@@ -1083,7 +1111,7 @@ private fun MemoryViewer(memory: Memory, onSave: (Memory) -> Unit, onRemove: () 
                         placeholder = { Text(if (memory.media == null) "What happened here?" else "Add a note") },
                     )
                     Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(onClick = onRemove) { Icon(Icons.Filled.Delete, contentDescription = "Remove memory") }
+                        IconButton(onClick = { removing = true }) { Icon(Icons.Filled.Delete, contentDescription = "Remove memory") }
                         Spacer(Modifier.weight(1f))
                         TextButton(onClick = ::finish) { Text("Done") }
                     }
@@ -1114,6 +1142,7 @@ private fun RangeDialog(
     var editing by remember { mutableStateOf<Int?>(null) }
     SeamAlertDialog(
         onDismissRequest = onDismiss,
+        outsideCloses = a == from && b == to,
         title = { Text(title) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -1188,6 +1217,9 @@ private fun window(from: PartialDate?, to: PartialDate?): Pair<Long, Long>? {
     val slack = 14 * 3_600_000L
     return start(from) - slack to end(endDate).coerceAtLeast(start(from)) + slack
 }
+
+/** How the accent draws down the timeline's line, the same for its nodes and its legs. */
+internal val TRACK_DRAW = androidx.compose.animation.core.tween<Float>(420, easing = androidx.compose.animation.core.FastOutSlowInEasing)
 
 /** The timeline's nodes, by their list keys: the start, each stop and the way home. */
 private fun isNode(key: Any): Boolean = key is String && (key == "start" || key == "end" || key.startsWith("stop-"))

@@ -139,6 +139,13 @@ data class Trip(
     val currentLegs: List<Leg>
         get() = legEnds.mapNotNull { (a, b) -> legBetween(a, b) }
 
+    /**
+     * The legs worth keeping: both ends still on the trip. One left behind by a reorder stays,
+     * unseen, so it is there again when the stops are put back.
+     */
+    val keptLegs: List<Leg>
+        get() = legs.filter { (it.from == Leg.START || it.from in cities) && (it.to == Leg.END || it.to in cities) }
+
     val isBlank: Boolean
         get() = date == null && until == null && cities.isEmpty() && !now && memories.isEmpty()
 

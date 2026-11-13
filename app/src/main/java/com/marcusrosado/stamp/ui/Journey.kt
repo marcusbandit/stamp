@@ -102,12 +102,15 @@ class Journey(
     fun routes(trip: Trip, visit: Visit?): List<MapRoute> {
         // Homes are where the user lived, not a journey: nothing to draw between them.
         if (visit?.state == com.marcusrosado.stamp.data.TravelState.Lived) return emptyList()
-        // A stop that cannot be placed is skipped and its neighbours joined; the way there and
-        // the way home stay with whichever stop is now first or last.
-        val stops = trip.cities.filter { endPoint(trip, visit, it) != null }
+        // A stop that cannot be placed is skipped and its neighbours joined by a plain line that
+        // is no leg of the trip, so a tap on it opens the trip. The way there and the way home
+        // only draw when the first and last stops themselves are placed.
+        val all = listOf(Leg.START) + trip.cities + Leg.END
+        val placed = all.indices.filter { it == 0 || it == all.lastIndex || endPoint(trip, visit, all[it]) != null }
+        val stops = placed.drop(1).dropLast(1).map { all[it] }
         if (stops.isEmpty()) return emptyList()
-        val ends = (listOf(Leg.START) + stops + Leg.END).zipWithNext()
-        return ends.flatMap { (a, b) -> legRoute(trip, visit, a, b) } + stops.flatMap { dayRoutes(trip, visit, it) }
+        return placed.zipWithNext().flatMap { (i, j) -> legRoute(trip, visit, all[i], all[j], joined = j != i + 1) } +
+            stops.flatMap { dayRoutes(trip, visit, it) }
     }
 
     /**
@@ -124,27 +127,28 @@ class Journey(
         }
     }
 
-    private fun legRoute(trip: Trip, visit: Visit?, a: String, b: String): List<MapRoute> {
-        // The leg's own ends as the trip keeps them: the way there and home belong to the
-        // first and last stops, whichever stops could be placed.
-        val ends = when {
-            a == Leg.START -> a to trip.cities.first()
-            b == Leg.END -> trip.cities.last() to b
-            else -> a to b
-        }
-        val leg = trip.legBetween(ends.first, ends.second)
+    /**
+     * The line from [a] to [b]. A [joined] line runs across a stop that cannot be placed: it is
+     * no leg the trip keeps, so it draws plain and a tap on it opens the trip. The way there or
+     * home across such a stop ends nowhere the map can draw, so it is left out.
+     */
+    private fun legRoute(trip: Trip, visit: Visit?, a: String, b: String, joined: Boolean): List<MapRoute> {
+        if (joined && (a == Leg.START || b == Leg.END)) return emptyList()
+        val leg = if (joined) null else trip.legBetween(a, b)
         if ((a == Leg.START || b == Leg.END) && leg == null) return emptyList()
         val from = endPoint(trip, visit, a) ?: return emptyList()
         val to = endPoint(trip, visit, b) ?: return emptyList()
         val steps = leg?.steps.orEmpty()
+        // Each stop between looked up once, for the line and for its dot alike.
+        val at = steps.mapNotNull { it.to }.distinct().associateWith { stopPoint(it, visit) }
         val follow = lines?.let { net -> { w: Travel, x: Pair<Double, Double>, y: Pair<Double, Double> -> net.follow(w, x, y) } }
         return LegPath.route(
-            from.lat to from.lon, to.lat to to.lon, steps, { stopPoint(it, visit) }, follow, leg?.around == true,
+            from.lat to from.lon, to.lat to to.lon, steps, { at[it] }, follow, leg?.around == true,
             fromHome = a == Leg.START, toHome = b == Leg.END,
         )
-            .map { (points, way) -> MapRoute(points, way, trip = trip.id, leg = ends) } +
+            .map { (points, way) -> MapRoute(points, way, trip = trip.id, leg = if (joined) null else a to b) } +
             // The stops between, airports and stations, as points that mark nothing.
-            steps.dropLast(1).mapNotNull { st -> st.to?.let { stopPoint(it, visit) } }
+            steps.dropLast(1).mapNotNull { st -> st.to?.let { at[it] } }
                 .map { MapRoute(listOf(it), null, ghost = true, trip = trip.id) }
     }
 }

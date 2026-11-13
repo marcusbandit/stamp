@@ -285,18 +285,24 @@ private fun MapPane(state: AppState, sidePanel: Boolean, bottomInset: Dp) {
             // On the thumb's side: left on the big screen, flat or bent, and right on the folded phone.
             val left = state.posture == Posture.Unfolded
             if (hinge != null || sidePanel || selected == null) {
+                var menuOpen by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
                 ActionMenu(
                     state,
+                    open = menuOpen,
+                    onOpen = { menuOpen = it },
                     Modifier.align(if (left) Alignment.BottomStart else Alignment.BottomEnd)
                         .padding(start = if (left) 4.dp else 0.dp, end = if (left) 0.dp else 4.dp, bottom = bottomInset),
                     left = left,
                 )
-                // Where am I, like any map app: above the main button, on the same side.
-                LocateButton(
-                    state,
-                    Modifier.align(if (left) Alignment.BottomStart else Alignment.BottomEnd)
+                // Where am I, like any map app: above the main button, on the same side. It steps
+                // aside while the menu is open, whose items rise through the same place.
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = !menuOpen,
+                    modifier = Modifier.align(if (left) Alignment.BottomStart else Alignment.BottomEnd)
                         .padding(start = if (left) 20.dp else 0.dp, end = if (left) 0.dp else 20.dp, bottom = bottomInset + 96.dp),
-                )
+                    enter = androidx.compose.animation.fadeIn() + androidx.compose.animation.scaleIn(),
+                    exit = androidx.compose.animation.fadeOut() + androidx.compose.animation.scaleOut(),
+                ) { LocateButton(state, Modifier) }
             }
             // The card slides up from the bottom and back down, rather than appearing at once. It
             // keeps showing the last country while it leaves.
@@ -424,6 +430,7 @@ private fun Card(state: AppState, shown: com.marcusrosado.stamp.data.Country, mo
         partOf = shown.takeIf { it.isPart }?.let { state.atlas.byId[it.country]?.name },
         markedParts = if (state.split || shown.isPart) emptyList() else state.atlas.partsOf(shown.id)
             .mapNotNull { p -> state.visits[p.id]?.let { p.id to "${p.name} · ${it.state.short}" } },
+        partVisits = if (state.split || shown.isPart) emptyList() else state.atlas.partsOf(shown.id).mapNotNull { state.visits[it.id] },
         onOpenPart = { state.onSelect(it) },
         countryLabel = state.countryLabel,
         landName = { state.atlas.byId[it]?.name ?: it },
@@ -451,30 +458,42 @@ private fun StampMap(
 ) {
     val selected = state.selected
     // A tapped line opens the picker for the leg it draws, right over the map: no country
-    // picked, no trip opened, and closing it leaves the map as it was. A line several trips
-    // share, such as the way out of the home town, asks which trip first.
-    var choosing by remember { mutableStateOf<List<Triple<String, String, String>>?>(null) }
-    var editing by remember { mutableStateOf<Triple<String, String, String>?>(null) }
+    // picked, no trip opened, and closing it leaves the map as it was. Where several legs lie
+    // under the finger, such as the way out and the way back over the same rails, or a line
+    // several trips share, it asks which first.
+    var choosing by remember { mutableStateOf<List<RouteTap>?>(null) }
+    var editing by remember { mutableStateOf<RouteTap?>(null) }
     val journey = LocalJourney.current
-    fun open(entry: Triple<String, String, String>) {
-        if (entry.second.isEmpty()) state.onOpenTrip(entry.first) else editing = entry
+    fun visitOf(tripId: String) = journey.visits.values.firstOrNull { v -> v.trips.any { it.id == tripId } }
+    fun open(entry: RouteTap) {
+        if (entry.leg == null) state.onOpenTrip(entry.trip) else editing = entry
     }
     choosing?.let { entries ->
+        val oneTrip = entries.map { it.trip }.distinct().size == 1
         SeamAlertDialog(
             onDismissRequest = { choosing = null },
-            title = { Text("Which trip?") },
+            title = { Text(if (oneTrip) "Which leg?" else "Which trip?") },
             text = {
                 Column {
                     entries.forEach { e ->
-                        val t = state.trips.firstOrNull { it.id == e.first } ?: return@forEach
+                        val visit = visitOf(e.trip)
+                        val t = visit?.trips?.firstOrNull { it.id == e.trip } ?: return@forEach
                         val where = t.lands.mapNotNull { state.atlas.byId[it]?.name }.distinct().joinToString("  →  ")
+                        // A leg reads as its two ends, the way the trip page names them.
+                        fun end(id: String) = journey.endPoint(t, visit, id)?.name?.substringBefore(',')?.trim()
+                            ?: if (id == com.marcusrosado.stamp.data.Leg.START || id == com.marcusrosado.stamp.data.Leg.END) "Home" else "A stop"
+                        val legName = e.leg?.let { (a, b) -> "${end(a)}  →  ${end(b)}" }
                         Row(
                             Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
                                 .clickable { choosing = null; open(e) }.padding(vertical = 10.dp, horizontal = 4.dp),
                         ) {
                             Column {
-                                Text(where.ifEmpty { "A trip" }, style = MaterialTheme.typography.bodyLarge)
-                                rangeLabel(t.date, t.until)?.let {
+                                Text(
+                                    if (oneTrip) legName ?: where.ifEmpty { "A trip" } else where.ifEmpty { "A trip" },
+                                    style = MaterialTheme.typography.bodyLarge,
+                                )
+                                val second = if (oneTrip) rangeLabel(t.date, t.until) else listOfNotNull(legName, rangeLabel(t.date, t.until)).joinToString(" · ").ifEmpty { null }
+                                second?.let {
                                     Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                             }
@@ -485,35 +504,24 @@ private fun StampMap(
             confirmButton = { androidx.compose.material3.TextButton(onClick = { choosing = null }) { Text("Cancel") } },
         )
     }
-    editing?.let { (tripId, from, to) ->
-        val visit = journey.visits.values.firstOrNull { v -> v.trips.any { it.id == tripId } }
-        val trip = visit?.trips?.firstOrNull { it.id == tripId }
+    editing?.let { e ->
+        val (from, to) = e.leg ?: return@let
+        val visit = visitOf(e.trip)
+        val trip = visit?.trips?.firstOrNull { it.id == e.trip }
         if (trip == null) { editing = null; return@let }
-        val leg = trip.legBetween(from, to)
-        val a = journey.endPoint(trip, visit, from)
-        val b = journey.endPoint(trip, visit, to)
-        LegPicker(
-            fromName = a?.name ?: "Home",
-            toName = b?.name ?: "Home",
-            from = a?.let { it.lat to it.lon },
-            to = b?.let { it.lat to it.lon },
-            initial = leg?.steps.orEmpty(),
-            airports = journey.airports,
-            places = journey.places,
-            stopPoint = { journey.stopPoint(it, visit) },
-            stopName = { (placeOf(it, visit, journey.places) ?: journey.place(it))?.name },
-            onDone = { steps, around -> state.details.onLeg(tripId, from, to, steps, around); editing = null },
+        LegEditor(
+            trip, visit, from, to,
+            onDone = { steps, around -> state.details.onLeg(e.trip, from, to, steps, around); editing = null },
             onDismiss = { editing = null },
-            fromHome = from == com.marcusrosado.stamp.data.Leg.START && trip.start == null && journey.homeFor(trip) != null,
-            toHome = to == com.marcusrosado.stamp.data.Leg.END && trip.end == null && journey.homeAtEnd(trip) != null,
-            initialAround = leg?.around == true,
         )
     }
     WorldMap(
         animate = animate,
         onRoute = if (selectable) { entries ->
-            // One line, one trip: straight to its leg. Several trips on it: ask which.
-            if (entries.map { it.first }.distinct().size == 1) open(entries.first()) else choosing = entries.distinctBy { it.first }
+            // Within one trip a leg wins over the trip as a whole, such as a layover's dot or a
+            // day trip beside it. One leg left: straight to it. Several: ask which.
+            val picks = entries.groupBy { it.trip }.values.flatMap { mine -> mine.filter { it.leg != null }.ifEmpty { mine.take(1) } }
+            if (picks.size == 1) open(picks.single()) else if (picks.isNotEmpty()) choosing = picks
         } else null,
         atlas = state.atlas,
         visits = state.visits,
@@ -569,9 +577,8 @@ private fun StampMap(
  */
 @OptIn(androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun ActionMenu(state: AppState, modifier: Modifier, left: Boolean = false) {
-    var open by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
-    BackHandler(enabled = open && state.destination == Destination.Map) { open = false }
+private fun ActionMenu(state: AppState, open: Boolean, onOpen: (Boolean) -> Unit, modifier: Modifier, left: Boolean = false) {
+    BackHandler(enabled = open && state.destination == Destination.Map) { onOpen(false) }
     androidx.compose.material3.FloatingActionButtonMenu(
         expanded = open,
         modifier = modifier,
@@ -582,7 +589,7 @@ private fun ActionMenu(state: AppState, modifier: Modifier, left: Boolean = fals
             val cs = MaterialTheme.colorScheme
             androidx.compose.material3.ToggleFloatingActionButton(
                 checked = open,
-                onCheckedChange = { open = it },
+                onCheckedChange = onOpen,
                 containerColor = { p -> androidx.compose.ui.graphics.lerp(cs.primaryContainer, cs.inverseSurface, p) },
             ) {
                 Icon(
@@ -594,17 +601,17 @@ private fun ActionMenu(state: AppState, modifier: Modifier, left: Boolean = fals
         },
     ) {
         FloatingActionButtonMenuItem(
-            onClick = { open = false; state.onNewTrip() },
+            onClick = { onOpen(false); state.onNewTrip() },
             icon = { Icon(Icons.Filled.Add, contentDescription = null) },
             text = { Text("New trip") },
         )
         FloatingActionButtonMenuItem(
-            onClick = { open = false; state.onFindCity() },
+            onClick = { onOpen(false); state.onFindCity() },
             icon = { Icon(Icons.Outlined.LocationCity, contentDescription = null) },
             text = { Text("Cities") },
         )
         FloatingActionButtonMenuItem(
-            onClick = { open = false; state.onOpenList() },
+            onClick = { onOpen(false); state.onOpenList() },
             icon = { Icon(Icons.Outlined.Public, contentDescription = null) },
             text = { Text("Countries") },
         )

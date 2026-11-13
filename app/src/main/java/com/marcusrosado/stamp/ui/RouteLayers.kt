@@ -45,6 +45,22 @@ data class MapRoute(
     val leg: Pair<String, String>? = null,
 )
 
+/**
+ * What a tap on a line opens: the trip it belongs to and the leg it draws, or the whole trip
+ * when [leg] is null, as for a day trip or a line joined across a stop that cannot be placed.
+ * Kept on the map's features as "trip|from|to", one encoding and one decoding, both here.
+ */
+data class RouteTap(val trip: String, val leg: Pair<String, String>?) {
+    fun encode(): String = "$trip|${leg?.first.orEmpty()}|${leg?.second.orEmpty()}"
+
+    companion object {
+        fun decode(s: String): RouteTap? {
+            val p = s.split('|').takeIf { it.size == 3 && it[0].isNotEmpty() } ?: return null
+            return RouteTap(p[0], if (p[1].isEmpty() || p[2].isEmpty()) null else p[1] to p[2])
+        }
+    }
+}
+
 internal const val SOURCE_ROUTES = "routes"
 internal const val SOURCE_ROUTE_ICONS = "route-icons"
 
@@ -120,8 +136,8 @@ internal fun routeFeatures(routes: List<MapRoute>): FeatureCollection = FeatureC
             else -> null
         }?.apply {
             addStringProperty("way", way?.key ?: "")
-            // Each trip on the line with the leg it is, "trip|from|to", for a tap to open.
-            addStringProperty("trips", same.mapNotNull { r -> r.trip?.let { "$it|${r.leg?.first ?: ""}|${r.leg?.second ?: ""}" } }.distinct().joinToString(","))
+            // Each trip on the line with the leg it is, for a tap to open.
+            addStringProperty("trips", same.mapNotNull { r -> r.trip?.let { RouteTap(it, r.leg).encode() } }.distinct().joinToString(","))
         }
     },
 )

@@ -172,7 +172,43 @@ object LegPath {
     ): List<Pair<List<Pair<Double, Double>>, Travel?>> {
         val s = steps.ifEmpty { listOf(Step(null)) }
         val n = s.size
-        // Every stop of the leg, on the short way round from [a]; null where it cannot be placed.
+        val (known, at) = place(a, b, s, pointOf)
+        // The other way round is one long flight across the globe, not every hop of it.
+        val longest = s.indices.filter { s[it].way == Travel.Plane }
+            .maxByOrNull { kotlin.math.abs(nearest(at[it], at[it + 1]).second - at[it].second) }
+        return s.indices.mapNotNull { k ->
+            val x = at[k]; val y = at[k + 1]
+            val w = s[k].way
+            if (n > 1 && (x == y || Distance.km(x, y) < 1.0)) return@mapNotNull null
+            when {
+                w == null && ((k == 0 && fromHome) || (k == n - 1 && toHome)) -> null
+                w == null -> listOf(x, nearest(x, y)) to null
+                w == Travel.Plane -> points(x, y, w, around && k == longest) to w
+                // Only between two real stops: a guessed one is no place a line runs through.
+                known[k] != null && known[k + 1] != null -> (followed(follow, w, x, y) ?: points(x, y, w)) to w
+                else -> points(x, y, w) to w
+            }
+        }
+    }
+
+    /**
+     * Where each stop of a leg from [a] to [b] sits as [route] draws it, the leg's own ends first
+     * and last: a stop [pointOf] cannot place sits evenly between those that can.
+     */
+    fun stops(
+        a: Pair<Double, Double>, b: Pair<Double, Double>, steps: List<Step>,
+        pointOf: (String) -> Pair<Double, Double>?,
+    ): List<Pair<Double, Double>> = place(a, b, steps.ifEmpty { listOf(Step(null)) }, pointOf).second.toList()
+
+    /**
+     * Every stop of the leg, on the short way round from [a]: as [pointOf] places it, null where
+     * it cannot; and with those filled in evenly between their placed neighbours.
+     */
+    private fun place(
+        a: Pair<Double, Double>, b: Pair<Double, Double>, s: List<Step>,
+        pointOf: (String) -> Pair<Double, Double>?,
+    ): Pair<Array<Pair<Double, Double>?>, Array<Pair<Double, Double>>> {
+        val n = s.size
         val known = arrayOfNulls<Pair<Double, Double>>(n + 1)
         known[0] = a
         known[n] = nearest(a, b)
@@ -190,22 +226,7 @@ object LegPath {
             }
             i = j
         }
-        // The other way round is one long flight across the globe, not every hop of it.
-        val longest = s.indices.filter { s[it].way == Travel.Plane }
-            .maxByOrNull { kotlin.math.abs(nearest(at[it], at[it + 1]).second - at[it].second) }
-        return s.indices.mapNotNull { k ->
-            val x = at[k]; val y = at[k + 1]
-            val w = s[k].way
-            if (n > 1 && (x == y || Distance.km(x, y) < 1.0)) return@mapNotNull null
-            when {
-                w == null && ((k == 0 && fromHome) || (k == n - 1 && toHome)) -> null
-                w == null -> listOf(x, nearest(x, y)) to null
-                w == Travel.Plane -> points(x, y, w, around && k == longest) to w
-                // Only between two real stops: a guessed one is no place a line runs through.
-                known[k] != null && known[k + 1] != null -> (followed(follow, w, x, y) ?: points(x, y, w)) to w
-                else -> points(x, y, w) to w
-            }
-        }
+        return known to at
     }
 
     /**
