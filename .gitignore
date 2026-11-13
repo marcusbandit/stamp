@@ -1,0 +1,24 @@
+.gradle/
+.kotlin/
+build/
+local.properties
+captures/
+.idea/
+*.iml
+.DS_Store
+.env*
+*.jks
+*.keystore
+*.db
+*.local.*
+config.toml
+node_modules
+dist
+.venv
+certs/
+__pycache__/
+# Asset builds: progress and outputs stay local.
+tools/progress
+tools/out/
+out/
+*.duckdb
