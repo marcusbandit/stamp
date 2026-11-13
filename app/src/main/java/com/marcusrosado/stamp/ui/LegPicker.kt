@@ -68,7 +68,7 @@ fun LegLine(leg: Leg?, stops: List<String?>, question: String, where: String, li
     // Drawn down from the stop above as the journey reaches the stop below, like the stops' own lines.
     val drawn by androidx.compose.animation.core.animateFloatAsState(
         if (lit) 1f else 0f,
-        androidx.compose.animation.core.tween(420, easing = androidx.compose.animation.core.FastOutSlowInEasing),
+        TRACK_DRAW,
         label = "leg",
     )
     val line = MaterialTheme.colorScheme.outlineVariant
