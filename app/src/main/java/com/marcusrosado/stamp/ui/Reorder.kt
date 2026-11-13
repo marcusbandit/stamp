@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -29,6 +30,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -38,16 +40,21 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
+import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 /**
  * Puts a trip's stops in order: one short row each, held and dragged to where it belongs, the
  * others moving out of its way as it passes. The handle drags at once; anywhere else on a row
- * drags after a press and hold. Hands back the new order as indexes into [names].
+ * drags after a press and hold, and a screen reader moves a row up or down. Hands back the new
+ * order as indexes into [names].
  */
 @Composable
 fun StopOrderDialog(names: List<String>, onDone: (List<Int>) -> Unit, onDismiss: () -> Unit) {
@@ -56,6 +63,9 @@ fun StopOrderDialog(names: List<String>, onDone: (List<Int>) -> Unit, onDismiss:
     var offset by remember { mutableFloatStateOf(0f) }
     val rowPx = with(LocalDensity.current) { ROW.toPx() }
     val haptics = LocalHapticFeedback.current
+    val scope = rememberCoroutineScope()
+    // Each row's glide to its slot, kept here so a released row can glide home too.
+    val slides = remember { names.indices.map { Animatable(0f) } }
     fun lift(id: Int) {
         dragging = id
         offset = 0f
@@ -73,7 +83,19 @@ fun StopOrderDialog(names: List<String>, onDone: (List<Int>) -> Unit, onDismiss:
             haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
         }
     }
-    fun drop() { dragging = null; offset = 0f }
+    // The released row glides the rest of the way into its slot, as the others do.
+    fun drop() {
+        val id = dragging ?: return
+        val left = offset
+        dragging = null
+        offset = 0f
+        scope.launch { slides[id].snapTo(left); slides[id].animateTo(0f) }
+    }
+    fun move(id: Int, by: Int) {
+        val at = order.indexOf(id)
+        val to = (at + by).coerceIn(0, order.lastIndex)
+        if (to != at) order = order.toMutableList().apply { add(to, removeAt(at)) }
+    }
     SeamAlertDialog(
         onDismissRequest = onDismiss,
         outsideCloses = order == names.indices.toList(),
@@ -87,7 +109,7 @@ fun StopOrderDialog(names: List<String>, onDone: (List<Int>) -> Unit, onDismiss:
                         val at = order.indexOf(id)
                         val lifted = dragging == id
                         // Rows that make room glide to their new place rather than jump.
-                        val slide = remember { Animatable(0f) }
+                        val slide = slides[id]
                         var was by remember { mutableIntStateOf(at) }
                         LaunchedEffect(at) {
                             // Noted before the glide, so a glide cut short by the next move
@@ -99,19 +121,20 @@ fun StopOrderDialog(names: List<String>, onDone: (List<Int>) -> Unit, onDismiss:
                                 slide.animateTo(0f)
                             } else if (lifted) slide.snapTo(0f)
                         }
-                        Row(
+                        // The gestures sit on an outer box that only moves; the lift's scale is on
+                        // the row inside, so a drag reads the finger at its true distance.
+                        Box(
                             Modifier
                                 .fillMaxWidth()
                                 .height(ROW)
                                 .zIndex(if (lifted) 1f else 0f)
-                                .graphicsLayer {
-                                    translationY = (at - id) * rowPx + if (lifted) offset else slide.value
-                                    if (lifted) { scaleX = 1.03f; scaleY = 1.03f; shadowElevation = 8.dp.toPx() }
-                                    shape = RoundedCornerShape(14.dp)
-                                    clip = lifted
+                                .graphicsLayer { translationY = (at - id) * rowPx + if (lifted) offset else slide.value }
+                                .semantics {
+                                    customActions = listOfNotNull(
+                                        if (at > 0) CustomAccessibilityAction("Move up") { move(id, -1); true } else null,
+                                        if (at < order.lastIndex) CustomAccessibilityAction("Move down") { move(id, 1); true } else null,
+                                    )
                                 }
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(if (lifted) MaterialTheme.colorScheme.surfaceContainerHighest else MaterialTheme.colorScheme.surfaceContainerHigh)
                                 .pointerInput(id) {
                                     detectDragGesturesAfterLongPress(
                                         onDragStart = { lift(id) },
@@ -119,23 +142,38 @@ fun StopOrderDialog(names: List<String>, onDone: (List<Int>) -> Unit, onDismiss:
                                         onDragEnd = { drop() },
                                         onDragCancel = { drop() },
                                     )
-                                }
-                                .padding(horizontal = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
+                                },
                         ) {
-                            Box(
-                                Modifier.size(28.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary),
-                                contentAlignment = Alignment.Center,
+                            Row(
+                                Modifier
+                                    .fillMaxSize()
+                                    .graphicsLayer {
+                                        if (lifted) { scaleX = 1.03f; scaleY = 1.03f; shadowElevation = 8.dp.toPx() }
+                                        shape = RoundedCornerShape(14.dp)
+                                        clip = true
+                                    }
+                                    .background(if (lifted) MaterialTheme.colorScheme.surfaceContainerHighest else MaterialTheme.colorScheme.surfaceContainerHigh)
+                                    .padding(horizontal = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                Text("${at + 1}", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimary)
+                                Box(
+                                    Modifier.size(28.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Text("${at + 1}", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimary)
+                                }
+                                Spacer(Modifier.width(14.dp))
+                                Text(
+                                    names[id], style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
+                                )
+                                Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) {
+                                    Icon(Icons.Filled.DragHandle, contentDescription = "Drag to move", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
                             }
-                            Spacer(Modifier.width(14.dp))
-                            Text(
-                                names[id], style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface,
-                                maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
-                            )
+                            // The handle's own catch, over the icon but outside the scaled row.
                             Box(
-                                Modifier.size(44.dp).pointerInput(id) {
+                                Modifier.align(Alignment.CenterEnd).padding(end = 8.dp).size(44.dp).pointerInput(id) {
                                     detectDragGestures(
                                         onDragStart = { lift(id) },
                                         onDrag = { change, d -> change.consume(); drag(d.y) },
@@ -143,10 +181,7 @@ fun StopOrderDialog(names: List<String>, onDone: (List<Int>) -> Unit, onDismiss:
                                         onDragCancel = { drop() },
                                     )
                                 },
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Icon(Icons.Filled.DragHandle, contentDescription = "Drag to move", tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
+                            )
                         }
                     }
                 }

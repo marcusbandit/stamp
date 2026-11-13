@@ -51,7 +51,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Hotel
-import androidx.compose.material.icons.filled.DragHandle
+import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.SubdirectoryArrowRight
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.PlayArrow
@@ -94,7 +94,9 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -204,7 +206,7 @@ fun VisitTimeline(
     var pickingEnd by remember { mutableStateOf<Boolean?>(null) }
     // The stops being put in order.
     var ordering by remember { mutableStateOf(false) }
-    val haptics = androidx.compose.ui.platform.LocalHapticFeedback.current
+    val haptics = LocalHapticFeedback.current
     val journey = LocalJourney.current
     // A visit is a journey from somewhere and back; a stay is where the user lived.
     val journeyed = !lived
@@ -325,7 +327,7 @@ fun VisitTimeline(
                                 Column(
                                     Modifier.weight(1f).clip(RoundedCornerShape(12.dp)).combinedClickable(
                                         onClick = { actions.onOpenPlace(place) },
-                                        onLongClick = if (canOrder) ({ haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress); ordering = true }) else null,
+                                        onLongClick = if (canOrder) ({ haptics.performHapticFeedback(HapticFeedbackType.LongPress); ordering = true }) else null,
                                     ),
                                 ) {
                                     Text(
@@ -342,7 +344,7 @@ fun VisitTimeline(
                                 // Homes keep the order they were moved into; only a trip's stops move.
                                 if (canOrder) {
                                     IconButton(onClick = { ordering = true }, modifier = Modifier.size(40.dp)) {
-                                        Icon(Icons.Filled.DragHandle, contentDescription = "Reorder stops", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        Icon(Icons.Filled.SwapVert, contentDescription = "Reorder stops", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                                     }
                                 }
                             }
@@ -487,7 +489,9 @@ fun VisitTimeline(
             )
         }
         if (ordering) {
-            val cities = trip.cities
+            // The stops as they were when the dialog opened: the order it hands back indexes
+            // into these, whatever a scan does to the trip meanwhile.
+            val cities = remember { trip.cities }
             StopOrderDialog(
                 names = cities.map { placeOf(it, visit, places)?.name ?: journey.place(it)?.name ?: "Unknown place" },
                 onDone = { order -> actions.onStopOrder(order.map { cities[it] }); ordering = false },
@@ -711,8 +715,7 @@ private fun BedButton(slept: Boolean, onClick: () -> Unit) {
     }
 }
 
-/** Moving a stop earlier or later, kept in a menu so the stops themselves stay calm. */
-/** The small things a stop can still take, as quiet chips rather than empty tiles. */
+/** A round icon button beside a stop's dates, for something the stop can still take. */
 @Composable
 private fun Bubble(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit) {
     Surface(
@@ -796,7 +799,7 @@ private fun DatePart(d: PartialDate?, guessed: Boolean) {
 /** A stop's photos, videos and moments in a row, ending with a tile that adds another. */
 @Composable
 private fun MemoryRow(memories: List<Memory>, onOpen: (Memory) -> Unit, onAdd: () -> Unit) {
-    // With nothing kept yet, a quiet chip asks instead of an empty tile on every stop.
+    // With nothing kept yet, the memory button beside the dates asks instead of an empty tile.
     if (memories.isEmpty()) return
     Spacer(Modifier.height(10.dp))
     // A plain scrolling row, not a lazy one: the timeline row around it measures its height.
