@@ -805,7 +805,7 @@ class VisitStore(private val file: File) {
     }
 
     private fun encode(marks: Map<String, Mark>, trips: List<Trip>, pins: Map<String, Pin>): String {
-        val root = JSONObject().put("version", 3)
+        val root = JSONObject().put("version", FILE_VERSION)
         root.put("countries", JSONObject().apply {
             for ((id, m) in marks) {
                 put(id, JSONObject().put("state", m.state.key).apply {
@@ -865,7 +865,9 @@ class VisitStore(private val file: File) {
         if (!file.exists()) return Read(emptyMap(), emptyList(), emptyMap(), false)
         return runCatching { parse(file.readText()) }.getOrElse {
             // Keep the unreadable file aside instead of letting the next save overwrite it.
-            file.renameTo(File(file.parentFile, "${file.name}.unreadable-${System.currentTimeMillis()}"))
+            // A rename that fails falls back to a copy, so the bytes are kept either way.
+            val aside = File(file.parentFile, "${file.name}.unreadable-${System.currentTimeMillis()}")
+            if (!file.renameTo(aside)) runCatching { file.copyTo(aside) }
             damaged = true
             Read(emptyMap(), emptyList(), emptyMap(), false)
         }
@@ -946,6 +948,10 @@ class VisitStore(private val file: File) {
      */
     private fun parse(text: String): Read {
         val root = JSONObject(text)
+        // A newer Stamp's file read as this layout would lose what this app does not know,
+        // and the next save would make that loss permanent: it is not read at all.
+        val version = root.optInt("version")
+        if (version > FILE_VERSION) throw IllegalArgumentException("file version $version is newer than $FILE_VERSION")
         val countries = root.getJSONObject("countries")
         val marks = LinkedHashMap<String, Mark>()
         val trips = ArrayList<Trip>()
@@ -1016,6 +1022,9 @@ class VisitStore(private val file: File) {
         return true
     }
 }
+
+/** The save file layout this app writes, and the newest it reads. */
+const val FILE_VERSION = 3
 
 /** One-line flags in the app's private storage, such as whether onboarding has run. */
 class Flags(private val dir: File) {

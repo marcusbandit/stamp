@@ -6,6 +6,7 @@ import com.marcusrosado.stamp.data.CityAreas
 import com.marcusrosado.stamp.data.FineShapes
 import com.marcusrosado.stamp.data.Flags
 import com.marcusrosado.stamp.data.Places
+import com.marcusrosado.stamp.data.SetAside
 import com.marcusrosado.stamp.data.VisitStore
 import com.marcusrosado.stamp.scan.PhotoScanner
 import kotlinx.coroutines.CoroutineScope
@@ -61,7 +62,7 @@ class StampApp : Application() {
     }
 
     /** The marks, read on the IO thread as soon as the process starts, never on the main one. */
-    val visitsLoading by lazy { scope.async(Dispatchers.IO) { VisitStore(File(filesDir, "visits.json")) } }
+    val visitsLoading by lazy { scope.async(Dispatchers.IO) { VisitStore(File(filesDir, VISITS_FILE)) } }
 
     /** The marks. The first screen waits for [visitsLoading] before it reads them, so this never blocks it. */
     val visits: VisitStore by lazy { kotlinx.coroutines.runBlocking { visitsLoading.await() } }
@@ -69,6 +70,24 @@ class StampApp : Application() {
     /** The marks if they were read, or null while loading or when reading them failed. */
     private fun loadedVisits(): VisitStore? =
         if (visitsLoading.isCompleted && !visitsLoading.isCancelled) runCatching { visits }.getOrNull() else null
+
+    /**
+     * Save files that could not be read and were set aside, newest first, until the user saves
+     * a copy or restores one. Found after the store has loaded, since loading is what sets one aside.
+     */
+    private val _setAside by lazy {
+        visits
+        kotlinx.coroutines.flow.MutableStateFlow(SetAside.find(File(filesDir, VISITS_FILE)))
+    }
+    val setAside: kotlinx.coroutines.flow.StateFlow<List<File>> get() = _setAside
+
+    /** Marks [f] dealt with, off the main thread, by the same single writer as the look. */
+    fun setAsideHandled(f: File) {
+        scope.launch(lookWriter) {
+            SetAside.handled(f)
+            _setAside.value = SetAside.find(File(filesDir, VISITS_FILE))
+        }
+    }
     val flags by lazy { Flags(filesDir) }
 
     /** The look the user picked, by id, or "auto" to follow the phone. Kept in a one-line file. */
@@ -193,17 +212,18 @@ class StampApp : Application() {
         }
         cityAreas.start()
         // Grants for photos of removed memories, visits or countries go back to Android.
-        // Never after a file that could not be read: an empty store would hand every grant back,
-        // and a restored backup would then point at photos Stamp may no longer open.
+        // Never while a file that could not be read is still set aside: an empty store would hand
+        // every grant back, and restoring that file would then point at photos Stamp may no longer open.
         scope.launch(Dispatchers.IO) {
             val visits = visitsLoading.await()
-            if (visits.damaged) return@launch
+            if (visits.damaged || setAside.value.isNotEmpty()) return@launch
             val inUse = visits.visits.value.values.flatMap { it.trips }.flatMap { it.memories }.mapNotNull { it.media }.toSet()
             com.marcusrosado.stamp.scan.Memories.releaseUnused(this@StampApp, inUse)
         }
     }
 
     companion object {
+        private const val VISITS_FILE = "visits.json"
         const val COUNTRIES_ASSET = "countries.geojson"
         const val FINE_COUNTRIES_ASSET = "countries_10m.geojson"
         const val CITIES_ASSET = "cities.tsv"
