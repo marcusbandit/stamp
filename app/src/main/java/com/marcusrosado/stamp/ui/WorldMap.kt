@@ -475,39 +475,26 @@ fun WorldMap(
     // One effect for both, so a move and a change of the covered part never cancel each other.
     // The covered part last handed to the map. Read from here, never from the camera: mid-move
     // the camera reports where it is passing through, and moving again from that cancels a move.
-    val applied = remember { DoubleArray(2) }
+    // A place picked lands in the middle of the part of the map left showing beside or above a
+    // pane. The camera itself is moved off centre to do it, never padded: padding makes the map
+    // keep the world inside the padded part, so zoomed all the way out the world would ride up
+    // and leave empty sea under the pane.
     LaunchedEffect(map, focus, coveredEnd, coveredBottom) {
         val m = map ?: return@LaunchedEffect
-        val end = with(density) { coveredEnd.toPx() }.toDouble()
-        val bottom = with(density) { coveredBottom.toPx() }.toDouble()
-        val f = focus
-        if (f == null) {
-            if (applied[0] != end || applied[1] != bottom) {
-                val shrinking = end <= applied[0] && bottom <= applied[1]
-                applied[0] = end; applied[1] = bottom
-                if (shrinking) {
-                    // A pane gone: the room it kept goes too, with the map held exactly where it
-                    // is, the point at the middle of the new room taken as the new centre. A
-                    // room left behind is sea that zooming out could never fill.
-                    val at = m.projection.fromScreenLocation(
-                        PointF(((mapView.width - end) / 2).toFloat(), ((mapView.height - bottom) / 2).toFloat()),
-                    )
-                    m.moveCamera(
-                        CameraUpdateFactory.newCameraPosition(
-                            CameraPosition.Builder(m.cameraPosition).target(at).padding(0.0, 0.0, end, bottom).build(),
-                        ),
-                    )
-                } else {
-                    m.animateCamera(CameraUpdateFactory.paddingTo(0.0, 0.0, end, bottom), 320)
-                }
-            }
-            return@LaunchedEffect
-        }
-        applied[0] = end; applied[1] = bottom
+        val f = focus ?: return@LaunchedEffect
+        val endDp = coveredEnd.value.toDouble()
+        val bottomDp = coveredBottom.value.toDouble()
         val (target, zoom) = f.box?.let { b ->
             fit(b, (mapView.width / density.density) - coveredEnd.value, (mapView.height / density.density) - coveredBottom.value - TOP_CHROME, f.zoom)
         } ?: (LatLng(f.lat, f.lon) to f.zoom)
-        val position = CameraPosition.Builder().target(target).zoom(zoom).padding(0.0, 0.0, end, bottom).build()
+        // The world is 512 dp wide and tall at zoom 0: half the covered part, as a share of
+        // the world at this zoom, is how far the centre moves east and south of the place.
+        val world = 512.0 * Math.pow(2.0, zoom)
+        val lon = target.longitude + endDp / 2 / world * 360.0
+        val lat = com.marcusrosado.stamp.data.LegPath.latitude(
+            com.marcusrosado.stamp.data.LegPath.mercator(target.latitude) - bottomDp / 2 / world * 2 * Math.PI,
+        )
+        val position = CameraPosition.Builder().target(LatLng(lat.coerceIn(-85.0, 85.0), lon)).zoom(zoom).padding(0.0, 0.0, 0.0, 0.0).build()
         m.animateCamera(CameraUpdateFactory.newCameraPosition(position), 700)
         // Done with it: coming back to the map later keeps wherever the user panned to.
         onFocused()
