@@ -57,9 +57,12 @@ is not enough. Suggested answer:
 
 ## Release
 
-1. Once per build machine: `scripts/setup-upload-key.sh`, then back up `~/.config/stamp/`.
-2. Enrol in Play App Signing when creating the app, and upload the certificate the setup script
-   printed if the console asks for the upload key.
+1. The release key already exists in `~/.config/stamp/` on one build machine; back that folder up. It
+   also signs the APK on GitHub, so Play must use it as the app signing key, or a phone that
+   installed the download can never take an update from the store.
+2. When creating the app, open Play App Signing, choose "Use a different key", then "Export
+   and upload a key from Java keystore", and follow its PEPK steps with `upload.jks` and the
+   alias `upload`. Play then signs with this same key.
 3. Bump `versionCode` and `versionName` in `app/build.gradle.kts`.
 4. `scripts/bundle.sh` writes `app/build/outputs/bundle/release/app-release.aab`.
 5. New personal developer accounts must run a closed test with at least 12 testers for 14 days
