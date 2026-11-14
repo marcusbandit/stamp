@@ -50,9 +50,13 @@ class LatestWriter private constructor(private val file: File) {
 
     private fun writeNewest(): Boolean = writing.withLock {
         val contents = synchronized(lock) { pending.also { pending = null } } ?: return true
-        val ok = runCatching { write(contents()) }.isSuccess
-        if (!ok) synchronized(lock) { if (pending == null) pending = contents }
-        ok
+        val result = runCatching { write(contents()) }
+        // Kept for the next try, and said in the log; a crash here would lose the edit itself.
+        result.exceptionOrNull()?.let { e ->
+            System.err.println("LatestWriter: saving ${file.name} failed, kept for the next try: $e")
+            synchronized(lock) { if (pending == null) pending = contents }
+        }
+        result.isSuccess
     }
 
     private fun write(text: String) {

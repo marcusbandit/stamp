@@ -147,8 +147,8 @@ class VisitStore(private val file: File) {
      */
     private var pendingDrops: Map<String, Set<String>> = emptyMap()
 
-    /** Which land each pin is on, worked out once per pin and place: a pin that moves is a new key. */
-    private val pinLands = HashMap<Pin, String>()
+    /** Which land each pin's spot is on, null at sea, worked out once per spot: a pin that moves is a new key. */
+    private val pinLands = HashMap<Pair<Double, Double>, String?>()
 
     /**
      * The trips as the last settle left them, with the map data and pins it went by, and every
@@ -668,8 +668,10 @@ class VisitStore(private val file: File) {
         return pins[place]?.let { landOfPin(it, g) } ?: if (isPin(place)) null else g.landOfCity(place)
     }
 
-    private fun landOfPin(pin: Pin, g: Geo): String? =
-        pinLands[pin] ?: g.landOf(pin.lat, pin.lon)?.also { pinLands[pin] = it }
+    private fun landOfPin(pin: Pin, g: Geo): String? {
+        val spot = pin.lat to pin.lon
+        return if (spot in pinLands) pinLands[spot] else g.landOf(pin.lat, pin.lon).also { pinLands[spot] = it }
+    }
 
     /**
      * Brings everything in line after a change: each trip's lands follow its stops, every land
@@ -780,8 +782,8 @@ class VisitStore(private val file: File) {
 
     /**
      * Waits until the file holds every change made so far. Called when the app goes to the
-     * background, and before a backup is read or a restore reports back. False when the write
-     * failed; the changes stay in memory and are tried again on the next save.
+     * background, on a crash, and before a restore reports back. False when the write failed;
+     * the changes stay in memory and are tried again on the next save or flush.
      */
     fun flush(): Boolean = writer.flush()
 
@@ -992,10 +994,7 @@ class VisitStore(private val file: File) {
 
     /** Everything the store holds, as the text of a backup file. */
     @Synchronized
-    fun backup(): String {
-        flush()
-        return encode(marks, trips, pins)
-    }
+    fun backup(): String = encode(marks, trips, pins)
 
     /** How many places a backup holds, or null when the text is not a Stamp backup. */
     fun backupSize(text: String): Int? = runCatching { parse(text).marks.size }.getOrNull()
