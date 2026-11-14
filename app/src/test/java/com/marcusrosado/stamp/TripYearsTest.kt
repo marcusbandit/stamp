@@ -60,6 +60,25 @@ class TripYearsTest {
     }
 
     @Test
+    fun aTripPlannedForNextYearStillComesBeforeTheCurrentStay() {
+        val trips = listOf(
+            trip("visit", PartialDate(2025, 5)),
+            trip("home", PartialDate(2018), now = true),
+            trip("planned", PartialDate(2027, 1)),
+        )
+        assertEquals(
+            listOf(2027 to listOf("planned"), 2026 to listOf("home"), 2025 to listOf("visit")),
+            shape(trips),
+        )
+    }
+
+    @Test
+    fun aStayKnownOnlyByItsEndGoesInTheYearItEnded() {
+        val trips = listOf(trip("ended", until = PartialDate(2020, 8), city = false))
+        assertEquals(listOf(2020 to listOf("ended")), shape(trips))
+    }
+
+    @Test
     fun countsWithNoDateAndNoStopAreNotTrips() {
         val trips = listOf(trip("bare", city = false), trip("dated", PartialDate(2022), city = false))
         assertEquals(listOf(2022 to listOf("dated")), shape(trips))

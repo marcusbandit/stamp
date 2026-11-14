@@ -74,7 +74,8 @@ fun PassportScreen(
     }
     // Newest first by year, undated last. The countries come before them, so however many
     // trips pile up, the countries stay a short scroll away.
-    val thisYear = remember { java.time.Year.now().value }
+    // Read on every pass, so an app left open over New Year moves the current stay along.
+    val thisYear = java.time.Year.now().value
     val years = remember(trips, thisYear) { tripYears(trips, thisYear) }
 
     Box(modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
@@ -189,7 +190,8 @@ private fun Header(text: String) {
 
 /**
  * A year's bar, which stays at the top while its trips scroll under it. It is opaque and full
- * width, so the rows it covers never show through, whatever the page behind it is drawn on.
+ * width, so it works on either page background. Its rounded corners can show the edge of a row
+ * passing under it, but never its text, which sits 16 dp in from the row's edge.
  */
 @Composable
 private fun YearBar(year: Int?, count: Int) {
