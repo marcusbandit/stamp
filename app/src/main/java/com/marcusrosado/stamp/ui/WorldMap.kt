@@ -98,6 +98,26 @@ fun WorldMap(
      * draws; null leaves lines to taps on the country under them.
      */
     onRoute: ((List<RouteTap>) -> Unit)? = null,
+    /** Countries drawn as their regions, each region in its own mark; null draws none. */
+    regionLayer: RegionLayer? = null,
+    /** Country ids whose whole is done, outlined in gold: every region, or a whole continent. */
+    complete: Set<String> = emptySet(),
+    /** Countries plain, with no marks: the city view, where the cities carry the colour. */
+    plain: Boolean = false,
+    /** Cities the user wants to go to, drawn as dots in the want colour. */
+    wantCities: List<Pair<Double, Double>> = emptyList(),
+    /** A tapped region, as its country id and region id; null leaves taps to the countries. */
+    onRegion: ((String, String) -> Unit)? = null,
+    /** Every city worth a dot, for the cities view: more of them as the map zooms in. */
+    allCities: List<CityDot> = emptyList(),
+    /** A tapped city of [allCities], by id; null leaves taps to the countries. */
+    onCity: ((String) -> Unit)? = null,
+    /** The region picked, outlined as a picked country is. */
+    selectedRegion: String? = null,
+    /** The city picked, ringed. */
+    selectedCity: Pair<Double, Double>? = null,
+    /** Where the map rests after each move: zoom, then south, west, north and east. */
+    onViewport: ((DoubleArray) -> Unit)? = null,
     /** False while a page covers the whole map: its icons stop gliding until it shows again. */
     animate: Boolean = true,
 ) {
@@ -116,6 +136,9 @@ fun WorldMap(
     val selected by rememberUpdatedState(selectedId)
     val tapKey by rememberUpdatedState(if (split) "id" else "country")
     val routeTap by rememberUpdatedState(onRoute.takeIf { showRoutes })
+    val regionTap by rememberUpdatedState(onRegion.takeIf { regionLayer != null })
+    val cityTap by rememberUpdatedState(onCity.takeIf { allCities.isNotEmpty() })
+    val viewport by rememberUpdatedState(onViewport)
 
     val mapView = remember {
         MapView(context).apply {
@@ -147,6 +170,20 @@ fun WorldMap(
                         val trips = nearestRoutes(m, e.x, e.y, context.resources.displayMetrics.density)
                         if (trips.isNotEmpty()) { tappedTrips = trips; return false }
                     }
+                    // In the cities view a city under the finger takes the tap, with a little slack.
+                    cityTap?.let { onC ->
+                        val slack = 12 * context.resources.displayMetrics.density
+                        val f = m.queryRenderedFeatures(android.graphics.RectF(e.x - slack, e.y - slack, e.x + slack, e.y + slack), *ALL_CITY_LAYERS)
+                            .minByOrNull { f -> (f.geometry() as? Point)?.let { p -> val s = m.projection.toScreenLocation(org.maplibre.android.geometry.LatLng(p.latitude(), p.longitude())); (s.x - e.x) * (s.x - e.x) + (s.y - e.y) * (s.y - e.y) } ?: Float.MAX_VALUE }
+                        f?.getStringProperty("id")?.let { onC(it); return false }
+                    }
+                    // A region of a country drawn as its regions takes the tap before its country.
+                    regionTap?.let { onReg ->
+                        val f = m.queryRenderedFeatures(PointF(e.x, e.y), LAYER_REGIONS).firstOrNull()
+                        val rid = f?.getStringProperty("region")
+                        val cid = f?.getStringProperty("country")
+                        if (rid != null && cid != null) { onReg(cid, rid); return false }
+                    }
                     // Both fills, since only one of them draws away from the switch-over zoom.
                     val id = m.queryRenderedFeatures(PointF(e.x, e.y), LAYER_FILL_FINE, LAYER_FILL).firstOrNull()?.getStringProperty(tapKey)
                     beforeTap = selected
@@ -173,6 +210,7 @@ fun WorldMap(
                 }
             })
             setOnTouchListener { _, e -> taps.onTouchEvent(e); false }
+            val view = this
             getMapAsync { m ->
                 m.uiSettings.apply {
                     isLogoEnabled = false
@@ -181,7 +219,18 @@ fun WorldMap(
                     isTiltGesturesEnabled = false
                     isCompassEnabled = false
                 }
-                m.setMinZoomPreference(0.0)
+                // Zoomed all the way out, the world still fills the map from top to bottom: a
+                // shorter world leaves empty sea above or below it, and once a card has moved
+                // the map up, all of that gap sits at the bottom. The world is 512 dp tall at
+                // zoom 0, so the least zoom follows the map's height, folded or not.
+                fun fillHeight() {
+                    val h = view.height / view.resources.displayMetrics.density
+                    if (h > 0) m.setMinZoomPreference(kotlin.math.max(0.0, kotlin.math.ln(h / 512.0) / kotlin.math.ln(2.0)))
+                }
+                fillHeight()
+                view.addOnLayoutChangeListener { _, _, top, _, bottom, _, oldTop, _, oldBottom ->
+                    if (bottom - top != oldBottom - oldTop) fillHeight()
+                }
                 // Deep enough to see one city's streets' worth of area. The 1:10m country shapes
                 // take over from mid zoom, and the city outlines and dots stay sharp.
                 m.setMaxZoomPreference(12.0)
@@ -190,6 +239,9 @@ fun WorldMap(
                 m.addOnCameraMoveStartedListener { moving = true }
                 m.addOnCameraIdleListener {
                     moving = false
+                    m.projection.visibleRegion.latLngBounds.let { b ->
+                        viewport?.invoke(doubleArrayOf(m.cameraPosition.zoom, b.latitudeSouth, b.longitudeWest, b.latitudeNorth, b.longitudeEast))
+                    }
                     m.cameraPosition.target?.let { camera.lat = it.latitude; camera.lon = it.longitude }
                     camera.zoom = m.cameraPosition.zoom
                 }
@@ -209,8 +261,24 @@ fun WorldMap(
         }
     }
 
-    LaunchedEffect(style, visits, palette, split) {
+    // The land masses the regions cover: a country and its parts that share its own code. An
+    // overseas part with a code of its own, such as Reunion, is not in its country's regions and
+    // keeps drawing as itself.
+    val regionCovered = remember(regionLayer?.shapes, atlas) {
+        regionLayer?.shapes.orEmpty().map { it.first }.distinct().flatMap { c ->
+            val a2 = atlas.byId[c]?.alpha2.orEmpty()
+            (listOf(c) + atlas.partsOf(c).map { it.id }).filter { atlas.byId[it]?.alpha2.equals(a2, ignoreCase = true) }
+        }
+    }
+    LaunchedEffect(style, visits, palette, split, plain, regionCovered) {
         val s = style ?: return@LaunchedEffect
+        val borders = listOf("countries-border", "countries-border-fine")
+        if (plain) {
+            for (id in listOf(LAYER_FILL, LAYER_FILL_FINE)) s.getLayerAs<FillLayer>(id)?.setProperties(PropertyFactory.fillColor(Expression.color(palette.land.toArgb())))
+            // No regions drawn here, so every country draws its own border again.
+            for (id in borders) s.getLayerAs<org.maplibre.android.style.layers.LineLayer>(id)?.setFilter(Expression.literal(true))
+            return@LaunchedEffect
+        }
         // Split, each land mass by its own id. Whole, every part by its country's mark.
         val marks: Map<String, TravelState> = if (split) {
             visits.mapValues { it.value.state }
@@ -224,7 +292,15 @@ fun WorldMap(
         } else {
             Expression.match(Expression.get(if (split) "id" else "country"), Expression.color(palette.land.toArgb()), *stops.toTypedArray())
         }
-        for (id in listOf(LAYER_FILL, LAYER_FILL_FINE)) s.getLayerAs<FillLayer>(id)?.setProperties(PropertyFactory.fillColor(fill))
+        // A country drawn as its regions shows nothing of its own where they lie: they are cut
+        // from the same shapes and cover all of them.
+        val inRegions = Expression.`in`(Expression.get("id"), Expression.literal(regionCovered.toTypedArray()))
+        val shown = if (regionCovered.isEmpty()) fill else Expression.switchCase(inRegions, Expression.rgba(0, 0, 0, 0), fill)
+        for (id in listOf(LAYER_FILL, LAYER_FILL_FINE)) s.getLayerAs<FillLayer>(id)?.setProperties(PropertyFactory.fillColor(shown))
+        // Its own border too: the regions draw their outline, coast included.
+        for (id in borders) {
+            s.getLayerAs<org.maplibre.android.style.layers.LineLayer>(id)?.setFilter(Expression.not(inRegions))
+        }
     }
 
     LaunchedEffect(style, showRoutes) {
@@ -317,6 +393,81 @@ fun WorldMap(
         )
     }
 
+    // The regions of the countries drawn as regions: shapes built off the main thread, and the
+    // marks as one colour match, so marking a region recolours it without rebuilding shapes.
+    val regionShapes = regionLayer?.shapes
+    LaunchedEffect(style, regionShapes) {
+        val s = style ?: return@LaunchedEffect
+        val json = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            FeatureCollection.fromFeatures(regionShapes.orEmpty().map { (cid, r) -> regionFeature(cid, r) })
+        }
+        s.getSourceAs<GeoJsonSource>(SOURCE_REGIONS)?.setGeoJson(json)
+    }
+    LaunchedEffect(style, regionLayer?.marks, regionLayer?.countryMarks, palette) {
+        val s = style ?: return@LaunchedEffect
+        val marks = regionLayer?.marks.orEmpty()
+        // A region not been to, in a country that is marked, takes a faint wash of the country's
+        // mark, so the country still reads as one place with its regions to go.
+        val faint = regionLayer?.countryMarks.orEmpty()
+        val base = if (faint.isEmpty()) Expression.color(palette.land.toArgb())
+        else Expression.match(
+            Expression.get("country"), Expression.color(palette.land.toArgb()),
+            *faint.map { (id, st) ->
+                Expression.stop(id, Expression.color(androidx.compose.ui.graphics.lerp(palette.land, palette.of(st), 0.22f).toArgb()))
+            }.toTypedArray(),
+        )
+        val fill = if (marks.isEmpty()) base
+        else Expression.match(
+            Expression.get("region"), base,
+            *marks.map { (id, st) -> Expression.stop(id, Expression.color(palette.of(st).toArgb())) }.toTypedArray(),
+        )
+        s.getLayerAs<FillLayer>(LAYER_REGIONS)?.setProperties(PropertyFactory.fillColor(fill))
+    }
+    LaunchedEffect(style, complete) {
+        val s = style ?: return@LaunchedEffect
+        val filter = Expression.`in`(Expression.get("country"), Expression.literal(complete.toTypedArray()))
+        for (id in COMPLETE_LAYERS) s.getLayerAs<org.maplibre.android.style.layers.LineLayer>(id)?.setFilter(filter)
+    }
+    LaunchedEffect(style, allCities) {
+        val s = style ?: return@LaunchedEffect
+        val json = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            FeatureCollection.fromFeatures(allCities.map { c ->
+                Feature.fromGeometry(Point.fromLngLat(c.lon, c.lat)).apply {
+                    addStringProperty("id", c.id)
+                    addNumberProperty("pop", c.population)
+                    addBooleanProperty("mine", c.mine)
+                }
+            })
+        }
+        s.getSourceAs<GeoJsonSource>(SOURCE_ALL_CITIES)?.setGeoJson(json)
+    }
+    // In the cities view the cities been to carry the visited colour and stand out.
+    LaunchedEffect(style, plain, palette) {
+        val s = style ?: return@LaunchedEffect
+        s.getLayerAs<org.maplibre.android.style.layers.CircleLayer>("cities")?.setProperties(
+            PropertyFactory.circleColor(Expression.color((if (plain) palette.visited else palette.selected).toArgb())),
+        )
+    }
+    LaunchedEffect(style, selectedRegion) {
+        val s = style ?: return@LaunchedEffect
+        for (id in listOf("region-selected-casing", "region-selected")) {
+            s.getLayerAs<org.maplibre.android.style.layers.LineLayer>(id)
+                ?.setFilter(Expression.eq(Expression.get("region"), Expression.literal(selectedRegion ?: "")))
+        }
+    }
+    LaunchedEffect(style, selectedCity) {
+        val s = style ?: return@LaunchedEffect
+        s.getSourceAs<GeoJsonSource>(SOURCE_SPOT)?.setGeoJson(
+            FeatureCollection.fromFeatures(listOfNotNull(selectedCity?.let { (lat, lon) -> Feature.fromGeometry(Point.fromLngLat(lon, lat)) })),
+        )
+    }
+    LaunchedEffect(style, wantCities) {
+        val s = style ?: return@LaunchedEffect
+        s.getSourceAs<GeoJsonSource>(SOURCE_WANT_CITIES)?.setGeoJson(
+            FeatureCollection.fromFeatures(wantCities.map { (lat, lon) -> Feature.fromGeometry(Point.fromLngLat(lon, lat)) }),
+        )
+    }
+
     LaunchedEffect(style, cities) {
         val s = style ?: return@LaunchedEffect
         s.getSourceAs<GeoJsonSource>(SOURCE_CITIES)?.setGeoJson(
@@ -357,24 +508,26 @@ fun WorldMap(
     // One effect for both, so a move and a change of the covered part never cancel each other.
     // The covered part last handed to the map. Read from here, never from the camera: mid-move
     // the camera reports where it is passing through, and moving again from that cancels a move.
-    val applied = remember { DoubleArray(2) }
+    // A place picked lands in the middle of the part of the map left showing beside or above a
+    // pane. The camera itself is moved off centre to do it, never padded: padding makes the map
+    // keep the world inside the padded part, so zoomed all the way out the world would ride up
+    // and leave empty sea under the pane.
     LaunchedEffect(map, focus, coveredEnd, coveredBottom) {
         val m = map ?: return@LaunchedEffect
-        val end = with(density) { coveredEnd.toPx() }.toDouble()
-        val bottom = with(density) { coveredBottom.toPx() }.toDouble()
-        val f = focus
-        if (f == null) {
-            if (applied[0] != end || applied[1] != bottom) {
-                applied[0] = end; applied[1] = bottom
-                m.animateCamera(CameraUpdateFactory.paddingTo(0.0, 0.0, end, bottom), 320)
-            }
-            return@LaunchedEffect
-        }
-        applied[0] = end; applied[1] = bottom
+        val f = focus ?: return@LaunchedEffect
+        val endDp = coveredEnd.value.toDouble()
+        val bottomDp = coveredBottom.value.toDouble()
         val (target, zoom) = f.box?.let { b ->
             fit(b, (mapView.width / density.density) - coveredEnd.value, (mapView.height / density.density) - coveredBottom.value - TOP_CHROME, f.zoom)
         } ?: (LatLng(f.lat, f.lon) to f.zoom)
-        val position = CameraPosition.Builder().target(target).zoom(zoom).padding(0.0, 0.0, end, bottom).build()
+        // The world is 512 dp wide and tall at zoom 0: half the covered part, as a share of
+        // the world at this zoom, is how far the centre moves east and south of the place.
+        val world = 512.0 * Math.pow(2.0, zoom)
+        val lon = target.longitude + endDp / 2 / world * 360.0
+        val lat = com.marcusrosado.stamp.data.LegPath.latitude(
+            com.marcusrosado.stamp.data.LegPath.mercator(target.latitude) - bottomDp / 2 / world * 2 * Math.PI,
+        )
+        val position = CameraPosition.Builder().target(LatLng(lat.coerceIn(-85.0, 85.0), lon)).zoom(zoom).padding(0.0, 0.0, 0.0, 0.0).build()
         m.animateCamera(CameraUpdateFactory.newCameraPosition(position), 700)
         // Done with it: coming back to the map later keeps wherever the user panned to.
         onFocused()
@@ -452,6 +605,53 @@ private fun homeMarker(context: android.content.Context, colour: Int): android.g
     return b
 }
 private const val SOURCE_AREAS = "city-areas"
+private const val SOURCE_REGIONS = "regions"
+private const val SOURCE_WANT_CITIES = "want-cities"
+private const val LAYER_REGIONS = "regions-fill"
+private val COMPLETE_LAYERS = listOf("complete-glow", "complete-line", "complete-glow-fine", "complete-line-fine")
+private const val SOURCE_ALL_CITIES = "all-cities"
+private const val SOURCE_SPOT = "spot"
+
+/** A city as the cities view draws it: a dot, more of them as the map zooms in. */
+class CityDot(val id: String, val lat: Double, val lon: Double, val population: Int, val mine: Boolean)
+
+// Bigger cities first: a dot for every city over a million from the start, smaller ones as the
+// map zooms in. A city on a visit or wanted shows from the start whatever its size.
+private val CITY_STEPS = listOf(0.0 to 1_000_000, 3.0 to 250_000, 4.5 to 80_000, 6.0 to 0)
+private val ALL_CITY_LAYERS = CITY_STEPS.indices.map { "all-cities-$it" }.toTypedArray()
+
+private fun allCityLayersJson(p: MapPalette) = CITY_STEPS.mapIndexed { i, (zoom, least) ->
+    val most = CITY_STEPS.getOrNull(i - 1)?.second
+    val filter = when {
+        i == 0 -> """["any", ["==", ["get", "mine"], true], [">=", ["get", "pop"], $least]]"""
+        else -> """["all", ["!=", ["get", "mine"], true], [">=", ["get", "pop"], $least], ["<", ["get", "pop"], $most]]"""
+    }
+    """    { "id": "all-cities-$i", "type": "circle", "source": "$SOURCE_ALL_CITIES", "minzoom": $zoom, "filter": $filter,
+      "paint": { "circle-radius": ["interpolate", ["linear"], ["zoom"], 1, 1.8, 6, 3.2, 9, 4.5],
+                 "circle-color": "${hex(p.selected)}", "circle-opacity": 0.55,
+                 "circle-stroke-color": "${hex(p.ocean)}", "circle-stroke-width": 0.6 } }"""
+}.joinToString(",\n")
+
+/** Which countries draw as their regions, the shapes of those regions, and each region's mark. */
+class RegionLayer(
+    /** Each region with the id of the country it belongs to. */
+    val shapes: List<Pair<String, com.marcusrosado.stamp.data.RegionShape>>,
+    val marks: Map<String, TravelState>,
+    /** Each country's own mark, by country id. */
+    val countryMarks: Map<String, TravelState> = emptyMap(),
+)
+
+private fun regionFeature(countryId: String, r: com.marcusrosado.stamp.data.RegionShape): Feature {
+    val polys = r.polygons.map { rings ->
+        rings.map { ring -> (0 until ring.size / 2).map { k -> Point.fromLngLat(ring[2 * k + 1], ring[2 * k]) } }
+    }
+    val geometry = if (polys.size == 1) org.maplibre.geojson.Polygon.fromLngLats(polys[0])
+    else org.maplibre.geojson.MultiPolygon.fromLngLats(polys)
+    return Feature.fromGeometry(geometry).apply {
+        addStringProperty("region", r.id)
+        addStringProperty("country", countryId)
+    }
+}
 private const val SOURCE_PHOTOS = "photos"
 
 /** A photo pinned to the place it belongs to, for the map's previews. */
@@ -477,6 +677,9 @@ private fun roundPhoto(src: android.graphics.Bitmap, px: Int, ring: Int): androi
 }
 private const val LAYER_SELECTED = "countries-selected"
 
+/** The gold of a place done in full. */
+private const val GOLD = "#F2C14E"
+
 internal fun hex(c: Color) = String.format("#%06X", c.toArgb() and 0xFFFFFF)
 
 private fun styleJson(p: MapPalette) = """
@@ -494,7 +697,11 @@ private fun styleJson(p: MapPalette) = """
     "$SOURCE_AREAS": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
     "$SOURCE_ROUTES": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
     "$SOURCE_ROUTE_ICONS": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
-    "$SOURCE_PHOTOS": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } }
+    "$SOURCE_PHOTOS": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
+    "$SOURCE_REGIONS": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
+    "$SOURCE_WANT_CITIES": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
+    "$SOURCE_ALL_CITIES": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
+    "$SOURCE_SPOT": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } }
   },
   "layers": [
     { "id": "ocean", "type": "background", "paint": { "background-color": "${hex(p.ocean)}" } },
@@ -510,6 +717,22 @@ private fun styleJson(p: MapPalette) = """
     { "id": "countries-border-fine", "type": "line", "source": "countries-fine", "minzoom": $FINE_FROM,
       "paint": { "line-color": "${hex(p.border)}", "line-width": 0.7,
                  "line-opacity": ["interpolate", ["linear"], ["zoom"], $FINE_FROM, 0, $FINE_FULL, 1] } },
+    { "id": "$LAYER_REGIONS", "type": "fill", "source": "$SOURCE_REGIONS",
+      "paint": { "fill-color": "${hex(p.land)}", "fill-antialias": true } },
+    { "id": "regions-border", "type": "line", "source": "$SOURCE_REGIONS",
+      "paint": { "line-color": "${hex(p.border)}", "line-width": 0.7 } },
+    { "id": "region-selected-casing", "type": "line", "source": "$SOURCE_REGIONS", "filter": ["==", ["get", "region"], ""],
+      "paint": { "line-color": "${hex(p.ocean)}", "line-width": 5.0 } },
+    { "id": "region-selected", "type": "line", "source": "$SOURCE_REGIONS", "filter": ["==", ["get", "region"], ""],
+      "paint": { "line-color": "${hex(p.selected)}", "line-width": 2.2 } },
+    { "id": "complete-glow", "type": "line", "source": "countries", "maxzoom": $FINE_FULL, "filter": ["in", ["get", "country"], ["literal", []]],
+      "paint": { "line-color": "$GOLD", "line-width": 7, "line-blur": 5, "line-opacity": 0.55 } },
+    { "id": "complete-line", "type": "line", "source": "countries", "maxzoom": $FINE_FULL, "filter": ["in", ["get", "country"], ["literal", []]],
+      "paint": { "line-color": "$GOLD", "line-width": 2.0 } },
+    { "id": "complete-glow-fine", "type": "line", "source": "countries-fine", "minzoom": $FINE_FULL, "filter": ["in", ["get", "country"], ["literal", []]],
+      "paint": { "line-color": "$GOLD", "line-width": 7, "line-blur": 5, "line-opacity": 0.55 } },
+    { "id": "complete-line-fine", "type": "line", "source": "countries-fine", "minzoom": $FINE_FULL, "filter": ["in", ["get", "country"], ["literal", []]],
+      "paint": { "line-color": "$GOLD", "line-width": 2.0 } },
     { "id": "city-areas-fill", "type": "fill", "source": "$SOURCE_AREAS",
       "paint": { "fill-color": "${hex(p.ocean)}",
                  "fill-opacity": ["interpolate", ["linear"], ["zoom"], 2, 0, 4, 0.3] } },
@@ -525,10 +748,18 @@ private fun styleJson(p: MapPalette) = """
     { "id": "$LAYER_SELECTED-fine", "type": "line", "source": "$SOURCE_SELECTED_FINE", "minzoom": $FINE_FULL,
       "paint": { "line-color": "${hex(p.selected)}", "line-width": 2.2 } },
 ${routeLayersJson(p)},
+${allCityLayersJson(p)},
     { "id": "cities", "type": "circle", "source": "$SOURCE_CITIES",
       "paint": { "circle-radius": ["interpolate", ["linear"], ["zoom"], 1, 2.5, 6, 5],
                  "circle-color": "${hex(p.selected)}",
                  "circle-stroke-color": "${hex(p.ocean)}", "circle-stroke-width": 1.2 } },
+    { "id": "want-cities", "type": "circle", "source": "$SOURCE_WANT_CITIES",
+      "paint": { "circle-radius": ["interpolate", ["linear"], ["zoom"], 1, 2.5, 6, 5],
+                 "circle-color": "${hex(p.want)}",
+                 "circle-stroke-color": "${hex(p.ocean)}", "circle-stroke-width": 1.2 } },
+    { "id": "spot-city", "type": "circle", "source": "$SOURCE_SPOT",
+      "paint": { "circle-radius": 9, "circle-color": "rgba(0,0,0,0)",
+                 "circle-stroke-color": "${hex(p.selected)}", "circle-stroke-width": 2.5 } },
 $ROUTE_ICONS_JSON,
     { "id": "photos", "type": "symbol", "source": "$SOURCE_PHOTOS", "minzoom": 4.5,
       "layout": { "icon-image": ["get", "img"], "icon-allow-overlap": false,

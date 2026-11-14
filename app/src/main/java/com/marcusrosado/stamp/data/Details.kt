@@ -122,6 +122,13 @@ data class Trip(
     /** Where the trip started, the country or land mass it was first added to. */
     val home: String? get() = lands.firstOrNull()
 
+    /**
+     * True when the trip is only a visit to city [cityId], with no dates or memories and not the
+     * stay going on now: one that can be taken back without losing anything the user told.
+     */
+    fun isBareVisitTo(cityId: String): Boolean =
+        cities == listOf(cityId) && date == null && until == null && memories.isEmpty() && !now
+
     /** The ways the user went from [from] to [to], or none when they did not say. */
     fun waysBetween(from: String, to: String): List<Travel> = legBetween(from, to)?.ways.orEmpty()
 

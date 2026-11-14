@@ -51,6 +51,7 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -141,9 +142,18 @@ private fun Pane(state: AppState, sidePanel: Boolean, bottomInset: Dp) {
 
 @Composable
 private fun MapPane(state: AppState, sidePanel: Boolean, bottomInset: Dp) {
-    val selected = state.selected
+    // What the card shows: a region or a city picked, else a country. All three open, show and
+    // close the same way.
+    val selected: Any? = state.spot ?: state.selected
+    val pickKey: String? = when (val p = selected) {
+        is Spot.Region -> "region:" + p.regionId
+        is Spot.City -> "city:" + p.cityId
+        is com.marcusrosado.stamp.data.Country -> p.id
+        else -> null
+    }
+    fun unpick() { if (state.spot != null) state.onSpot(null) else state.onSelect(null) }
     val hinge = LocalHinge.current
-    BackHandler(enabled = selected != null && state.destination == Destination.Map) { state.onSelect(null) }
+    BackHandler(enabled = selected != null && state.destination == Destination.Map) { unpick() }
     // One tree for every posture: the map, and a pane beside or below it. Only their sizes
     // change, so bending the phone resizes the map instead of tearing it down and building a
     // new one, which is what made the screen flash.
@@ -185,8 +195,8 @@ private fun MapPane(state: AppState, sidePanel: Boolean, bottomInset: Dp) {
         // together, and two settles racing pulled a closing card back up before it vanished.
         val settling = remember { arrayOfNulls<kotlinx.coroutines.Job>(1) }
         var closing by remember { mutableStateOf(false) }
-        if (selected != null && selected.id != sheetFor) {
-            sheetFor = selected.id
+        if (pickKey != null && pickKey != sheetFor) {
+            sheetFor = pickKey
             sheetH = opened
             restedAt = opened
             closing = false
@@ -216,7 +226,7 @@ private fun MapPane(state: AppState, sidePanel: Boolean, bottomInset: Dp) {
                     sheetH.value, target.value, initialVelocity = -with(density) { velocity.toDp() }.value,
                     animationSpec = androidx.compose.animation.core.spring(dampingRatio = 0.85f, stiffness = 420f),
                 ) { v, _ -> sheetH = v.dp }
-                if (target == 0.dp) state.onSelect(null)
+                if (target == 0.dp) unpick()
             }
         }
         // The whole card drags, the way Android's own sheets do: pulled up it grows before its
@@ -250,10 +260,9 @@ private fun MapPane(state: AppState, sidePanel: Boolean, bottomInset: Dp) {
             }
         }
         val cardOnMap = !sidePanel && hinge == null && selected != null
-        // The room the map keeps clear for the card. It stays after the card closes, so closing
-        // never shifts the map; the next country picked brings its own.
-        var cardCover by remember { mutableStateOf(0.dp) }
-        if (cardOnMap) cardCover = opened
+        // The room the map keeps clear for the card, gone with the card; the map holds still as
+        // it goes, so closing never shifts what shows.
+        val cardCover = if (cardOnMap) opened else 0.dp
         // The map itself never changes size; the pane slides over it and the map moves its
         // centre into what is left. The buttons over it follow the part that shows.
         StampMap(
@@ -268,24 +277,23 @@ private fun MapPane(state: AppState, sidePanel: Boolean, bottomInset: Dp) {
             },
         )
         Box(Modifier.size(mapW, mapH)) {
-            // The legend and the routes button, side by side and centred over the map's part of
-            // the screen, however wide it is: one unit, so they never collide, and they glide
-            // with the map instead of jumping.
-            Row(
-                Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 8.dp)
-                    .height(androidx.compose.foundation.layout.IntrinsicSize.Min),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Legend(state, Modifier)
-                // As tall as the legend: the usual 48 dp touch box would make it the odd one out.
-                androidx.compose.runtime.CompositionLocalProvider(
-                    androidx.compose.material3.LocalMinimumInteractiveComponentSize provides 0.dp,
-                ) { RoutesToggle(state, Modifier.fillMaxHeight().aspectRatio(1f)) }
-            }
+            // The legend, centred over the map's part of the screen, however wide it is.
+            Legend(state, Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 8.dp))
             // On the thumb's side: left on the big screen, flat or bent, and right on the folded phone.
             val left = state.posture == Posture.Unfolded
             if (hinge != null || sidePanel || selected == null) {
                 var menuOpen by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
+                // What the map shows, along the bottom on the side away from the main button,
+                // with a region or a found city floating above it.
+                Column(
+                    Modifier.align(if (left) Alignment.BottomEnd else Alignment.BottomStart)
+                        .padding(start = if (left) 0.dp else 12.dp, end = if (left) 12.dp else 0.dp, bottom = bottomInset + 8.dp)
+                        .widthIn(max = mapW - 96.dp),
+                    horizontalAlignment = if (left) Alignment.End else Alignment.Start,
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    ViewBar(state.mapView, state.onMapView, state.routes, state.onRoutes)
+                }
                 ActionMenu(
                     state,
                     open = menuOpen,
@@ -347,7 +355,7 @@ private fun MapPane(state: AppState, sidePanel: Boolean, bottomInset: Dp) {
                             onDragBy = ::dragBy,
                             onRelease = { v -> settle(v) },
                         )
-                        Card(state, shown, Modifier)
+                        CardFor(state, shown, Modifier)
                     }
                 }
             }
@@ -386,7 +394,7 @@ private fun MapPane(state: AppState, sidePanel: Boolean, bottomInset: Dp) {
                     .windowInsetsPadding(WindowInsets.navigationBars.only(WindowInsetsSides.Bottom))
                 val shown = selected ?: lastPanel.takeIf { hinge == null }
                 if (shown != null) {
-                    Card(state, shown, top)
+                    CardFor(state, shown, top)
                 } else {
                     Passport(state, PaddingValues(bottom = bottomInset), top)
                 }
@@ -515,8 +523,37 @@ private fun StampMap(
             onDismiss = { editing = null },
         )
     }
+    val rv = state.regionView
+    // The cities view's dots: every city of some size, and every one on a visit or wanted.
+    val cityView = state.mapView == com.marcusrosado.stamp.data.MapView.Cities
+    val allCities by androidx.compose.runtime.produceState(emptyList<CityDot>(), cityView, state.places, state.visits) {
+        val p = state.places
+        if (!cityView || p == null) { value = emptyList(); return@produceState }
+        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            val mine = state.visits.values.flatMap { it.cities + it.wantCities }.toSet()
+            p.byId.values.filter { it.population >= 15_000 || it.id in mine }
+                .map { CityDot(it.id, it.lat, it.lon, it.population, it.id in mine) }
+        }
+    }
+    val wantCities = remember(state.visits, state.places) {
+        state.visits.values.flatMap { v -> v.wantCities.mapNotNull { placeOf(it, v, state.places) } }.map { it.lat to it.lon }.distinct()
+    }
     WorldMap(
         animate = animate,
+        regionLayer = if (rv.countries.isEmpty()) null else RegionLayer(rv.shapes, rv.marks, rv.countryMarks),
+        complete = rv.complete,
+        plain = state.mapView == com.marcusrosado.stamp.data.MapView.Cities,
+        wantCities = wantCities,
+        onRegion = if (selectable) { cid, rid -> state.onSpot(Spot.Region(cid, rid)) } else null,
+        allCities = allCities,
+        selectedRegion = (state.spot as? Spot.Region)?.regionId,
+        selectedCity = (state.spot as? Spot.City)?.let { it.lat to it.lon },
+        onViewport = if (selectable) state.onViewport else null,
+        onCity = if (selectable) { id ->
+            val c = state.places?.byId?.get(id)
+            val land = c?.let { state.atlas.landOf(it.lat, it.lon, it.country) }
+            if (c != null && land != null) state.onSpot(Spot.City(land.country, c.id, c.name, c.lat, c.lon))
+        } else null,
         onRoute = if (selectable) { entries ->
             // Within one trip a leg wins over the trip as a whole, such as a layover's dot or a
             // day trip beside it. One leg left: straight to it. Several: ask which.
@@ -636,23 +673,79 @@ private fun LocateButton(state: AppState, modifier: Modifier) {
     ) { Icon(androidx.compose.material.icons.Icons.Filled.MyLocation, contentDescription = "Where I am") }
 }
 
-/** One tap shows or hides the lines between a visit's cities, leaving just the points. */
+/** The card for whatever is picked: a country's, or a region's or a city's, which match it. */
 @Composable
-private fun RoutesToggle(state: AppState, modifier: Modifier) {
-    // The legend's own pill colour, so it reads on any land; on, the icon takes the accent.
-    val cs = MaterialTheme.colorScheme
-    val tint by androidx.compose.animation.animateColorAsState(
-        if (state.routes) cs.primary else cs.onSurfaceVariant.copy(alpha = 0.6f), label = "routes",
-    )
-    Surface(
-        onClick = { state.onRoutes(!state.routes) },
-        modifier = modifier.semantics { contentDescription = if (state.routes) "Hide routes" else "Show routes" },
-        shape = RoundedCornerShape(50),
-        color = cs.surfaceContainerHigh.copy(alpha = 0.92f),
-        shadowElevation = 2.dp,
-    ) {
-        Box(contentAlignment = Alignment.Center) {
-            Icon(androidx.compose.material.icons.Icons.Filled.Timeline, contentDescription = null, tint = tint, modifier = Modifier.size(18.dp))
+private fun CardFor(state: AppState, shown: Any, modifier: Modifier) {
+    when (shown) {
+        is com.marcusrosado.stamp.data.Country -> Card(state, shown, modifier)
+        is Spot -> PlaceFor(state, shown, modifier)
+    }
+}
+
+/** A region's or a city's card, with its marks read from the visits of its country. */
+@Composable
+private fun PlaceFor(state: AppState, spot: Spot, modifier: Modifier) {
+    val country = state.atlas.byId[spot.countryId]
+    val vs = visitsOf(spot.countryId, state.atlas, state.visits)
+    val own = vs.firstOrNull { it == state.visits[spot.countryId] }
+    val id = when (spot) { is Spot.Region -> spot.regionId; is Spot.City -> spot.cityId }
+    val note = vs.firstNotNullOfOrNull { it.cityNotes[id] }
+    when (spot) {
+        is Spot.Region -> {
+            val name = state.places?.regionName(spot.regionId) ?: spot.regionId
+            // A region a place on a visit lies in stays been to, the way a country with visits
+            // does: clearing it says why instead of doing nothing.
+            var why by remember(spot) { mutableStateOf<String?>(null) }
+            PlaceCard(
+                flag = country?.flag.orEmpty(),
+                title = name,
+                subtitle = country?.name.orEmpty(),
+                state = state.regionView.marks[spot.regionId],
+                onSet = { s ->
+                    val litBy = state.regionView.lit[spot.regionId]
+                    val said = vs.any { spot.regionId in it.wantRegions || spot.regionId in it.livedPlaces }
+                    if (s == null && litBy != null && !said) why = litBy
+                    else state.onRegion(spot.countryId, spot.regionId, s)
+                },
+                loved = note?.loved == true, rating = note?.rating ?: 0,
+                onNote = { l, r -> state.details.onCityNote(spot.countryId, spot.regionId, com.marcusrosado.stamp.data.Note(l, r, note?.name.orEmpty())) },
+                onClose = { state.onSpot(null) },
+                modifier = modifier,
+            )
+            why?.let { place ->
+                SeamAlertDialog(
+                    onDismissRequest = { why = null },
+                    title = { Text(name) },
+                    text = { Text("Counted because you were in $place.") },
+                    confirmButton = { androidx.compose.material3.TextButton(onClick = { why = null }) { Text("Done") } },
+                )
+            }
+        }
+        is Spot.City -> {
+            // Been to once for every visit it was on, lived in when said, else wanted when said.
+            val trips = countedTrips(vs)
+            val count = trips.count { spot.cityId in it.places }
+            val mark = when {
+                vs.any { spot.cityId in it.livedPlaces } -> TravelState.Lived
+                count > 0 -> if (own?.state == TravelState.Lived) TravelState.Lived else TravelState.Visited
+                vs.any { spot.cityId in it.wantCities } -> TravelState.Want
+                else -> null
+            }
+            PlaceCard(
+                flag = country?.flag.orEmpty(),
+                title = spot.name,
+                subtitle = listOfNotNull(state.places?.byId?.get(spot.cityId)?.let { state.places.regionOf(it) }, country?.name).joinToString(", "),
+                state = mark,
+                onSet = { s -> state.onCity(spot.countryId, spot.cityId, s) },
+                loved = note?.loved == true, rating = note?.rating ?: 0,
+                onNote = { l, r -> state.details.onCityNote(spot.countryId, spot.cityId, com.marcusrosado.stamp.data.Note(l, r, note?.name.orEmpty())) },
+                onClose = { state.onSpot(null) },
+                modifier = modifier,
+                visits = count,
+                onMore = { state.onBeenToCity(spot.cityId) },
+                onLess = { state.onForgetCity(spot.cityId) },
+                canLess = trips.any { it.isBareVisitTo(spot.cityId) },
+            )
         }
     }
 }

@@ -105,6 +105,30 @@ class AppState(
     /** Route lines between a visit's cities show on the map. */
     val routes: Boolean,
     val onRoutes: (Boolean) -> Unit,
+    /** What the map marks: countries, regions or cities. */
+    val mapView: com.marcusrosado.stamp.data.MapView = com.marcusrosado.stamp.data.MapView.Countries,
+    val onMapView: (com.marcusrosado.stamp.data.MapView) -> Unit = {},
+    /** The outlines of each country's regions. */
+    val regionShapes: com.marcusrosado.stamp.data.RegionShapes? = null,
+    /** Draws a country as its regions, or as one again. */
+    val onSplitRegions: (countryId: String, on: Boolean) -> Unit = { _, _ -> },
+    /** Marks a region of a country visited, wanted, or neither. */
+    val onRegion: (countryId: String, regionId: String, state: TravelState?) -> Unit = { _, _, _ -> },
+    /** Says the user wants to go to a city of a country, or no longer does. */
+    val onCityWant: (countryId: String, cityId: String, on: Boolean) -> Unit = { _, _, _ -> },
+    /** Marks a city of a country visited, lived in, wanted, or none, the way a country is marked. */
+    val onCity: (countryId: String, cityId: String, state: TravelState?) -> Unit = { _, _, _ -> },
+    /** The countries drawn as their regions, with their shapes and marks. */
+    val regionView: RegionView = RegionView.EMPTY,
+    /** Where the main map rests after a move: zoom, then south, west, north and east. */
+    val onViewport: (DoubleArray) -> Unit = {},
+    /** Takes one visit to a city back; false when none can go without losing what the user told. */
+    val onForgetCity: (cityId: String) -> Boolean = { false },
+    /** One more visit to a city, as a new visit with just that city. */
+    val onBeenToCity: (cityId: String) -> Unit = {},
+    /** A region or a found city shown over the map, or none. */
+    val spot: Spot? = null,
+    val onSpot: (Spot?) -> Unit = {},
     /** Whether train, car and bus legs follow the real rails and roads. */
     val followLines: Boolean = true,
     val onFollowLines: (Boolean) -> Unit = {},
@@ -210,6 +234,7 @@ private fun App(
     var showList by rememberSaveable { mutableStateOf(false) }
     // A city search across every country: to fly to a city, or to start a trip there.
     var cityHunt by rememberSaveable { mutableStateOf<String?>(null) }
+    var spot by rememberSaveable(stateSaver = SpotSaver) { mutableStateOf<Spot?>(null) }
     var pendingTrip by rememberSaveable { mutableStateOf<String?>(null) }
     var tripFromTab by rememberSaveable { mutableStateOf(false) }
     val allTrips by app.visits.allTrips.collectAsStateWithLifecycle()
@@ -222,6 +247,22 @@ private fun App(
     val split by app.split.on.collectAsStateWithLifecycle()
     val mapPhotos by app.mapPhotos.on.collectAsStateWithLifecycle()
     val routes by app.routes.on.collectAsStateWithLifecycle()
+    val mapView by app.mapView.collectAsStateWithLifecycle()
+    // A region's card goes with the regions drawn under it, a city's with the cities view: a
+    // change to a view that no longer draws the place closes its card.
+    var spotView by rememberSaveable { mutableStateOf(mapView) }
+    LaunchedEffect(mapView) {
+        if (mapView == spotView) return@LaunchedEffect
+        spotView = mapView
+        spot = when (val now = spot) {
+            is Spot.Region -> now.takeIf {
+                mapView == com.marcusrosado.stamp.data.MapView.Regions ||
+                    (mapView == com.marcusrosado.stamp.data.MapView.Countries && visitsOf(now.countryId, atlas, app.visits.visits.value).any { it.splitRegions })
+            }
+            is Spot.City -> now.takeIf { mapView == com.marcusrosado.stamp.data.MapView.Cities }
+            null -> null
+        }
+    }
     val follow by app.followLines.on.collectAsStateWithLifecycle()
     val lines by app.routePacks.net.collectAsStateWithLifecycle()
     val lastBackup by app.lastBackup.collectAsStateWithLifecycle()
@@ -247,6 +288,15 @@ private fun App(
     val scan by app.scanner.state.collectAsStateWithLifecycle()
     // A damaged city list only costs the city features, never the app.
     val places by produceState<Places?>(null) { value = runCatching { app.places.await() }.getOrNull() }
+    // Regions are read and placed off the main thread, again whenever the marks change.
+    // Where the map rests, and the countries in sight there once it is close enough.
+    var viewport by remember { mutableStateOf<DoubleArray?>(null) }
+    val inView = remember(viewport, atlas) { countriesInView(atlas, viewport) }
+    val regionView by androidx.compose.runtime.produceState(RegionView.EMPTY, mapView, visits, places, atlas, inView) {
+        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            runCatching { buildRegionView(mapView, atlas, visits, places, app.regionShapes, inView) }.getOrDefault(RegionView.EMPTY)
+        }
+    }
     val airports by produceState<com.marcusrosado.stamp.data.Airports?>(null) { value = runCatching { app.airports.await() }.getOrNull() }
     // Like the city list above it: a damaged file costs the outlines, never the app.
     val cityAreas by produceState(com.marcusrosado.stamp.data.CityAreas.EMPTY) {
@@ -291,6 +341,7 @@ private fun App(
             onRestoreSelection = { selectedId = it },
             onSelect = { id ->
                 selectedId = id
+                spot = null
                 // Picking a country by hand drops a trip still waiting to open somewhere else.
                 pendingTrip = null
                 // A picked country moves into the map left showing beside or above its card.
@@ -330,6 +381,7 @@ private fun App(
                 onUpdateMemory = app.visits::updateMemory,
                 onRemoveMemory = app.visits::removeMemory,
                 onRemoveCity = app.visits::removeCity,
+                onSplitRegions = app.visits::setSplitRegions,
                 onCityNote = app.visits::setCityNote,
                 onAddRegion = app.visits::addRegion,
                 onRemoveRegion = app.visits::removeRegion,
@@ -372,6 +424,19 @@ private fun App(
             onMapPhotos = app.mapPhotos::set,
             routes = routes,
             onRoutes = app.routes::set,
+            mapView = mapView,
+            onMapView = app::setMapView,
+            regionShapes = app.regionShapes,
+            onSplitRegions = app.visits::setSplitRegions,
+            onRegion = app.visits::setRegion,
+            onCityWant = app.visits::setCityWant,
+            onCity = app.visits::setCity,
+            regionView = regionView,
+            onViewport = { viewport = it },
+            onForgetCity = app.visits::forgetCityVisit,
+            onBeenToCity = { c -> app.visits.newTripAt(c) },
+            spot = spot,
+            onSpot = { spot = it; if (it != null) selectedId = null },
             followLines = follow,
             onFollowLines = app.followLines::set,
             lastBackup = lastBackup,
@@ -464,7 +529,9 @@ private fun App(
                             pendingTrip = id
                         }
                     } else if (show != null) {
-                        selectedId = show
+                        // A city found by name shows on its own, to say Want to go to it.
+                        selectedId = null
+                        spot = Spot.City(land.country, c.id, c.name, c.lat, c.lon)
                     }
                     focus = Focus(c.lat, c.lon, CITY_ZOOM)
                 },
@@ -506,6 +573,24 @@ private fun App(
 }
 
 /** Centre on the country's label point, zoomed so most of it fits. */
+/** Keeps the open region's or city's card across a recreation, an unfold or a theme change. */
+private val SpotSaver = androidx.compose.runtime.saveable.Saver<Spot?, ArrayList<Any>>(
+    save = { s ->
+        when (s) {
+            is Spot.Region -> arrayListOf<Any>("region", s.countryId, s.regionId)
+            is Spot.City -> arrayListOf<Any>("city", s.countryId, s.cityId, s.name, s.lat, s.lon)
+            null -> null
+        }
+    },
+    restore = { l ->
+        when (l.getOrNull(0)) {
+            "region" -> Spot.Region(l[1] as String, l[2] as String)
+            "city" -> Spot.City(l[1] as String, l[2] as String, l[3] as String, l[4] as Double, l[5] as Double)
+            else -> null
+        }
+    },
+)
+
 private fun focusOn(c: Country): Focus {
     val span = max(c.maxLon - c.minLon, (c.maxLat - c.minLat) * 1.6).coerceAtLeast(0.5)
     val zoom = (ln(360.0 / span) / ln(2.0) - 0.3).coerceIn(1.5, 7.0)
