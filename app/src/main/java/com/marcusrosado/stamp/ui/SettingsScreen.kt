@@ -614,24 +614,32 @@ private fun BackupPage(state: AppState) {
 
     val restoring = rememberCoroutineScope()
     pending?.let { (text, n) ->
-        val now = state.visits.size
-        SeamAlertDialog(
-            onDismissRequest = { pending = null },
-            title = { Text("Restore this backup?") },
-            text = { Text("The ${places(now)} on this phone are replaced by the ${places(n)} in the backup.") },
-            confirmButton = {
-                TextButton(onClick = {
-                    pending = null
-                    // Reading and saving a large backup is file work: off the main thread.
-                    restoring.launch {
-                        val ok = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { state.app.visits.restore(text) }
-                        say(if (ok) "Backup restored" else "That file isn't a Stamp backup")
-                    }
-                }) { Text("Restore") }
+        RestoreConfirm(
+            now = state.visits.size,
+            incoming = n,
+            onRestore = {
+                pending = null
+                // Reading and saving a large backup is file work: off the main thread.
+                restoring.launch {
+                    val ok = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { state.app.visits.restore(text) }
+                    say(if (ok) "Backup restored" else "That file isn't a Stamp backup")
+                }
             },
-            dismissButton = { TextButton(onClick = { pending = null }) { Text("Cancel") } },
+            onCancel = { pending = null },
         )
     }
+}
+
+/** Asks before the [now] places on the phone are replaced by the [incoming] ones in a file. */
+@Composable
+internal fun RestoreConfirm(now: Int, incoming: Int, onRestore: () -> Unit, onCancel: () -> Unit) {
+    SeamAlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text("Restore this backup?") },
+        text = { Text("The ${places(now)} on this phone are replaced by the ${places(incoming)} in the backup.") },
+        confirmButton = { TextButton(onClick = onRestore) { Text("Restore") } },
+        dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } },
+    )
 }
 
 private fun places(n: Int) = if (n == 1) "1 place" else "$n places"

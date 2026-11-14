@@ -10,6 +10,7 @@ import com.marcusrosado.stamp.data.isPin
 import com.marcusrosado.stamp.data.PhotoEvidence
 import com.marcusrosado.stamp.data.TravelState
 import com.marcusrosado.stamp.data.VisitStore
+import com.marcusrosado.stamp.data.SetAside
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -455,5 +456,52 @@ class VisitStoreTest {
         assertEquals("Shrine", v.pins["pin-a"]?.name)
         s.flush()
         assertTrue(File(dir, "visits.json").readText().contains("\"version\":3"))
+    }
+
+    @Test fun aGarbageFileIsSetAsideWithItsBytesAndFoundAgain() {
+        val garbage = byteArrayOf(0x7b, 0x00, 0xff.toByte(), 0x13, 0x22, 0x0a)
+        val f = File(dir, "visits.json")
+        f.writeBytes(garbage)
+        val s = store()
+        assertTrue(s.visits.value.isEmpty())
+        val aside = SetAside.find(f)
+        assertEquals(1, aside.size)
+        assertTrue(garbage.contentEquals(aside.single().readBytes()))
+        // A save on the empty store never touches the set-aside copy.
+        s.set("JPN", TravelState.Visited)
+        assertTrue(garbage.contentEquals(aside.single().readBytes()))
+        // The next launch still finds it, until it is marked handled.
+        assertFalse(store().damaged)
+        assertEquals(aside, SetAside.find(f))
+        assertTrue(SetAside.handled(aside.single()))
+        assertTrue(SetAside.find(f).isEmpty())
+        assertTrue(garbage.contentEquals(File(dir, aside.single().name + ".handled").readBytes()))
+    }
+
+    @Test fun aFileFromANewerVersionIsSetAsideNotOverwritten() {
+        val f = File(dir, "visits.json")
+        val newer = "{\"version\":99,\"countries\":{\"PER\":{\"state\":\"visited\",\"future\":1}},\"trips\":[]}"
+        f.writeText(newer)
+        val s = store()
+        assertTrue(s.damaged)
+        assertTrue(s.visits.value.isEmpty())
+        s.set("JPN", TravelState.Visited)
+        val aside = SetAside.find(f).single()
+        assertEquals(newer, aside.readText())
+        assertTrue(SetAside.fromNewer(aside))
+        // Nor is it restored as an older layout.
+        assertNull(s.backupSize(newer))
+        assertFalse(s.restore(newer))
+        assertEquals(setOf("JPN"), s.visits.value.keys)
+    }
+
+    @Test fun setAsideFilesComeNewestFirst() {
+        val f = File(dir, "visits.json")
+        File(dir, "visits.json.unreadable-100").writeText("a")
+        File(dir, "visits.json.unreadable-300").writeText("b")
+        File(dir, "visits.json.unreadable-200.handled").writeText("c")
+        File(dir, "visits.json.before-trips").writeText("d")
+        assertEquals(listOf("visits.json.unreadable-300", "visits.json.unreadable-100"), SetAside.find(f).map { it.name })
+        assertEquals(300L, SetAside.at(SetAside.find(f).first()))
     }
 }
