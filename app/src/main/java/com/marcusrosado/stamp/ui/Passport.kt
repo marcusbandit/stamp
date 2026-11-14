@@ -23,6 +23,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -66,9 +67,16 @@ fun PassportScreen(
     val been = counted.size
     val share = been.toFloat() / atlas.unCount
     // Home first, then the rest by name. Whole, one row per country with its strongest mark.
-    val mine = (if (split) visits.mapNotNull { (id, v) -> atlas.byId[id]?.let { it to v } }
-    else atlas.mains.mapNotNull { c -> atlas.wholeVisit(c.id, visits)?.let { c to it } })
-        .sortedWith(compareBy({ it.first.id != home }, { it.first.name }))
+    val mine = remember(atlas, visits, split, home) {
+        (if (split) visits.mapNotNull { (id, v) -> atlas.byId[id]?.let { it to v } }
+        else atlas.mains.mapNotNull { c -> atlas.wholeVisit(c.id, visits)?.let { c to it } })
+            .sortedWith(compareBy({ it.first.id != home }, { it.first.name }))
+    }
+    // Newest first by year, undated last. The countries come before them, so however many
+    // trips pile up, the countries stay a short scroll away.
+    // Read on every pass, so an app left open over New Year moves the current stay along.
+    val thisYear = java.time.Year.now().value
+    val years = remember(trips, thisYear) { tripYears(trips, thisYear) }
 
     Box(modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         LazyColumn(
@@ -146,13 +154,6 @@ fun PassportScreen(
                     }
                 }
             }
-            val shownTrips = trips.filter { it.cities.isNotEmpty() || it.date != null }.reversed()
-            if (shownTrips.isNotEmpty()) {
-                item { Header("Trips") }
-                items(shownTrips, key = { "trip-" + it.id }) { t ->
-                    TripRow(t, atlas, visits, places) { onOpenTrip(t.id) }
-                }
-            }
             item { Header("My countries") }
             if (mine.isEmpty()) {
                 item {
@@ -163,6 +164,17 @@ fun PassportScreen(
                 }
             }
             items(mine, key = { it.first.id }) { (c, v) -> CountryRow(c, v, c.id == home, onOpenCountry) }
+            if (years.isNotEmpty()) {
+                item(key = "trips") { Header("Trips") }
+                years.forEach { group ->
+                    stickyHeader(key = "year-" + (group.year ?: "none"), contentType = "year") {
+                        YearBar(group.year, group.trips.size)
+                    }
+                    items(group.trips, key = { "trip-" + it.id }, contentType = { "trip" }) { t ->
+                        TripRow(t, atlas, visits, places) { onOpenTrip(t.id) }
+                    }
+                }
+            }
         }
     }
 }
@@ -174,6 +186,26 @@ private fun Header(text: String) {
         style = MaterialTheme.typography.titleMedium,
         modifier = Modifier.padding(top = 12.dp),
     )
+}
+
+/**
+ * A year's bar, which stays at the top while its trips scroll under it. It is opaque and full
+ * width, so it works on either page background. Its rounded corners can show the edge of a row
+ * passing under it, but never its text, which sits 16 dp in from the row's edge.
+ */
+@Composable
+private fun YearBar(year: Int?, count: Int) {
+    Surface(
+        Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+    ) {
+        Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(year?.toString() ?: "No date", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+            Text(if (count == 1) "1 trip" else "$count trips", style = MaterialTheme.typography.labelMedium)
+        }
+    }
 }
 
 @Composable
