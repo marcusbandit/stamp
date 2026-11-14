@@ -116,8 +116,12 @@ class AppState(
     val onRegion: (countryId: String, regionId: String, state: TravelState?) -> Unit = { _, _, _ -> },
     /** Says the user wants to go to a city of a country, or no longer does. */
     val onCityWant: (countryId: String, cityId: String, on: Boolean) -> Unit = { _, _, _ -> },
+    /** Marks a city of a country visited, lived in, wanted, or none, the way a country is marked. */
+    val onCity: (countryId: String, cityId: String, state: TravelState?) -> Unit = { _, _, _ -> },
     /** The countries drawn as their regions, with their shapes and marks. */
     val regionView: RegionView = RegionView.EMPTY,
+    /** Where the main map rests after a move: zoom, then south, west, north and east. */
+    val onViewport: (DoubleArray) -> Unit = {},
     /** Takes one visit to a city back; false when none can go without losing what the user told. */
     val onForgetCity: (cityId: String) -> Boolean = { false },
     /** One more visit to a city, as a new visit with just that city. */
@@ -270,9 +274,12 @@ private fun App(
     // A damaged city list only costs the city features, never the app.
     val places by produceState<Places?>(null) { value = runCatching { app.places.await() }.getOrNull() }
     // Regions are read and placed off the main thread, again whenever the marks change.
-    val regionView by androidx.compose.runtime.produceState(RegionView.EMPTY, mapView, visits, places, atlas) {
+    // Where the map rests, and the countries in sight there once it is close enough.
+    var viewport by remember { mutableStateOf<DoubleArray?>(null) }
+    val inView = remember(viewport, atlas) { countriesInView(atlas, viewport) }
+    val regionView by androidx.compose.runtime.produceState(RegionView.EMPTY, mapView, visits, places, atlas, inView) {
         value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
-            runCatching { buildRegionView(mapView, atlas, visits, places, app.regionShapes) }.getOrDefault(RegionView.EMPTY)
+            runCatching { buildRegionView(mapView, atlas, visits, places, app.regionShapes, inView) }.getOrDefault(RegionView.EMPTY)
         }
     }
     val airports by produceState<com.marcusrosado.stamp.data.Airports?>(null) { value = runCatching { app.airports.await() }.getOrNull() }
@@ -408,7 +415,9 @@ private fun App(
             onSplitRegions = app.visits::setSplitRegions,
             onRegion = app.visits::setRegion,
             onCityWant = app.visits::setCityWant,
+            onCity = app.visits::setCity,
             regionView = regionView,
+            onViewport = { viewport = it },
             onForgetCity = app.visits::forgetCityVisit,
             onBeenToCity = { c -> app.visits.newTripAt(c) },
             spot = spot,

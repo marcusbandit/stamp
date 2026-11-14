@@ -8,6 +8,8 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -70,11 +72,32 @@ fun visitsOf(countryId: String, atlas: Atlas, visits: Map<String, Visit>): List<
  * The countries the map draws as their regions: every one split into regions, and in the
  * regions view every marked country too.
  */
-fun regionCountries(view: MapView, atlas: Atlas, visits: Map<String, Visit>): List<String> =
+fun regionCountries(view: MapView, atlas: Atlas, visits: Map<String, Visit>, inView: List<String> = emptyList()): List<String> =
     atlas.mains.map { it.id }.filter { id ->
         val vs = visitsOf(id, atlas, visits)
-        vs.any { it.splitRegions } || (view == MapView.Regions && vs.isNotEmpty())
+        vs.any { it.splitRegions } || (view == MapView.Regions && (vs.isNotEmpty() || id in inView))
     }
+
+/**
+ * The countries in sight once the map is close enough to pick a region, nearest the middle
+ * first and at most [MOST_IN_VIEW], from where the map rests: zoom, then south, west, north
+ * and east. Zoomed further out, none: the regions view then shows only marked countries.
+ */
+fun countriesInView(atlas: Atlas, viewport: DoubleArray?): List<String> {
+    val v = viewport ?: return emptyList()
+    if (v[0] < REGIONS_FROM_ZOOM) return emptyList()
+    val (south, west, north, east) = listOf(v[1], v[2], v[3], v[4])
+    fun overlapsLon(a: Double, b: Double) = if (west <= east) b >= west && a <= east else b >= west || a <= east
+    val midLat = (south + north) / 2
+    val midLon = if (west <= east) (west + east) / 2 else ((west + east + 360) / 2).let { if (it > 180) it - 360 else it }
+    return atlas.mains.filter { c -> c.maxLat >= south && c.minLat <= north && overlapsLon(c.minLon, c.maxLon) }
+        .sortedBy { c -> (c.labelLat - midLat) * (c.labelLat - midLat) + (c.labelLon - midLon) * (c.labelLon - midLon) }
+        .take(MOST_IN_VIEW).map { it.id }.sorted()
+}
+
+/** How close the map must be before every country in sight draws as its regions. */
+const val REGIONS_FROM_ZOOM = 3.0
+private const val MOST_IN_VIEW = 30
 
 /** What the map needs to draw countries as their regions, worked out together off the main thread. */
 class RegionView(
@@ -99,8 +122,11 @@ class RegionView(
  * visit lies in it, a city, an address, a pin, a day trip, where a trip set out from or went back
  * to, or when the user said so; else wanted when the user said so.
  */
-fun buildRegionView(view: MapView, atlas: Atlas, visits: Map<String, Visit>, places: Places?, rs: com.marcusrosado.stamp.data.RegionShapes): RegionView {
-    val countries = regionCountries(view, atlas, visits)
+fun buildRegionView(
+    view: MapView, atlas: Atlas, visits: Map<String, Visit>, places: Places?, rs: com.marcusrosado.stamp.data.RegionShapes,
+    inView: List<String> = emptyList(),
+): RegionView {
+    val countries = regionCountries(view, atlas, visits, inView)
     if (countries.isEmpty()) return if (view == MapView.Countries) RegionView.EMPTY.copyComplete(completeCountries(view, atlas, visits, emptyList(), emptyMap())) else RegionView.EMPTY
     val shapes = countries.flatMap { id -> val a2 = atlas.byId[id]?.alpha2.orEmpty(); if (a2.length == 2) rs.of(a2).map { id to it } else emptyList() }
     val byCountry = shapes.groupBy({ it.first }, { it.second })
@@ -121,6 +147,7 @@ fun buildRegionView(view: MapView, atlas: Atlas, visits: Map<String, Visit>, pla
                 }
             }
             for (r in seen) marks[r] = been
+            for (r in v.livedPlaces) marks[r] = TravelState.Lived
         }
     }
     val countryMarks = countries.mapNotNull { id -> atlas.markOf(id, visits, false)?.let { id to it } }.toMap()
@@ -197,78 +224,54 @@ private fun ViewChoice(v: MapView, on: Boolean, onClick: () -> Unit) {
 }
 
 /**
- * A region or a found city, floating over the map: its name and where it is, and the marks it
- * can take, one tap each. The map stays live under it, so tapping region after region marks
- * them one after another.
+ * A region's or a city's card, the same as a country's: its name and where it is, the three
+ * marks, and the heart and stars once it counts; a city also says how many visits it was on.
  */
 @Composable
-fun SpotPanel(
+fun PlaceCard(
+    flag: String,
     title: String,
     subtitle: String,
     state: TravelState?,
-    /** The marks it can take, in order; a city takes only Want to go. */
-    choices: List<TravelState>,
-    onState: (TravelState?) -> Unit,
+    onSet: (TravelState?) -> Unit,
+    loved: Boolean,
+    rating: Int,
+    onNote: (loved: Boolean, rating: Int) -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
-    /** How many visits it was on, with a step either way; null shows no count. */
-    count: Int? = null,
+    /** How many visits a city was on, with a step either way; null for a region. */
+    visits: Int? = null,
     onMore: () -> Unit = {},
-    onLess: (() -> Unit)? = null,
+    onLess: () -> Unit = {},
 ) {
-    val palette = LocalMapPalette.current
-    val cs = MaterialTheme.colorScheme
-    Surface(modifier = modifier.widthIn(max = 480.dp).fillMaxWidth(), shape = RoundedCornerShape(24.dp), color = cs.surfaceContainerHigh, shadowElevation = 6.dp) {
-        Column(Modifier.padding(start = 20.dp, end = 8.dp, top = 12.dp, bottom = 16.dp)) {
+    Column(
+        modifier.verticalScroll(rememberScrollState()).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (flag.isNotEmpty()) {
+                Text(flag, style = MaterialTheme.typography.titleLarge)
+                Spacer(Modifier.width(12.dp))
+            }
+            Column(Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.titleLarge, maxLines = 2)
+                Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            IconButton(onClick = onClose) { Icon(Icons.Filled.Close, contentDescription = "Close") }
+        }
+        StateButtons(state, onSet)
+        if (state?.counts == true) {
+            LoveAndRating(loved, rating, onLoved = { onNote(it, rating) }, onRating = { onNote(loved, it) })
+        }
+        if (visits != null && visits > 0) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(subtitle, style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(if (visits == 1) "1 visit" else "$visits visits", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                androidx.compose.material3.FilledTonalIconButton(onClick = onLess) {
+                    Icon(Icons.Filled.Remove, contentDescription = "One visit fewer")
                 }
-                IconButton(onClick = onClose) { Icon(Icons.Filled.Close, contentDescription = "Close") }
-            }
-            Spacer(Modifier.height(12.dp))
-            Row(Modifier.padding(end = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                choices.forEach { s ->
-                    val on = state == s
-                    val color = palette.of(s)
-                    Surface(
-                        onClick = { onState(if (on) null else s) },
-                        shape = RoundedCornerShape(50),
-                        color = if (on) color else cs.surfaceContainerHighest,
-                        border = if (on) null else BorderStroke(1.dp, cs.outlineVariant),
-                        modifier = Modifier.weight(1f).height(48.dp),
-                    ) {
-                        Row(horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                if (s == TravelState.Want) Icons.Outlined.Bookmark else Icons.Outlined.Flag,
-                                contentDescription = null, modifier = Modifier.size(18.dp),
-                                tint = if (on) palette.ocean else color,
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            Text(
-                                if (s == TravelState.Want) "Want to go" else "Been here",
-                                style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold,
-                                color = if (on) palette.ocean else cs.onSurface,
-                            )
-                        }
-                    }
-                }
-            }
-            if (count != null && count > 0) {
-                Spacer(Modifier.height(8.dp))
-                Row(Modifier.padding(end = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        if (count == 1) "1 visit" else "$count visits",
-                        style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f),
-                    )
-                    androidx.compose.material3.FilledTonalIconButton(onClick = { onLess?.invoke() }, enabled = onLess != null) {
-                        Icon(Icons.Filled.Remove, contentDescription = "One visit fewer")
-                    }
-                    Spacer(Modifier.width(8.dp))
-                    androidx.compose.material3.FilledTonalIconButton(onClick = onMore) {
-                        Icon(Icons.Filled.Add, contentDescription = "One more visit")
-                    }
+                Spacer(Modifier.width(8.dp))
+                androidx.compose.material3.FilledTonalIconButton(onClick = onMore) {
+                    Icon(Icons.Filled.Add, contentDescription = "One more visit")
                 }
             }
         }

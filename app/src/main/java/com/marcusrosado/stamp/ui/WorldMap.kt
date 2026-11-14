@@ -112,6 +112,12 @@ fun WorldMap(
     allCities: List<CityDot> = emptyList(),
     /** A tapped city of [allCities], by id; null leaves taps to the countries. */
     onCity: ((String) -> Unit)? = null,
+    /** The region picked, outlined as a picked country is. */
+    selectedRegion: String? = null,
+    /** The city picked, ringed. */
+    selectedCity: Pair<Double, Double>? = null,
+    /** Where the map rests after each move: zoom, then south, west, north and east. */
+    onViewport: ((DoubleArray) -> Unit)? = null,
     /** False while a page covers the whole map: its icons stop gliding until it shows again. */
     animate: Boolean = true,
 ) {
@@ -132,6 +138,7 @@ fun WorldMap(
     val routeTap by rememberUpdatedState(onRoute.takeIf { showRoutes })
     val regionTap by rememberUpdatedState(onRegion.takeIf { regionLayer != null })
     val cityTap by rememberUpdatedState(onCity.takeIf { allCities.isNotEmpty() })
+    val viewport by rememberUpdatedState(onViewport)
 
     val mapView = remember {
         MapView(context).apply {
@@ -232,6 +239,9 @@ fun WorldMap(
                 m.addOnCameraMoveStartedListener { moving = true }
                 m.addOnCameraIdleListener {
                     moving = false
+                    m.projection.visibleRegion.latLngBounds.let { b ->
+                        viewport?.invoke(doubleArrayOf(m.cameraPosition.zoom, b.latitudeSouth, b.longitudeWest, b.latitudeNorth, b.longitudeEast))
+                    }
                     m.cameraPosition.target?.let { camera.lat = it.latitude; camera.lon = it.longitude }
                     camera.zoom = m.cameraPosition.zoom
                 }
@@ -428,6 +438,19 @@ fun WorldMap(
             PropertyFactory.circleColor(Expression.color((if (plain) palette.visited else palette.selected).toArgb())),
         )
     }
+    LaunchedEffect(style, selectedRegion) {
+        val s = style ?: return@LaunchedEffect
+        for (id in listOf("region-selected-casing", "region-selected")) {
+            s.getLayerAs<org.maplibre.android.style.layers.LineLayer>(id)
+                ?.setFilter(Expression.eq(Expression.get("region"), Expression.literal(selectedRegion ?: "")))
+        }
+    }
+    LaunchedEffect(style, selectedCity) {
+        val s = style ?: return@LaunchedEffect
+        s.getSourceAs<GeoJsonSource>(SOURCE_SPOT)?.setGeoJson(
+            FeatureCollection.fromFeatures(listOfNotNull(selectedCity?.let { (lat, lon) -> Feature.fromGeometry(Point.fromLngLat(lon, lat)) })),
+        )
+    }
     LaunchedEffect(style, wantCities) {
         val s = style ?: return@LaunchedEffect
         s.getSourceAs<GeoJsonSource>(SOURCE_WANT_CITIES)?.setGeoJson(
@@ -577,6 +600,7 @@ private const val SOURCE_WANT_CITIES = "want-cities"
 private const val LAYER_REGIONS = "regions-fill"
 private val COMPLETE_LAYERS = listOf("complete-glow", "complete-line", "complete-glow-fine", "complete-line-fine")
 private const val SOURCE_ALL_CITIES = "all-cities"
+private const val SOURCE_SPOT = "spot"
 
 /** A city as the cities view draws it: a dot, more of them as the map zooms in. */
 class CityDot(val id: String, val lat: Double, val lon: Double, val population: Int, val mine: Boolean)
@@ -666,7 +690,8 @@ private fun styleJson(p: MapPalette) = """
     "$SOURCE_PHOTOS": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
     "$SOURCE_REGIONS": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
     "$SOURCE_WANT_CITIES": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
-    "$SOURCE_ALL_CITIES": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } }
+    "$SOURCE_ALL_CITIES": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
+    "$SOURCE_SPOT": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } }
   },
   "layers": [
     { "id": "ocean", "type": "background", "paint": { "background-color": "${hex(p.ocean)}" } },
@@ -686,6 +711,10 @@ private fun styleJson(p: MapPalette) = """
       "paint": { "fill-color": "${hex(p.land)}", "fill-antialias": true } },
     { "id": "regions-border", "type": "line", "source": "$SOURCE_REGIONS",
       "paint": { "line-color": "${hex(p.border)}", "line-width": 0.7 } },
+    { "id": "region-selected-casing", "type": "line", "source": "$SOURCE_REGIONS", "filter": ["==", ["get", "region"], ""],
+      "paint": { "line-color": "${hex(p.ocean)}", "line-width": 5.0 } },
+    { "id": "region-selected", "type": "line", "source": "$SOURCE_REGIONS", "filter": ["==", ["get", "region"], ""],
+      "paint": { "line-color": "${hex(p.selected)}", "line-width": 2.2 } },
     { "id": "complete-glow", "type": "line", "source": "countries", "maxzoom": $FINE_FULL, "filter": ["in", ["get", "country"], ["literal", []]],
       "paint": { "line-color": "$GOLD", "line-width": 7, "line-blur": 5, "line-opacity": 0.55 } },
     { "id": "complete-line", "type": "line", "source": "countries", "maxzoom": $FINE_FULL, "filter": ["in", ["get", "country"], ["literal", []]],
@@ -718,6 +747,9 @@ ${allCityLayersJson(p)},
       "paint": { "circle-radius": ["interpolate", ["linear"], ["zoom"], 1, 2.5, 6, 5],
                  "circle-color": "${hex(p.want)}",
                  "circle-stroke-color": "${hex(p.ocean)}", "circle-stroke-width": 1.2 } },
+    { "id": "spot-city", "type": "circle", "source": "$SOURCE_SPOT",
+      "paint": { "circle-radius": 9, "circle-color": "rgba(0,0,0,0)",
+                 "circle-stroke-color": "${hex(p.selected)}", "circle-stroke-width": 2.5 } },
 $ROUTE_ICONS_JSON,
     { "id": "photos", "type": "symbol", "source": "$SOURCE_PHOTOS", "minzoom": 4.5,
       "layout": { "icon-image": ["get", "img"], "icon-allow-overlap": false,

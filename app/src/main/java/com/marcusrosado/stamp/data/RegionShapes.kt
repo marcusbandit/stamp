@@ -58,7 +58,7 @@ class RegionShapes(private val open: (alpha2: String) -> InputStream?) {
 
     companion object {
         /** How many countries' regions stay in memory. */
-        const val KEEP = 24
+        const val KEEP = 40
 
         fun read(alpha2: String, b: ByteArray): List<RegionShape> {
             if (b.size < 4 || String(b, 0, 4, Charsets.US_ASCII) != "SRG1") return emptyList()
