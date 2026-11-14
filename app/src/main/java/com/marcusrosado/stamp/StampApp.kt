@@ -151,6 +151,12 @@ class StampApp : Application() {
         // First, so a crash anywhere after it leaves a report on the phone.
         CrashLog.install(this)
         visitsLoading.start()
+        // A crash right after a tap still saves it: the last change goes to disk before the report.
+        val crash = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, error ->
+            if (visitsLoading.isCompleted) runCatching { visits.flush() }
+            crash?.uncaughtException(thread, error)
+        }
         // Leaving the app, every change is on disk before Android may end the process.
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
             override fun onActivityStopped(activity: android.app.Activity) {
