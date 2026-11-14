@@ -488,7 +488,7 @@ class VisitStoreTest {
         s.set("JPN", TravelState.Visited)
         val aside = SetAside.find(f).single()
         assertEquals(newer, aside.readText())
-        assertTrue(SetAside.fromNewer(aside))
+        assertTrue(SetAside.fromNewer(aside.readText()))
         // Nor is it restored as an older layout.
         assertNull(s.backupSize(newer))
         assertFalse(s.restore(newer))

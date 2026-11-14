@@ -622,13 +622,19 @@ private fun UnreadableSave(app: StampApp) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     fun say(text: String) = android.widget.Toast.makeText(context, text, android.widget.Toast.LENGTH_SHORT).show()
-    val newer by produceState(false, file) {
-        value = withContext(Dispatchers.IO) { SetAside.fromNewer(file) }
+    // Read once: whether this app can restore it now (an update may have made a newer file
+    // readable), and if not, whether it is newer or damaged.
+    val look by produceState<SetAsideLook?>(null, file) {
+        value = withContext(Dispatchers.IO) {
+            val text = runCatching { file.readText() }.getOrNull()
+            SetAsideLook(text, text?.let { app.visits.backupSize(it) }, text != null && SetAside.fromNewer(text))
+        }
     }
-    var confirm by remember(file) { mutableStateOf<Pair<String, Int>?>(null) }
+    val seen = look ?: return
+    var confirm by remember(file) { mutableStateOf(false) }
 
-    fun restore(text: String) = scope.launch {
-        val ok = withContext(Dispatchers.IO) { app.visits.restore(text) }
+    fun restore() = scope.launch {
+        val ok = withContext(Dispatchers.IO) { seen.text != null && app.visits.restore(seen.text) }
         if (ok) {
             app.setAsideHandled(file)
             say("Places restored")
@@ -656,12 +662,13 @@ private fun UnreadableSave(app: StampApp) {
         }
     }
 
-    confirm?.let { (text, n) ->
+    if (confirm && seen.places != null) {
         RestoreConfirm(
             now = app.visits.visits.value.size,
-            incoming = n,
-            onRestore = { confirm = null; restore(text) },
-            onCancel = { confirm = null },
+            incoming = seen.places,
+            onRestore = { confirm = false; restore() },
+            onCancel = { confirm = false },
+            what = "file",
         )
         return
     }
@@ -672,31 +679,34 @@ private fun UnreadableSave(app: StampApp) {
         title = { Text("Your places couldn't be opened") },
         text = {
             Text(
-                if (newer) "On $day Stamp found places saved by a newer version of the app and started with an empty map. That file is still on this phone."
-                else "On $day Stamp's saved places were damaged and the map started empty. That file is still on this phone.",
+                when {
+                    seen.places != null -> "On $day Stamp couldn't open its saved places and the map started empty. The file is still on this phone and can be restored."
+                    seen.newer -> "On $day Stamp found places saved by a newer version of the app and started with an empty map. That file is still on this phone."
+                    else -> "On $day Stamp's saved places were damaged and the map started empty. That file is still on this phone."
+                },
             )
         },
         confirmButton = {
-            TextButton(onClick = {
-                scope.launch {
-                    val text = withContext(Dispatchers.IO) { runCatching { file.readText() }.getOrNull() }
-                    val n = text?.let { app.visits.backupSize(it) }
-                    when {
-                        text == null || n == null -> say("Stamp can't read this file")
-                        // Nothing on the phone to lose: no need to ask.
-                        app.visits.visits.value.isEmpty() -> restore(text)
-                        else -> confirm = text to n
-                    }
-                }
-            }) { Text("Restore") }
+            // Restore is offered only when this app can read the file; otherwise a copy is the way out.
+            if (seen.places != null) {
+                TextButton(onClick = {
+                    // Nothing on the phone to lose: no need to ask.
+                    if (app.visits.visits.value.isEmpty()) restore() else confirm = true
+                }) { Text("Restore") }
+            } else {
+                TextButton(onClick = { save.launch("stamp-unreadable-${java.time.LocalDate.now()}.json") }) { Text("Save a copy") }
+            }
         },
         dismissButton = {
             Row {
                 TextButton(onClick = { later = true }) { Text("Not now") }
-                TextButton(onClick = {
-                    save.launch("stamp-unreadable-${java.time.LocalDate.now()}.json")
-                }) { Text("Save a copy") }
+                if (seen.places != null) {
+                    TextButton(onClick = { save.launch("stamp-unreadable-${java.time.LocalDate.now()}.json") }) { Text("Save a copy") }
+                }
             }
         },
     )
 }
+
+/** What a set-aside file holds: its [text], the [places] this app can restore from it, if any. */
+private class SetAsideLook(val text: String?, val places: Int?, val newer: Boolean)

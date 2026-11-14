@@ -865,7 +865,9 @@ class VisitStore(private val file: File) {
         if (!file.exists()) return Read(emptyMap(), emptyList(), emptyMap(), false)
         return runCatching { parse(file.readText()) }.getOrElse {
             // Keep the unreadable file aside instead of letting the next save overwrite it.
-            file.renameTo(File(file.parentFile, "${file.name}.unreadable-${System.currentTimeMillis()}"))
+            // A rename that fails falls back to a copy, so the bytes are kept either way.
+            val aside = File(file.parentFile, "${file.name}.unreadable-${System.currentTimeMillis()}")
+            if (!file.renameTo(aside)) runCatching { file.copyTo(aside) }
             damaged = true
             Read(emptyMap(), emptyList(), emptyMap(), false)
         }

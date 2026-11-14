@@ -75,14 +75,18 @@ class StampApp : Application() {
      * Save files that could not be read and were set aside, newest first, until the user saves
      * a copy or restores one. Found after the store has loaded, since loading is what sets one aside.
      */
-    val setAside: kotlinx.coroutines.flow.MutableStateFlow<List<File>> by lazy {
+    private val _setAside by lazy {
         visits
         kotlinx.coroutines.flow.MutableStateFlow(SetAside.find(File(filesDir, VISITS_FILE)))
     }
+    val setAside: kotlinx.coroutines.flow.StateFlow<List<File>> get() = _setAside
 
+    /** Marks [f] dealt with, off the main thread, by the same single writer as the look. */
     fun setAsideHandled(f: File) {
-        SetAside.handled(f)
-        setAside.value = SetAside.find(File(filesDir, VISITS_FILE))
+        scope.launch(lookWriter) {
+            SetAside.handled(f)
+            _setAside.value = SetAside.find(File(filesDir, VISITS_FILE))
+        }
     }
     val flags by lazy { Flags(filesDir) }
 
@@ -208,11 +212,11 @@ class StampApp : Application() {
         }
         cityAreas.start()
         // Grants for photos of removed memories, visits or countries go back to Android.
-        // Never after a file that could not be read: an empty store would hand every grant back,
-        // and a restored backup would then point at photos Stamp may no longer open.
+        // Never while a file that could not be read is still set aside: an empty store would hand
+        // every grant back, and restoring that file would then point at photos Stamp may no longer open.
         scope.launch(Dispatchers.IO) {
             val visits = visitsLoading.await()
-            if (visits.damaged) return@launch
+            if (visits.damaged || setAside.value.isNotEmpty()) return@launch
             val inUse = visits.visits.value.values.flatMap { it.trips }.flatMap { it.memories }.mapNotNull { it.media }.toSet()
             com.marcusrosado.stamp.scan.Memories.releaseUnused(this@StampApp, inUse)
         }

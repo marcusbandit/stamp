@@ -21,9 +21,9 @@ object SetAside {
     /** When [f] was set aside, in epoch ms, read from its name. */
     fun at(f: File): Long = f.name.substringAfterLast('-').toLongOrNull() ?: f.lastModified()
 
-    /** Whether [f] is a save file from a newer Stamp, rather than a damaged one. */
-    fun fromNewer(f: File): Boolean =
-        runCatching { JSONObject(f.readText()).optInt("version") > FILE_VERSION }.getOrDefault(false)
+    /** Whether [text] was saved by a newer Stamp than this one, rather than being damaged. */
+    fun fromNewer(text: String): Boolean =
+        runCatching { JSONObject(text).optInt("version") > FILE_VERSION }.getOrDefault(false)
 
     /** Marks [f] dealt with, so no launch asks about it again. */
     fun handled(f: File): Boolean = f.renameTo(File(f.parentFile, "${f.name}.handled"))
