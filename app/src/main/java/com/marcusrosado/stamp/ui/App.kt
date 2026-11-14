@@ -234,7 +234,7 @@ private fun App(
     var showList by rememberSaveable { mutableStateOf(false) }
     // A city search across every country: to fly to a city, or to start a trip there.
     var cityHunt by rememberSaveable { mutableStateOf<String?>(null) }
-    var spot by remember { mutableStateOf<Spot?>(null) }
+    var spot by rememberSaveable(stateSaver = SpotSaver) { mutableStateOf<Spot?>(null) }
     var pendingTrip by rememberSaveable { mutableStateOf<String?>(null) }
     var tripFromTab by rememberSaveable { mutableStateOf(false) }
     val allTrips by app.visits.allTrips.collectAsStateWithLifecycle()
@@ -248,6 +248,21 @@ private fun App(
     val mapPhotos by app.mapPhotos.on.collectAsStateWithLifecycle()
     val routes by app.routes.on.collectAsStateWithLifecycle()
     val mapView by app.mapView.collectAsStateWithLifecycle()
+    // A region's card goes with the regions drawn under it, a city's with the cities view: a
+    // change to a view that no longer draws the place closes its card.
+    var spotView by rememberSaveable { mutableStateOf(mapView) }
+    LaunchedEffect(mapView) {
+        if (mapView == spotView) return@LaunchedEffect
+        spotView = mapView
+        spot = when (val now = spot) {
+            is Spot.Region -> now.takeIf {
+                mapView == com.marcusrosado.stamp.data.MapView.Regions ||
+                    (mapView == com.marcusrosado.stamp.data.MapView.Countries && visitsOf(now.countryId, atlas, app.visits.visits.value).any { it.splitRegions })
+            }
+            is Spot.City -> now.takeIf { mapView == com.marcusrosado.stamp.data.MapView.Cities }
+            null -> null
+        }
+    }
     val follow by app.followLines.on.collectAsStateWithLifecycle()
     val lines by app.routePacks.net.collectAsStateWithLifecycle()
     val lastBackup by app.lastBackup.collectAsStateWithLifecycle()
@@ -558,6 +573,24 @@ private fun App(
 }
 
 /** Centre on the country's label point, zoomed so most of it fits. */
+/** Keeps the open region's or city's card across a recreation, an unfold or a theme change. */
+private val SpotSaver = androidx.compose.runtime.saveable.Saver<Spot?, ArrayList<Any>>(
+    save = { s ->
+        when (s) {
+            is Spot.Region -> arrayListOf<Any>("region", s.countryId, s.regionId)
+            is Spot.City -> arrayListOf<Any>("city", s.countryId, s.cityId, s.name, s.lat, s.lon)
+            null -> null
+        }
+    },
+    restore = { l ->
+        when (l.getOrNull(0)) {
+            "region" -> Spot.Region(l[1] as String, l[2] as String)
+            "city" -> Spot.City(l[1] as String, l[2] as String, l[3] as String, l[4] as Double, l[5] as Double)
+            else -> null
+        }
+    },
+)
+
 private fun focusOn(c: Country): Focus {
     val span = max(c.maxLon - c.minLon, (c.maxLat - c.minLat) * 1.6).coerceAtLeast(0.5)
     val zoom = (ln(360.0 / span) / ln(2.0) - 0.3).coerceIn(1.5, 7.0)

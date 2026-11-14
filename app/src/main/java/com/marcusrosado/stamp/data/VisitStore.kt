@@ -240,26 +240,32 @@ class VisitStore(private val file: File) {
 
     /**
      * Draws country [id] as its regions, or as one country again. Regions marked while split
-     * stay with the country, so splitting it again brings them back.
+     * stay with the country, so splitting it again brings them back. Only the drawing changes:
+     * a country with no mark has nowhere to keep it, and is left as it is.
      */
+    @Synchronized
     fun setSplitRegions(id: String, on: Boolean) {
-        if (_visits.value[id] == null) { if (!on) return; set(id, TravelState.Want) }
+        if (marks[id] == null) return
         edit(id) { it.copy(splitRegions = on) }
     }
 
     /**
-     * Marks region [regionId] of country [id] visited, wanted, or neither. A region marked in a
-     * country with no mark of its own marks the country too: visited for a visited region,
-     * want to go for a wanted one.
+     * A region or a city of country [id] marked [state] marks the country too, with the same
+     * mark, when the country has none or only want to go. A country been to keeps its own.
      */
+    private fun markCountryFor(id: String, state: TravelState) {
+        val now = marks[id]?.state
+        if (now == null || (state.counts && !now.counts)) set(id, state)
+    }
+
+    /**
+     * Marks region [regionId] of country [id] visited, lived in, wanted, or neither. A region
+     * marked in a country with no mark of its own, or only want to go, marks the country the
+     * same way.
+     */
+    @Synchronized
     fun setRegion(id: String, regionId: String, state: TravelState?) {
-        val v = _visits.value[id]
-        if (v == null) {
-            if (state == null) return
-            set(id, if (state == TravelState.Want) TravelState.Want else TravelState.Visited)
-        } else if (state != null && state != TravelState.Want && !v.state.counts) {
-            set(id, TravelState.Visited)
-        }
+        if (state == null) { if (marks[id] == null) return } else markCountryFor(id, state)
         edit(id) { x ->
             x.copy(
                 regions = if (state == TravelState.Visited) (x.regions - regionId) + regionId else x.regions - regionId,
@@ -272,18 +278,16 @@ class VisitStore(private val file: File) {
     /**
      * Marks city [cityId] of country [id] the way a country is marked: visited gives it a visit
      * when it has none, lived and wanted are said of the city itself, and none takes back what
-     * was said of it. Its visits stay; taking those back is one at a time.
+     * was said of it. Its visits stay; taking those back is one at a time. The country is
+     * marked the way [setRegion] marks it, so a city been to never hides in a wanted country.
      */
+    @Synchronized
     fun setCity(id: String, cityId: String, state: TravelState?) {
-        val v = _visits.value[id]
-        val visited = v?.trips?.any { cityId in it.places } == true
+        if (state == null && marks[id] == null) return
+        val visited = _visits.value[id]?.trips?.any { cityId in it.places } == true
+        // The visit first: a country marked visited with no visit at all gets an empty one.
         if (state == TravelState.Visited && !visited) newTripAt(cityId)
-        if (_visits.value[id] == null) {
-            if (state == null) return
-            set(id, if (state == TravelState.Want) TravelState.Want else if (state == TravelState.Lived) TravelState.Lived else TravelState.Visited)
-        } else if (state == TravelState.Lived && _visits.value[id]?.state == TravelState.Want) {
-            set(id, TravelState.Visited)
-        }
+        if (state != null) markCountryFor(id, state)
         edit(id) { x ->
             x.copy(
                 wantCities = if (state == TravelState.Want) (x.wantCities - cityId) + cityId else x.wantCities - cityId,
@@ -293,6 +297,7 @@ class VisitStore(private val file: File) {
     }
 
     /** Says the user wants to go to city [cityId] of country [id], or no longer does. */
+    @Synchronized
     fun setCityWant(id: String, cityId: String, on: Boolean) {
         if (_visits.value[id] == null) { if (!on) return; set(id, TravelState.Want) }
         edit(id) { x -> x.copy(wantCities = if (on) (x.wantCities - cityId) + cityId else x.wantCities - cityId) }
@@ -344,8 +349,7 @@ class VisitStore(private val file: File) {
      */
     @Synchronized
     fun forgetCityVisit(cityId: String): Boolean {
-        val t = trips.lastOrNull { it.cities == listOf(cityId) && it.date == null && it.until == null && it.memories.isEmpty() && !it.now }
-            ?: return false
+        val t = trips.lastOrNull { it.isBareVisitTo(cityId) } ?: return false
         val home = t.home
         val others = trips.count { it.id != t.id && home != null && home in it.lands }
         trips = if (others > 0) trips.filterNot { it.id == t.id }

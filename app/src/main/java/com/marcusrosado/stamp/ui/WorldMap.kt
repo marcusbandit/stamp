@@ -261,11 +261,22 @@ fun WorldMap(
         }
     }
 
-    val regionCountryIds = remember(regionLayer?.shapes) { regionLayer?.shapes.orEmpty().map { it.first }.distinct() }
-    LaunchedEffect(style, visits, palette, split, plain, regionCountryIds) {
+    // The land masses the regions cover: a country and its parts that share its own code. An
+    // overseas part with a code of its own, such as Reunion, is not in its country's regions and
+    // keeps drawing as itself.
+    val regionCovered = remember(regionLayer?.shapes, atlas) {
+        regionLayer?.shapes.orEmpty().map { it.first }.distinct().flatMap { c ->
+            val a2 = atlas.byId[c]?.alpha2.orEmpty()
+            (listOf(c) + atlas.partsOf(c).map { it.id }).filter { atlas.byId[it]?.alpha2.equals(a2, ignoreCase = true) }
+        }
+    }
+    LaunchedEffect(style, visits, palette, split, plain, regionCovered) {
         val s = style ?: return@LaunchedEffect
+        val borders = listOf("countries-border", "countries-border-fine")
         if (plain) {
             for (id in listOf(LAYER_FILL, LAYER_FILL_FINE)) s.getLayerAs<FillLayer>(id)?.setProperties(PropertyFactory.fillColor(Expression.color(palette.land.toArgb())))
+            // No regions drawn here, so every country draws its own border again.
+            for (id in borders) s.getLayerAs<org.maplibre.android.style.layers.LineLayer>(id)?.setFilter(Expression.literal(true))
             return@LaunchedEffect
         }
         // Split, each land mass by its own id. Whole, every part by its country's mark.
@@ -281,14 +292,13 @@ fun WorldMap(
         } else {
             Expression.match(Expression.get(if (split) "id" else "country"), Expression.color(palette.land.toArgb()), *stops.toTypedArray())
         }
-        // A country drawn as its regions is plain underneath, so coast its regions leave out
-        // shows no mark of its own.
-        // Nothing of it at all: its regions are cut from the same shape and cover all of it.
-        val inRegions = Expression.`in`(Expression.get("country"), Expression.literal(regionCountryIds.toTypedArray()))
-        val shown = if (regionCountryIds.isEmpty()) fill else Expression.switchCase(inRegions, Expression.rgba(0, 0, 0, 0), fill)
+        // A country drawn as its regions shows nothing of its own where they lie: they are cut
+        // from the same shapes and cover all of them.
+        val inRegions = Expression.`in`(Expression.get("id"), Expression.literal(regionCovered.toTypedArray()))
+        val shown = if (regionCovered.isEmpty()) fill else Expression.switchCase(inRegions, Expression.rgba(0, 0, 0, 0), fill)
         for (id in listOf(LAYER_FILL, LAYER_FILL_FINE)) s.getLayerAs<FillLayer>(id)?.setProperties(PropertyFactory.fillColor(shown))
         // Its own border too: the regions draw their outline, coast included.
-        for (id in listOf("countries-border", "countries-border-fine")) {
+        for (id in borders) {
             s.getLayerAs<org.maplibre.android.style.layers.LineLayer>(id)?.setFilter(Expression.not(inRegions))
         }
     }

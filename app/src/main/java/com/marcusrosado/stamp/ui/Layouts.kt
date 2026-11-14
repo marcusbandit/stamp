@@ -691,20 +691,40 @@ private fun PlaceFor(state: AppState, spot: Spot, modifier: Modifier) {
     val id = when (spot) { is Spot.Region -> spot.regionId; is Spot.City -> spot.cityId }
     val note = vs.firstNotNullOfOrNull { it.cityNotes[id] }
     when (spot) {
-        is Spot.Region -> PlaceCard(
-            flag = country?.flag.orEmpty(),
-            title = state.places?.regionName(spot.regionId) ?: spot.regionId,
-            subtitle = country?.name.orEmpty(),
-            state = state.regionView.marks[spot.regionId],
-            onSet = { s -> state.onRegion(spot.countryId, spot.regionId, s) },
-            loved = note?.loved == true, rating = note?.rating ?: 0,
-            onNote = { l, r -> state.details.onCityNote(spot.countryId, spot.regionId, com.marcusrosado.stamp.data.Note(l, r, note?.name.orEmpty())) },
-            onClose = { state.onSpot(null) },
-            modifier = modifier,
-        )
+        is Spot.Region -> {
+            val name = state.places?.regionName(spot.regionId) ?: spot.regionId
+            // A region a place on a visit lies in stays been to, the way a country with visits
+            // does: clearing it says why instead of doing nothing.
+            var why by remember(spot) { mutableStateOf<String?>(null) }
+            PlaceCard(
+                flag = country?.flag.orEmpty(),
+                title = name,
+                subtitle = country?.name.orEmpty(),
+                state = state.regionView.marks[spot.regionId],
+                onSet = { s ->
+                    val litBy = state.regionView.lit[spot.regionId]
+                    val said = vs.any { spot.regionId in it.wantRegions || spot.regionId in it.livedPlaces }
+                    if (s == null && litBy != null && !said) why = litBy
+                    else state.onRegion(spot.countryId, spot.regionId, s)
+                },
+                loved = note?.loved == true, rating = note?.rating ?: 0,
+                onNote = { l, r -> state.details.onCityNote(spot.countryId, spot.regionId, com.marcusrosado.stamp.data.Note(l, r, note?.name.orEmpty())) },
+                onClose = { state.onSpot(null) },
+                modifier = modifier,
+            )
+            why?.let { place ->
+                SeamAlertDialog(
+                    onDismissRequest = { why = null },
+                    title = { Text(name) },
+                    text = { Text("Counted because you were in $place.") },
+                    confirmButton = { androidx.compose.material3.TextButton(onClick = { why = null }) { Text("Done") } },
+                )
+            }
+        }
         is Spot.City -> {
             // Been to once for every visit it was on, lived in when said, else wanted when said.
-            val count = vs.filter { it.state.counts }.sumOf { it.visitsTo(spot.cityId) }
+            val trips = countedTrips(vs)
+            val count = trips.count { spot.cityId in it.places }
             val mark = when {
                 vs.any { spot.cityId in it.livedPlaces } -> TravelState.Lived
                 count > 0 -> if (own?.state == TravelState.Lived) TravelState.Lived else TravelState.Visited
@@ -724,6 +744,7 @@ private fun PlaceFor(state: AppState, spot: Spot, modifier: Modifier) {
                 visits = count,
                 onMore = { state.onBeenToCity(spot.cityId) },
                 onLess = { state.onForgetCity(spot.cityId) },
+                canLess = trips.any { it.isBareVisitTo(spot.cityId) },
             )
         }
     }

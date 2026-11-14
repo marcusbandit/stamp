@@ -53,6 +53,7 @@ import com.marcusrosado.stamp.data.MapView
 import com.marcusrosado.stamp.data.Places
 import com.marcusrosado.stamp.data.RegionShape
 import com.marcusrosado.stamp.data.TravelState
+import com.marcusrosado.stamp.data.Trip
 import com.marcusrosado.stamp.data.Visit
 
 /** A place under the finger that is smaller than a country: a region, or a city found by name. */
@@ -69,11 +70,18 @@ fun visitsOf(countryId: String, atlas: Atlas, visits: Map<String, Visit>): List<
     (listOf(countryId) + atlas.partsOf(countryId).map { it.id }).mapNotNull { visits[it] }
 
 /**
+ * The trips of a whole country's [visits] that count, each once: a country's own visit already
+ * holds the trips of its parts, so a trip to an island of it is in both.
+ */
+fun countedTrips(visits: List<Visit>): List<Trip> =
+    visits.filter { it.state.counts }.flatMap { it.trips }.distinctBy { it.id }
+
+/**
  * The countries the map draws as their regions: every one split into regions, and in the
- * regions view every marked country too.
+ * regions view every marked country too. The cities view draws none, its countries plain.
  */
 fun regionCountries(view: MapView, atlas: Atlas, visits: Map<String, Visit>, inView: List<String> = emptyList()): List<String> =
-    atlas.mains.map { it.id }.filter { id ->
+    if (view == MapView.Cities) emptyList() else atlas.mains.map { it.id }.filter { id ->
         val vs = visitsOf(id, atlas, visits)
         vs.any { it.splitRegions } || (view == MapView.Regions && (vs.isNotEmpty() || id in inView))
     }
@@ -111,6 +119,8 @@ class RegionView(
     val countryMarks: Map<String, TravelState>,
     /** Countries done in full, outlined in gold. */
     val complete: Set<String>,
+    /** Regions been to because a place on a visit lies in them, with the name of one such place. */
+    val lit: Map<String, String> = emptyMap(),
 ) {
     companion object {
         val EMPTY = RegionView(emptyList(), emptyList(), emptyMap(), emptyMap(), emptySet())
@@ -120,7 +130,8 @@ class RegionView(
 /**
  * Every region's mark. A region is been to (lived in, in a lived country) when any place on a
  * visit lies in it, a city, an address, a pin, a day trip, where a trip set out from or went back
- * to, or when the user said so; else wanted when the user said so.
+ * to. What the user said of a region wins over that, the way a country's own mark does: been
+ * to, lived in, or wanted.
  */
 fun buildRegionView(
     view: MapView, atlas: Atlas, visits: Map<String, Visit>, places: Places?, rs: com.marcusrosado.stamp.data.RegionShapes,
@@ -131,27 +142,40 @@ fun buildRegionView(
     val shapes = countries.flatMap { id -> val a2 = atlas.byId[id]?.alpha2.orEmpty(); if (a2.length == 2) rs.of(a2).map { id to it } else emptyList() }
     val byCountry = shapes.groupBy({ it.first }, { it.second })
     val marks = HashMap<String, TravelState>()
+    val lit = HashMap<String, String>()
     for (id in countries) {
         val regions = byCountry[id].orEmpty()
-        for (v in visitsOf(id, atlas, visits)) {
-            val been = if (v.state == TravelState.Lived) TravelState.Lived else TravelState.Visited
-            for (r in v.wantRegions) marks.putIfAbsent(r, TravelState.Want)
-            val seen = HashSet<String>(v.regions)
-            if (v.state.counts) {
-                places?.regionsVisited(v)?.keys?.let { seen += it }
-                // Every place on a visit, placed on the map, lights the region it lies in.
-                val stops = v.trips.flatMap { t -> t.places + listOfNotNull(t.start, t.end) }.distinct()
-                for (stop in stops) {
-                    val p = placeOf(stop, v, places) ?: continue
-                    regions.firstOrNull { it.contains(p.lat, p.lon) }?.let { seen += it.id }
+        val vs = visitsOf(id, atlas, visits)
+        fun beenIn(v: Visit) = if (v.state == TravelState.Lived) TravelState.Lived else TravelState.Visited
+        fun light(r: String, been: TravelState) { if (marks[r] != TravelState.Lived) marks[r] = been }
+        // A country's own visit holds its parts' trips too: each place is looked up once.
+        val found = HashMap<String, String?>()
+        for (v in vs) {
+            if (!v.state.counts) continue
+            val been = beenIn(v)
+            places?.regionsVisited(v)?.forEach { (r, city) -> if (city != null) { lit.putIfAbsent(r, city.name); light(r, been) } }
+            // Every place on a visit, placed on the map, lights the region it lies in.
+            val stops = v.trips.flatMap { t -> t.places + listOfNotNull(t.start, t.end) }.distinct()
+            for (stop in stops) {
+                val r = if (stop in found) found[stop] else {
+                    val p = placeOf(stop, v, places)
+                    val at = if (p == null) null else regions.firstOrNull { it.contains(p.lat, p.lon) }?.id
+                    if (p != null && at != null) lit.putIfAbsent(at, p.name)
+                    found[stop] = at
+                    at
                 }
+                if (r != null) light(r, been)
             }
-            for (r in seen) marks[r] = been
+        }
+        // Then what the user said of each region, over what its places lit.
+        for (v in vs) {
+            for (r in v.regions) light(r, beenIn(v))
+            for (r in v.wantRegions) marks[r] = TravelState.Want
             for (r in v.livedPlaces) marks[r] = TravelState.Lived
         }
     }
     val countryMarks = countries.mapNotNull { id -> atlas.markOf(id, visits, false)?.let { id to it } }.toMap()
-    return RegionView(countries, shapes, marks, countryMarks, completeCountries(view, atlas, visits, shapes, marks))
+    return RegionView(countries, shapes, marks, countryMarks, completeCountries(view, atlas, visits, shapes, marks), lit)
 }
 
 /**
@@ -174,7 +198,7 @@ fun completeCountries(
     MapView.Cities -> emptySet()
 }
 
-private fun RegionView.copyComplete(c: Set<String>) = RegionView(countries, shapes, marks, countryMarks, c)
+private fun RegionView.copyComplete(c: Set<String>) = RegionView(countries, shapes, marks, countryMarks, c, lit)
 
 /**
  * The view buttons along the bottom of the map: routes on or off, and what the map marks. Only
@@ -243,6 +267,8 @@ fun PlaceCard(
     visits: Int? = null,
     onMore: () -> Unit = {},
     onLess: () -> Unit = {},
+    /** False when no visit can go without losing its dates or memories. */
+    canLess: Boolean = true,
 ) {
     Column(
         modifier.verticalScroll(rememberScrollState()).padding(16.dp),
@@ -266,7 +292,7 @@ fun PlaceCard(
         if (visits != null && visits > 0) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(if (visits == 1) "1 visit" else "$visits visits", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-                androidx.compose.material3.FilledTonalIconButton(onClick = onLess) {
+                androidx.compose.material3.FilledTonalIconButton(onClick = onLess, enabled = canLess) {
                     Icon(Icons.Filled.Remove, contentDescription = "One visit fewer")
                 }
                 Spacer(Modifier.width(8.dp))

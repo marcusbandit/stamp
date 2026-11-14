@@ -39,8 +39,8 @@ class RegionShape(
 
 /**
  * The outlines of each country's regions, as tools/build_regions.py writes them: one small file
- * per country, read only when a country is drawn as its regions and kept for the few countries
- * seen last, so the whole world's regions never sit in memory at once.
+ * per country, read only when a country is drawn as its regions and kept once read, for as many
+ * countries as the regions view can ask for at once.
  */
 class RegionShapes(private val open: (alpha2: String) -> InputStream?) {
     private val kept = object : LinkedHashMap<String, List<RegionShape>>(16, 0.75f, true) {
@@ -51,14 +51,20 @@ class RegionShapes(private val open: (alpha2: String) -> InputStream?) {
     fun of(alpha2: String): List<RegionShape> {
         val cc = alpha2.uppercase()
         synchronized(kept) { kept[cc]?.let { return it } }
-        val read = runCatching { open(cc)?.use { read(cc, it.readBytes()) } }.getOrNull().orEmpty()
+        // No file means no regions, which is worth keeping. A read that failed is not: the next
+        // ask tries again.
+        val read = runCatching { open(cc)?.use { read(cc, it.readBytes()) }.orEmpty() }.getOrElse { return emptyList() }
         synchronized(kept) { kept[cc] = read }
         return read
     }
 
     companion object {
-        /** How many countries' regions stay in memory. */
-        const val KEEP = 40
+        /**
+         * How many countries' regions stay in memory. The regions view asks for every marked
+         * country plus those in sight, so this holds them all: every country's regions together
+         * come to about 14 MB once read, small enough to never read one twice.
+         */
+        const val KEEP = 250
 
         fun read(alpha2: String, b: ByteArray): List<RegionShape> {
             if (b.size < 4 || String(b, 0, 4, Charsets.US_ASCII) != "SRG1") return emptyList()
