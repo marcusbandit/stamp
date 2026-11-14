@@ -100,10 +100,13 @@ private data class Mark(
  * country's [Visit] is put together from its mark and the trips that touch it. Every land a
  * trip touches is marked visited, once [geo] says where its stops are.
  *
- * Small enough to rewrite whole on every change; the write goes through a temp file so a
- * crash mid-write never leaves half a file behind.
+ * Every change updates what is shown at once, on the caller's thread, and the file is
+ * rewritten whole on the save thread from the newest state ([LatestWriter]). [flush] waits
+ * until the file holds everything; the app calls it when it goes to the background.
  */
 class VisitStore(private val file: File) {
+    private val writer = LatestWriter.of(file)
+
     private var marks: Map<String, Mark>
     private var trips: List<Trip>
     private var pins: Map<String, Pin>
@@ -124,6 +127,7 @@ class VisitStore(private val file: File) {
         set(value) {
             synchronized(this) {
                 field = value
+                pinLands.clear()
                 if (value != null) {
                     val drops = pendingDrops
                     pendingDrops = emptyMap()
@@ -143,11 +147,26 @@ class VisitStore(private val file: File) {
      */
     private var pendingDrops: Map<String, Set<String>> = emptyMap()
 
+    /** Which land each pin's spot is on, null at sea, worked out once per spot: a pin that moves is a new key. */
+    private val pinLands = HashMap<Pair<Double, Double>, String?>()
+
+    /**
+     * The trips as the last settle left them, with the map data and pins it went by, and every
+     * place each one goes to, sets out from or goes back to. A trip that is still the same object
+     * needs nothing worked out again; any other change to the map data or the pins redoes all.
+     */
+    private var settled: Set<Trip> = emptySet()
+    private var settledGeo: Geo? = null
+    private var settledPins: Map<String, Pin>? = null
+    private var placesOf = java.util.IdentityHashMap<Trip, List<String>>()
+
     /** True when the saved file could not be read and was set aside: the store started empty. */
     var damaged = false
         private set
 
     init {
+        // A store opened again on the same file reads what the last one saved, all of it.
+        writer.flush()
         val read = load()
         // Before an older layout is rewritten as trips, its file is kept beside, once.
         if (read.old) {
@@ -646,7 +665,12 @@ class VisitStore(private val file: File) {
 
     private fun landOfStop(stop: String, g: Geo): String? {
         val place = placeIdOf(stop)
-        return pins[place]?.let { g.landOf(it.lat, it.lon) } ?: if (isPin(place)) null else g.landOfCity(place)
+        return pins[place]?.let { landOfPin(it, g) } ?: if (isPin(place)) null else g.landOfCity(place)
+    }
+
+    private fun landOfPin(pin: Pin, g: Geo): String? {
+        val spot = pin.lat to pin.lon
+        return if (spot in pinLands) pinLands[spot] else g.landOf(pin.lat, pin.lon).also { pinLands[spot] = it }
     }
 
     /**
@@ -657,24 +681,25 @@ class VisitStore(private val file: File) {
     private fun settle() {
         // A pin id whose pin was lost, say to a damaged file, would show as a nameless city forever.
         fun lost(id: String) = placeIdOf(id).let { isPin(it) && it !in pins }
-        trips = trips.map { t ->
-            if (t.cities.none(::lost) && t.dayPlaces.values.flatten().none(::lost)) t
-            else t.copy(
+        val g = geo
+        val known = if (g === settledGeo && pins === settledPins) settled else emptySet()
+        trips = trips.map { trip ->
+            if (trip in known) return@map trip
+            var t = trip
+            if (t.cities.any(::lost) || t.dayPlaces.values.any { l -> l.any(::lost) }) t = t.copy(
                 cities = t.cities.filterNot(::lost),
                 dayPlaces = t.dayPlaces.mapValues { (_, l) -> l.filterNot(::lost) }.filterValues { it.isNotEmpty() },
                 slept = t.slept.filterValues { !lost(it) },
             )
-        }
-        // A leg goes with a stop it ran to or from. One whose stops were only reordered apart
-        // stays, unseen, and is back when the stops line up again.
-        trips = trips.map { t -> t.keptLegs.let { keep -> if (keep.size == t.legs.size) t else t.copy(legs = keep) } }
-        val g = geo
-        if (g != null) {
-            trips = trips.map { t ->
+            // A leg goes with a stop it ran to or from. One whose stops were only reordered apart
+            // stays, unseen, and is back when the stops line up again.
+            t.keptLegs.let { keep -> if (keep.size != t.legs.size) t = t.copy(legs = keep) }
+            if (g != null) {
                 val stops = t.places.mapNotNull { landOfStop(it, g) }
                 val lands = (t.lands.take(1) + stops).distinct()
-                if (lands == t.lands || lands.isEmpty()) t else t.copy(lands = lands)
+                if (lands != t.lands && lands.isNotEmpty()) t = t.copy(lands = lands)
             }
+            t
         }
         // Somewhere a trip went is somewhere the user has been.
         val touched = trips.filter { t -> t.lands.firstOrNull()?.let { marks[it]?.state?.counts } != false }.flatMap { it.lands }.toSet()
@@ -683,37 +708,69 @@ class VisitStore(private val file: File) {
             if (m == null || !m.state.counts) marks = marks + (land to (m?.copy(state = TravelState.Visited) ?: Mark(TravelState.Visited)))
         }
         // A Visited or Lived place has been visited at least once, so it holds at least one trip.
+        val reached = trips.flatMapTo(HashSet()) { it.lands }
         for ((id, m) in marks) {
-            if (m.state.counts && trips.none { id in it.lands }) trips = trips + Trip(newTripId(), lands = listOf(id))
+            if (m.state.counts && id !in reached) trips = trips + Trip(newTripId(), lands = listOf(id))
         }
         // A pin a trip set out from or went back to is in use too, though it is no stop.
-        val used = trips.flatMap { it.places + listOfNotNull(it.start, it.end) }.toSet()
-        pins = pins.filterKeys { it in used }
+        val before = placesOf
+        placesOf = java.util.IdentityHashMap(trips.size * 2)
+        for (t in trips) placesOf[t] = before[t] ?: (t.places + listOfNotNull(t.start, t.end))
+        val used = placesOf.values.flatMapTo(HashSet()) { it }
+        if (pins.keys.any { it !in used }) pins = pins.filterKeys { it in used }
         // Notes go with their place: a region's stays, as does a city's that is lived in or wanted.
         fun kept(m: Mark, k: String) = k in used || '.' in k || k in m.livedPlaces || k in m.wantCities
         marks = marks.mapValues { (_, m) -> if (m.cityNotes.keys.all { kept(m, it) }) m else m.copy(cityNotes = m.cityNotes.filterKeys { kept(m, it) }) }
+        settled = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<Trip, Boolean>(trips.size * 2)).apply { addAll(trips) }
+        settledGeo = g
+        settledPins = pins
     }
 
-    /** The trips that count for [id]: those that touch it, and for a country, its parts too. */
-    private fun tripsOf(id: String): List<Trip> {
+    /**
+     * The trips that count for each place, dated ones oldest first, in one pass over [sorted]:
+     * those that touch it, and for a country, its parts too.
+     */
+    private fun tripsByPlace(sorted: List<Trip>): Map<String, List<Trip>> {
         val g = geo
-        return trips.filter { t -> t.lands.any { it == id || (g != null && it != id && g.countryOf(it) == id) } }
-            .sortedWith(compareBy(nullsLast()) { it.date })
+        val by = HashMap<String, MutableList<Trip>>()
+        val keys = LinkedHashSet<String>()
+        for (t in sorted) {
+            keys.clear()
+            for (land in t.lands) {
+                keys += land
+                if (g != null) keys += g.countryOf(land)
+            }
+            for (k in keys) by.getOrPut(k) { ArrayList() } += t
+        }
+        return by
     }
 
     private fun publish() {
+        val sorted = trips.sortedWith(compareBy(nullsLast()) { it.date })
+        val byPlace = tripsByPlace(sorted)
+        // A place's pins are those its trips go to, set out from or go back to. Each trip's are
+        // found once, and come out in the order of the whole list.
+        val pinOrder = HashMap<String, Int>(pins.size * 2).apply { pins.keys.forEachIndexed { i, k -> put(k, i) } }
+        val pinsOfTrip = java.util.IdentityHashMap<Trip, List<String>>()
+        fun pinsOn(ts: List<Trip>): Map<String, Pin> {
+            if (pinOrder.isEmpty()) return emptyMap()
+            val here = ts.flatMapTo(HashSet()) { t ->
+                pinsOfTrip.getOrPut(t) { (placesOf[t] ?: (t.places + listOfNotNull(t.start, t.end))).filter { it in pinOrder } }
+            }
+            if (here.isEmpty()) return emptyMap()
+            return here.sortedBy { pinOrder[it] }.associateWith { pins.getValue(it) }
+        }
         val view = marks.mapValues { (id, m) ->
-            val ts = tripsOf(id)
-            val on = ts.flatMap { it.places + listOfNotNull(it.start, it.end) }.toSet()
+            val ts = byPlace[id].orEmpty()
             Visit(
                 state = m.state, evidence = m.evidence, loved = m.loved, rating = m.rating,
                 trips = ts, regions = m.regions, cityNotes = m.cityNotes,
-                pins = pins.filterKeys { it in on },
+                pins = pinsOn(ts),
                 splitRegions = m.split, wantRegions = m.wantRegions, wantCities = m.wantCities, livedPlaces = m.livedPlaces,
             )
         }
         _visits.value = view
-        _trips.value = trips.sortedWith(compareBy(nullsLast()) { it.date })
+        _trips.value = sorted
         _home.value = trips.firstOrNull { it.now }?.home?.takeIf { marks[it]?.state == TravelState.Lived }
     }
 
@@ -723,6 +780,13 @@ class VisitStore(private val file: File) {
         write()
     }
 
+    /**
+     * Waits until the file holds every change made so far. Called when the app goes to the
+     * background, on a crash, and before a restore reports back. False when the write failed;
+     * the changes stay in memory and are tried again on the next save or flush.
+     */
+    fun flush(): Boolean = writer.flush()
+
     private fun newTripId() = java.util.UUID.randomUUID().toString().take(8)
 
     private val homeFile get() = File(file.parentFile, "home.txt")
@@ -731,18 +795,13 @@ class VisitStore(private val file: File) {
 
     private class Read(val marks: Map<String, Mark>, val trips: List<Trip>, val pins: Map<String, Pin>, val old: Boolean)
 
-    // Written beside and synced before it replaces the file, so a power cut mid-save leaves the
-    // last good copy rather than an empty one.
+    // The state as it is now, encoded and written on the save thread. The maps and lists are
+    // never changed in place, only replaced, so the snapshot stays as it was taken.
     private fun write() {
-        val atomic = androidx.core.util.AtomicFile(file)
-        val out = atomic.startWrite()
-        try {
-            out.write(encode(marks, trips, pins).toByteArray())
-            atomic.finishWrite(out)
-        } catch (e: java.io.IOException) {
-            atomic.failWrite(out)
-            throw e
-        }
+        val m = marks
+        val t = trips
+        val p = pins
+        writer.submit { encode(m, t, p) }
     }
 
     private fun encode(marks: Map<String, Mark>, trips: List<Trip>, pins: Map<String, Pin>): String {
@@ -952,6 +1011,8 @@ class VisitStore(private val file: File) {
         pins = read.pins
         pendingDrops = emptyMap()
         save()
+        // On disk before the user is told it worked.
+        flush()
         return true
     }
 }

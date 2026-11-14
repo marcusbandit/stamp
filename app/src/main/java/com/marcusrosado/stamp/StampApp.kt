@@ -60,7 +60,15 @@ class StampApp : Application() {
         }
     }
 
-    val visits by lazy { VisitStore(File(filesDir, "visits.json")) }
+    /** The marks, read on the IO thread as soon as the process starts, never on the main one. */
+    val visitsLoading by lazy { scope.async(Dispatchers.IO) { VisitStore(File(filesDir, "visits.json")) } }
+
+    /** The marks. The first screen waits for [visitsLoading] before it reads them, so this never blocks it. */
+    val visits: VisitStore by lazy { kotlinx.coroutines.runBlocking { visitsLoading.await() } }
+
+    /** The marks if they were read, or null while loading or when reading them failed. */
+    private fun loadedVisits(): VisitStore? =
+        if (visitsLoading.isCompleted && !visitsLoading.isCancelled) runCatching { visits }.getOrNull() else null
     val flags by lazy { Flags(filesDir) }
 
     /** The look the user picked, by id, or "auto" to follow the phone. Kept in a one-line file. */
@@ -144,8 +152,30 @@ class StampApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        // First, so a crash anywhere after it leaves a report on the phone.
+        // A crash right after a tap still saves it. Installed before the crash log, so the report
+        // is written first and this runs after it; out of memory, encoding the store would fail.
+        val crash = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, error ->
+            if (error !is OutOfMemoryError) loadedVisits()?.let { runCatching { it.flush() } }
+            crash?.uncaughtException(thread, error)
+        }
+        // First of the rest, so a crash anywhere after it leaves a report on the phone.
         CrashLog.install(this)
+        // Starts reading the marks now, on the IO thread; the first screen waits for them.
+        visitsLoading.start()
+        // Leaving the app, every change is on disk before Android may end the process. Usually
+        // the save thread has already written it and this returns at once.
+        registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
+            override fun onActivityStopped(activity: android.app.Activity) {
+                loadedVisits()?.flush()
+            }
+            override fun onActivityCreated(activity: android.app.Activity, state: android.os.Bundle?) = Unit
+            override fun onActivityStarted(activity: android.app.Activity) = Unit
+            override fun onActivityResumed(activity: android.app.Activity) = Unit
+            override fun onActivityPaused(activity: android.app.Activity) = Unit
+            override fun onActivitySaveInstanceState(activity: android.app.Activity, state: android.os.Bundle) = Unit
+            override fun onActivityDestroyed(activity: android.app.Activity) = Unit
+        })
         MapLibre.getInstance(this)
         atlas.start()
         places.start()
@@ -154,7 +184,7 @@ class StampApp : Application() {
             val a = atlas.await()
             val p = runCatching { places.await() }.getOrNull() ?: return@launch
             val seen = java.util.concurrent.ConcurrentHashMap<String, String>()
-            visits.geo = object : com.marcusrosado.stamp.data.Geo {
+            visitsLoading.await().geo = object : com.marcusrosado.stamp.data.Geo {
                 override fun landOfCity(cityId: String): String? =
                     seen[cityId] ?: p.byId[cityId]?.let { c -> a.landOf(c.lat, c.lon, c.country)?.id }?.also { seen[cityId] = it }
                 override fun landOf(lat: Double, lon: Double): String? = a.locate(lat, lon)?.id
@@ -165,7 +195,9 @@ class StampApp : Application() {
         // Grants for photos of removed memories, visits or countries go back to Android.
         // Never after a file that could not be read: an empty store would hand every grant back,
         // and a restored backup would then point at photos Stamp may no longer open.
-        if (!visits.damaged) scope.launch(Dispatchers.IO) {
+        scope.launch(Dispatchers.IO) {
+            val visits = visitsLoading.await()
+            if (visits.damaged) return@launch
             val inUse = visits.visits.value.values.flatMap { it.trips }.flatMap { it.memories }.mapNotNull { it.media }.toSet()
             com.marcusrosado.stamp.scan.Memories.releaseUnused(this@StampApp, inUse)
         }

@@ -447,11 +447,13 @@ class VisitStoreTest {
             """{"version":2,"countries":{"JPN":{"state":"visited","rating":4,"pins":{"pin-a":{"name":"Shrine","lat":34.5,"lon":131.8}},""" +
                 """"trips":[{"id":"t1","date":"2019","cities":["tokyo","pin-a"]},{"id":"t2"}]}}}""",
         )
-        val v = store().visits.value["JPN"]!!
+        val s = store()
+        val v = s.visits.value["JPN"]!!
         assertEquals(4, v.rating)
         assertEquals(listOf("t1", "t2"), v.trips.map { it.id })
         assertEquals(listOf("JPN"), v.trips.first().lands)
         assertEquals("Shrine", v.pins["pin-a"]?.name)
+        s.flush()
         assertTrue(File(dir, "visits.json").readText().contains("\"version\":3"))
     }
 }
