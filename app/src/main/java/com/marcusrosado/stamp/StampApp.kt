@@ -127,6 +127,12 @@ class StampApp : Application() {
     /** The rail and road packs, kept outside the user's backup: map data, fetched again at will. */
     val routePacks by lazy { com.marcusrosado.stamp.data.RoutePacks(File(noBackupFilesDir, "routes"), scope) }
 
+    /** Whether Stamp looks for a newer version of itself when it opens. */
+    val updateCheck by lazy { Toggle(FLAG_NO_UPDATE_CHECK) }
+
+    /** Newer versions from the GitHub releases, and installing one from inside the app. */
+    val updates by lazy { com.marcusrosado.stamp.data.Updates(this, scope, BuildConfig.VERSION_NAME, BuildConfig.SELF_UPDATE) }
+
     /** What the map marks: countries, regions or cities. */
     val mapView: kotlinx.coroutines.flow.MutableStateFlow<com.marcusrosado.stamp.data.MapView> by lazy {
         kotlinx.coroutines.flow.MutableStateFlow(
@@ -236,6 +242,7 @@ class StampApp : Application() {
         private const val FLAG_NO_ROUTES = "no_routes"
         private const val FLAG_NO_FOLLOW_LINES = "no_follow_lines"
         private const val FLAG_NO_HERE = "no_here"
+        private const val FLAG_NO_UPDATE_CHECK = "no_update_check"
         private const val MAP_VIEW_FILE = "map_view.txt"
         private const val BACKUP_FILE = "last_backup.txt"
     }

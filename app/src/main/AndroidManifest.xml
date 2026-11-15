@@ -16,8 +16,13 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
     <!-- Only to fetch the rail and road lines of a country a trip goes through, from the public
-         data repository. The map itself is bundled, and nothing about the user is sent. -->
+         data repository, and to ask GitHub whether a newer Stamp is out. The map itself is
+         bundled, and nothing about the user is sent. -->
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Installs a newer Stamp from its GitHub release when the user taps Update. The Play
+         bundle leaves this out (src/play/AndroidManifest.xml): Play updates that copy. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!-- MapLibre asks for these, but Stamp draws a bundled map with no tiles and needs no exact
          position. -->
@@ -48,6 +53,8 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <!-- Hears back from Android's installer while an update goes in. -->
+        <receiver android:name=".data.UpdateReceiver" android:exported="false" />
     </application>
 
 </manifest>

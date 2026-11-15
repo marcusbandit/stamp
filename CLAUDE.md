@@ -2,7 +2,7 @@
 
 Stamp is an Android travel tracker in Kotlin and Jetpack Compose. You mark countries on a
 MapLibre world map drawn from bundled Natural Earth shapes, with no tiles. The only network use is
-downloading rail and road packs for legs that follow real lines.
+downloading rail and road packs for legs that follow real lines, and the update check.
 README.md has the code layout and the build commands. This file holds the rules for working
 on it.
 
@@ -33,6 +33,12 @@ on it.
   (2026-11-13) the app may download public map data: per-country rail and road packs from the
   `marcusbandit/stamp-data` repository, asked for by country code only, kept outside the backup
   and switched off in Settings. Nothing about the user goes with any request.
+- **The GitHub copy updates itself (owner's ask, 2026-11-15).** On launch it asks the GitHub API
+  for the latest release, prompts once per new version, and on Update downloads `stamp.apk` into
+  Android's installer (`data/Updates.kt`). A switch in Settings, About Stamp turns the check off.
+  The Play bundle (`scripts/bundle.sh`, `-Pstamp.play=true`) drops the install permission and the
+  check, since Play forbids self-updating apps. Every release must carry `stamp.apk`, or no copy
+  sees it.
 - Every input beyond the country itself is optional: dates (year, month or day), ratings,
   visit counts, cities. A country with no other details is a complete entry.
 - Onboarding introduces every feature that needs setup: the photo scan, and the photo access

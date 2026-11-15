@@ -17,6 +17,10 @@ val uploadProps = (findProperty("stamp.uploadKey") as String?)?.let { path ->
     )
 }
 
+// The Play bundle may not update itself: scripts/bundle.sh sets this, which drops the install
+// permission and the update check. Play updates that copy instead.
+val playBuild = findProperty("stamp.play") == "true"
+
 android {
     namespace = "com.marcusrosado.stamp"
     compileSdk = 37
@@ -25,9 +29,12 @@ android {
         applicationId = "com.marcusrosado.stamp"
         minSdk = 26
         targetSdk = 36
-        versionCode = 100
-        versionName = "1.0.0"
+        versionCode = 101
+        versionName = "1.1.0"
+        buildConfigField("boolean", "SELF_UPDATE", "${!playBuild}")
     }
+
+    if (playBuild) sourceSets.getByName("release").manifest.srcFile("src/play/AndroidManifest.xml")
 
     signingConfigs {
         if (uploadProps != null) {
