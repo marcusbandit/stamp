@@ -12,7 +12,7 @@ on it.
   owner says a version is ready to go out; never cut one on your own.
 - A release carries the APK signed with the release key, attached under the fixed name
   `stamp.apk`, so `https://github.com/marcusbandit/stamp/releases/latest/download/stamp.apk`
-  always serves the newest one. marcusrosado.com's download buttons point there.
+  always serves the newest one. The owner's site links there.
 - The tag is `v` plus `versionName`. Every build that leaves this machine gets a higher
   `versionCode` and a new `versionName` first, in `app/build.gradle.kts`. Never install two
   different builds under the same code.
@@ -80,8 +80,11 @@ public APK and the Play bundle alike, so Play is set up with this key as its app
 and a phone can move between the download and the store. Losing it means no update can ever
 install over an existing copy, so keep a private backup of that folder.
 
-    scripts/build.sh :app:assembleRelease -Pstamp.uploadKey=$HOME/.config/stamp/upload.properties
-    scripts/bundle.sh                                         the Play bundle, same key
+    scripts/apk.sh       the public APK as stamp.apk, signature checked
+    scripts/bundle.sh    the Play bundle, same key, signature checked
+
+There is one release key, not one per machine. A second machine that builds releases gets a copy
+of `~/.config/stamp/`; running `scripts/setup-upload-key.sh` there would make a different key.
 
 A plain `scripts/build.sh :app:assembleRelease` without the property signs with the build
 machine's debug key. That build cannot update a release-key install, and the other way round,
@@ -90,8 +93,13 @@ owner's phone without a backup first: Settings, Save a backup, then Restore afte
 
 ## Installing on the owner's phone
 
-The phone gets the minified release build signed with the release key, never the debug one: a
-debuggable Compose build is several times slower and makes the app feel broken.
+The phone gets `stamp.apk` from `scripts/apk.sh`, never the debug build: a debuggable Compose
+build is several times slower and makes the app feel broken.
+
+The owner's phone held debug-key builds up to 0.47.1, so the first release-key install cannot go
+over them. Once, and only with the owner there: in the app, Settings, Save a backup; check the
+file exists; `adb uninstall com.marcusrosado.stamp`; install `stamp.apk`; then Settings, Restore
+from a backup. After that, `install -r` works for every later release.
 
 Use plain adb over Wi-Fi first: `adb mdns services` finds the phone's `_adb._tcp` entry on the
 LAN, then `adb connect <ip>:5555` and `adb -s <ip>:5555 install -r <apk>`. Only when the phone

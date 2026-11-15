@@ -5,8 +5,9 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
-// The Play upload key lives outside the repo. scripts/bundle.sh passes the path of its
-// properties file; without it, release builds use the local debug key as before.
+// The release key lives outside the repo. scripts/apk.sh and scripts/bundle.sh pass the path of
+// its properties file and check the signature after; without it, a release build falls back to
+// the local debug key, which is only for testing speed on a test phone.
 val uploadProps = (findProperty("stamp.uploadKey") as String?)?.let { path ->
     val p = Properties().apply { file(path).inputStream().use { load(it) } }
     fun need(key: String): String = p.getProperty(key) ?: error("$path has no $key")
@@ -43,8 +44,8 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
-            // Signed with the local debug key so it installs over a debug build on a test
-            // phone. Debug builds are several times slower in Compose; test speed on this one.
+            // The release key when scripts/apk.sh or scripts/bundle.sh passes it, else the local
+            // debug key for a fast test build. Never publish the debug-key one.
             signingConfig = signingConfigs.findByName("upload") ?: signingConfigs.getByName("debug")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
         }
