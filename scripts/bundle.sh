@@ -9,7 +9,8 @@ if [[ ! -f "$PROPS" ]]; then
   echo "bundle.sh: no upload key at $PROPS. Make one with scripts/setup-upload-key.sh" >&2
   exit 1
 fi
-scripts/build.sh :app:bundleRelease "-Pstamp.uploadKey=$PROPS" "$@"
+# stamp.play drops the in-app updater: Play updates its own copies.
+scripts/build.sh :app:bundleRelease "-Pstamp.uploadKey=$PROPS" -Pstamp.play=true "$@"
 
 # Check the bundle is signed by the upload key, not the debug key or nothing.
 JAVA_BIN="${JAVA_HOME:-/usr/lib/jvm/java-21-openjdk}/bin"

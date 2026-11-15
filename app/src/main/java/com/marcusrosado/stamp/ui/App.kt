@@ -191,6 +191,7 @@ fun Root(app: StampApp) {
                 onIntro = { replaying = true },
             )
             if (!replaying) UnreadableSave(app)
+            if (!replaying) UpdatePrompt(app)
             if (replaying) {
                 HalfPage {
                     Onboarding(

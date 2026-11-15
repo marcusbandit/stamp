@@ -122,6 +122,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.marcusrosado.stamp.BuildConfig
 import com.marcusrosado.stamp.data.Atlas
 import com.marcusrosado.stamp.data.visitsCsv
@@ -163,13 +164,19 @@ fun SettingsScreen(state: AppState, contentPadding: PaddingValues, modifier: Mod
     val access = rememberPhotoAccess()
     val home = state.home?.let { state.atlas.byId[it] }
     val been = remember(state.atlas, state.visits) { state.atlas.countedCountries(state.visits).size }
+    val stamp = state.app
+    val update by stamp.updates.state.collectAsStateWithLifecycle()
 
     fun summary(p: Page): String? = when (p) {
         Page.Appearance -> Looks.firstOrNull { it.id == state.look }?.name ?: "Match phone"
         Page.Map -> if (state.split) "Islands as separate places" else "Islands as part of their country"
         Page.Memories -> access.label
         Page.Backup -> if (state.lastBackup > 0) "Last backup ${date(state.lastBackup)}" else "Not backed up yet"
-        Page.About -> "Version ${BuildConfig.VERSION_NAME}"
+        Page.About -> when (val u = update) {
+            is com.marcusrosado.stamp.data.Update.Available -> "Version ${BuildConfig.VERSION_NAME} · ${u.release.version} is out"
+            is com.marcusrosado.stamp.data.Update.Downloading -> "Downloading ${u.release.version}"
+            else -> "Version ${BuildConfig.VERSION_NAME}"
+        }
         Page.Home -> null
     }
     val found = listOf(
@@ -187,6 +194,7 @@ fun SettingsScreen(state: AppState, contentPadding: PaddingValues, modifier: Mod
         Found("Where you live", Page.Home, "home country lived address moved"),
         Found("Addresses", Page.Home, "home address street house apartment flat lived moved"),
         Found("Introduction", null, "help intro tour welcome", state.onIntro, Icons.Outlined.School),
+        Found("Updates", Page.About, "update new version upgrade download install check release"),
         Found("Version", Page.About, "about credits natural earth geonames openstreetmap ourairports airports licence"),
     )
 
@@ -204,7 +212,7 @@ fun SettingsScreen(state: AppState, contentPadding: PaddingValues, modifier: Mod
                 Page.Map -> MapPage(state)
                 Page.Memories -> MemoriesPage(state, access)
                 Page.Backup -> BackupPage(state)
-                Page.About -> AboutPage()
+                Page.About -> AboutPage(stamp)
                 Page.Home -> HomePage(state)
             }
         }
@@ -650,9 +658,10 @@ internal fun RestoreConfirm(now: Int, incoming: Int, onRestore: () -> Unit, onCa
 private fun places(n: Int) = if (n == 1) "1 place" else "$n places"
 
 @Composable
-private fun AboutPage() {
+private fun AboutPage(app: com.marcusrosado.stamp.StampApp) {
     Category("Stamp")
     Pref("Version", BuildConfig.VERSION_NAME)
+    if (app.updates.possible) UpdateRows(app)
     // Crash reports stay on the phone; sharing them is the user's own step.
     val context = LocalContext.current
     var crashes by remember { mutableStateOf(0) }
@@ -683,6 +692,44 @@ private fun AboutPage() {
     Pref("Airports", "OurAirports, public domain")
     Pref("City boundaries", "© OpenStreetMap contributors, ODbL")
     Pref("Railways and roads", "© OpenStreetMap contributors, ODbL")
+}
+
+/** The update switch, and the update itself when one is out. */
+@Composable
+private fun UpdateRows(app: com.marcusrosado.stamp.StampApp) {
+    val on by app.updateCheck.on.collectAsStateWithLifecycle()
+    val update by app.updates.state.collectAsStateWithLifecycle()
+    val checking by app.updates.checking.collectAsStateWithLifecycle()
+    val reached by app.updates.reached.collectAsStateWithLifecycle()
+    var dialog by remember { mutableStateOf(false) }
+    val start = rememberUpdateStart(app)
+    SwitchPref("Check for updates", null, on) { app.updateCheck.set(it) }
+    when (val u = update) {
+        is com.marcusrosado.stamp.data.Update.Available -> Pref("Stamp ${u.release.version} is out", onClick = { dialog = true }) {
+            androidx.compose.material3.Button(onClick = { start.start(u.release) }) { Text("Update") }
+        }
+        is com.marcusrosado.stamp.data.Update.Downloading -> Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 16.dp)) {
+            Text("Downloading Stamp ${u.release.version}", style = MaterialTheme.typography.bodyLarge)
+            Spacer(Modifier.height(12.dp))
+            UpdateProgress(u)
+        }
+        is com.marcusrosado.stamp.data.Update.Confirm -> Pref("Installing Stamp ${u.release.version}")
+        is com.marcusrosado.stamp.data.Update.Installing -> Pref("Installing Stamp ${u.release.version}")
+        is com.marcusrosado.stamp.data.Update.Failed -> Pref("Stamp ${u.release.version} didn't install", u.why, onClick = { dialog = true }) {
+            TextButton(onClick = { start.start(u.release) }) { Text("Try again") }
+        }
+        com.marcusrosado.stamp.data.Update.None -> Pref(
+            "Check now",
+            when {
+                checking -> "Checking"
+                reached == true -> "Up to date"
+                reached == false -> "Couldn't check right now"
+                else -> null
+            },
+            onClick = { app.updates.check(force = true) },
+        )
+    }
+    if (dialog) UpdateDialog(app, start) { dialog = false }
 }
 
 // ---------------------------------------------------------------- photo access

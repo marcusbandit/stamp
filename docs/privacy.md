@@ -4,7 +4,7 @@ title: Stamp privacy policy
 
 # Stamp privacy policy
 
-Last updated 13 November 2026, for rail and road downloads.
+Last updated 15 November 2026, for the update check.
 
 Stamp keeps everything you enter on your phone. It has no account, no ads and no analytics, and
 it never sends your marks, trips, places or photos anywhere.
@@ -42,6 +42,12 @@ account, no identifier and nothing about your trips. You can turn this off in Se
 These files are map data, not your data. They are kept outside your backup and are fetched again
 when needed.
 
+A copy of Stamp installed from its GitHub release also asks GitHub, when it opens, which version
+is the latest. The request names no one and carries nothing about you. If you tap Update, Stamp
+downloads the new version from the same release and hands it to Android's installer. You can turn
+the check off in Settings, About Stamp. A copy installed from Google Play never does this; Play
+updates it.
+
 ## What Stamp shares
 
 Nothing. Stamp does not collect personal data and does not share data with anyone.
@@ -53,7 +59,9 @@ Nothing. Stamp does not collect personal data and does not share data with anyon
 
 - Rough location, if you turn on "Mark the country I'm in": to find which country the phone is in.
   It is read on the phone and never sent anywhere.
-- Internet: only to download the rail and road files described above.
+- Internet: only to download the rail and road files and the updates described above.
+- Install apps, in the GitHub copy only: to install a newer Stamp when you tap Update. Android
+  asks you once before it allows this.
 
 ## Children
 
