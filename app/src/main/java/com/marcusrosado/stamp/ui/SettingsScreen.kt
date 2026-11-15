@@ -164,7 +164,7 @@ fun SettingsScreen(state: AppState, contentPadding: PaddingValues, modifier: Mod
     val access = rememberPhotoAccess()
     val home = state.home?.let { state.atlas.byId[it] }
     val been = remember(state.atlas, state.visits) { state.atlas.countedCountries(state.visits).size }
-    val stamp = LocalContext.current.applicationContext as com.marcusrosado.stamp.StampApp
+    val stamp = state.app
     val update by stamp.updates.state.collectAsStateWithLifecycle()
 
     fun summary(p: Page): String? = when (p) {
@@ -710,12 +710,10 @@ private fun UpdateRows(app: com.marcusrosado.stamp.StampApp) {
         }
         is com.marcusrosado.stamp.data.Update.Downloading -> Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 16.dp)) {
             Text("Downloading Stamp ${u.release.version}", style = MaterialTheme.typography.bodyLarge)
-            Spacer(Modifier.height(8.dp))
-            if (u.total > 0) androidx.compose.material3.LinearProgressIndicator(progress = { u.fraction }, modifier = Modifier.fillMaxWidth())
-            else androidx.compose.material3.LinearProgressIndicator(Modifier.fillMaxWidth())
-            Spacer(Modifier.height(4.dp))
-            Text(megabytes(u.done, u.total), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(12.dp))
+            UpdateProgress(u)
         }
+        is com.marcusrosado.stamp.data.Update.Confirm -> Pref("Installing Stamp ${u.release.version}")
         is com.marcusrosado.stamp.data.Update.Installing -> Pref("Installing Stamp ${u.release.version}")
         is com.marcusrosado.stamp.data.Update.Failed -> Pref("Stamp ${u.release.version} didn't install", u.why, onClick = { dialog = true }) {
             TextButton(onClick = { start.start(u.release) }) { Text("Try again") }
@@ -725,13 +723,13 @@ private fun UpdateRows(app: com.marcusrosado.stamp.StampApp) {
             when {
                 checking -> "Checking"
                 reached == true -> "Up to date"
-                reached == false -> "Couldn't reach GitHub"
+                reached == false -> "Couldn't check right now"
                 else -> null
             },
-            onClick = { app.updates.check() },
+            onClick = { app.updates.check(force = true) },
         )
     }
-    if (dialog && !start.asking) UpdateDialog(app) { dialog = false }
+    if (dialog) UpdateDialog(app, start) { dialog = false }
 }
 
 // ---------------------------------------------------------------- photo access

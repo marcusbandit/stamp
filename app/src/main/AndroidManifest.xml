@@ -23,6 +23,8 @@
     <!-- Installs a newer Stamp from its GitHub release when the user taps Update. The Play
          bundle leaves this out (src/play/AndroidManifest.xml): Play updates that copy. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- Once Stamp installed itself, later updates go in without Android asking again. -->
+    <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
 
     <!-- MapLibre asks for these, but Stamp draws a bundled map with no tiles and needs no exact
          position. -->

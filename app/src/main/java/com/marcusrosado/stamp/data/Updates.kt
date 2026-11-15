@@ -46,7 +46,10 @@ data class Release(val version: String, val apk: String, val size: Long, val not
          */
         fun notes(body: String): String = body.lines()
             .map { it.trim().replace(CREDIT, "") }
-            .filter { it.isNotEmpty() && !it.startsWith("#") && !it.startsWith("**Full Changelog") && !it.startsWith("**New Contributors") }
+            .filter {
+                it.isNotEmpty() && !it.startsWith("#") && !it.startsWith("**Full Changelog") &&
+                    !it.startsWith("**New Contributors") && !it.contains("made their first contribution")
+            }
             .joinToString("\n") { if (it.startsWith("- ") || it.startsWith("* ")) "• " + it.drop(2) else it }
 
         private val CREDIT = Regex("""\s+by @\S+ in https://\S+$""")
@@ -81,6 +84,11 @@ sealed interface Update {
     data class Downloading(val release: Release, val done: Long, val total: Long) : Update {
         val fraction: Float get() = if (total > 0) (done.toFloat() / total).coerceIn(0f, 1f) else 0f
     }
+    /**
+     * Android's installer wants the user to say yes, with [ask]. Started by the app's own screen,
+     * never by a receiver: Android blocks that while Stamp is in the background.
+     */
+    data class Confirm(val release: Release, val ask: Intent) : Update
     /** Handed to Android's installer, which asks the user and then replaces the app. */
     data class Installing(val release: Release) : Update
     data class Failed(val release: Release, val why: String) : Update
@@ -106,34 +114,49 @@ class Updates(
     val checking: StateFlow<Boolean> = _checking.asStateFlow()
 
     private val _reached = MutableStateFlow<Boolean?>(null)
-    /** Whether the last check got an answer; null before the first. */
+    /** Whether the last check got an answer from GitHub; null before the first. */
     val reached: StateFlow<Boolean?> = _reached.asStateFlow()
 
     private val dir = File(app.cacheDir, "updates")
     private val promptedFile = File(app.filesDir, "update_prompted.txt")
-    private var job: Job? = null
+    private var checkJob: Job? = null
+    private var installJob: Job? = null
+    private var checked = false
+    // A version to install as soon as a check finds it: the user said Update, then Android ended
+    // the app while they were turning on the install permission.
+    private var wanted: String? = null
 
     /** Whether this copy can update itself: not from Play, not a build that says no. */
     val possible: Boolean by lazy { selfUpdate && installer() != PLAY }
 
-    /** The version the launch prompt was last shown for, so each version asks once. */
+    /** The version the launch prompt was last shown for, so each version asks once. Reads a file. */
     fun prompted(): String? = runCatching { promptedFile.readText().trim() }.getOrNull()
 
     fun markPrompted(version: String) {
         scope.launch(Dispatchers.IO) { runCatching { promptedFile.writeText(version) } }
     }
 
-    /** Asks GitHub for the latest release, unless a download or install is under way. */
-    fun check() {
-        if (!possible || job?.isActive == true) return
-        if (_state.value is Update.Downloading || _state.value is Update.Installing) return
-        job = scope.launch(Dispatchers.IO) {
+    private val busy: Boolean
+        get() = installJob?.isActive == true || _state.value.let { it is Update.Downloading || it is Update.Confirm || it is Update.Installing }
+
+    /**
+     * Asks GitHub for the latest release: once a launch, or again when [force]d from Settings.
+     * Never while an update is downloading or installing.
+     */
+    @Synchronized
+    fun check(force: Boolean = false) {
+        if (!possible || checkJob?.isActive == true || busy) return
+        if (checked && !force) return
+        checked = true
+        checkJob = scope.launch(Dispatchers.IO) {
             _checking.value = true
-            val release = try { latest() } finally { _checking.value = false }
-            _reached.value = release != null
-            if (release == null) return@launch
-            if (Versions.newer(release.version, current)) {
+            val answer = try { latest() } finally { _checking.value = false }
+            _reached.value = answer != null
+            if (answer == null || busy) return@launch
+            val release = answer.release
+            if (release != null && Versions.newer(release.version, current)) {
                 _state.value = Update.Available(release)
+                if (wanted == release.version) { wanted = null; install(release) }
             } else {
                 _state.value = Update.None
                 dir.deleteRecursively()
@@ -141,11 +164,25 @@ class Updates(
         }
     }
 
+    /**
+     * Installs [version] once it is known: now if the last check found it, else when the next
+     * check does. For a return from Android's settings after the app was ended meanwhile.
+     */
+    fun installWhenFound(version: String) {
+        when (val s = _state.value) {
+            is Update.Available -> if (s.release.version == version) install(s.release)
+            is Update.Failed -> if (s.release.version == version) install(s.release)
+            else -> wanted = version
+        }
+    }
+
     /** Downloads [release]'s APK, then hands it to Android's installer. */
+    @Synchronized
     fun install(release: Release) {
-        if (job?.isActive == true && _state.value is Update.Downloading) return
-        job = scope.launch(Dispatchers.IO) {
-            _state.value = Update.Downloading(release, 0, release.size)
+        if (busy) return
+        checkJob?.cancel()
+        _state.value = Update.Downloading(release, 0, release.size)
+        installJob = scope.launch(Dispatchers.IO) {
             val file = runCatching { download(release) }.getOrNull()
             if (file == null) {
                 _state.value = Update.Failed(release, "The download didn't finish. Check the connection and try again.")
@@ -157,15 +194,29 @@ class Updates(
         }
     }
 
+    /** Android's installer asks the user, from [UpdateReceiver]: the app's screen shows it. */
+    internal fun confirm(ask: Intent) {
+        val release = release() ?: return
+        _state.value = Update.Confirm(release, ask)
+    }
+
+    /** The app's screen started the installer's question. */
+    fun confirmShown(release: Release) {
+        if ((_state.value as? Update.Confirm)?.release == release) _state.value = Update.Installing(release)
+    }
+
+    private fun release(): Release? = when (val s = _state.value) {
+        is Update.Installing -> s.release
+        is Update.Confirm -> s.release
+        is Update.Downloading -> s.release
+        is Update.Available -> s.release
+        is Update.Failed -> s.release
+        Update.None -> null
+    }
+
     /** What the installer said, from [UpdateReceiver]. */
     internal fun result(status: Int, message: String?) {
-        val release = when (val s = _state.value) {
-            is Update.Installing -> s.release
-            is Update.Downloading -> s.release
-            is Update.Available -> s.release
-            is Update.Failed -> s.release
-            Update.None -> return
-        }
+        val release = release() ?: return
         _state.value = when (status) {
             PackageInstaller.STATUS_SUCCESS -> Update.None
             // Cancelled in Android's dialog: the update is still there to install later.
@@ -177,7 +228,11 @@ class Updates(
         }
     }
 
-    private fun latest(): Release? = runCatching {
+    /** GitHub's answer: [release] is null when the latest one has no APK. */
+    private class Answer(val release: Release?)
+
+    /** The latest release, or null when GitHub could not be asked or said no (a rate limit). */
+    private fun latest(): Answer? = runCatching {
         val c = URL(LATEST).openConnection() as HttpURLConnection
         c.connectTimeout = 15_000
         c.readTimeout = 30_000
@@ -185,7 +240,7 @@ class Updates(
         c.setRequestProperty("Accept", "application/vnd.github+json")
         try {
             if (c.responseCode !in 200..299) return null
-            Release.parse(c.inputStream.bufferedReader().use { it.readText() })
+            Answer(Release.parse(c.inputStream.bufferedReader().use { it.readText() }))
         } finally {
             c.disconnect()
         }
@@ -235,17 +290,24 @@ class Updates(
             setAppPackageName(app.packageName)
             setSize(file.length())
             // Lets Android skip its own question when Stamp itself installed the copy it replaces.
+            // Needs UPDATE_PACKAGES_WITHOUT_USER_ACTION in the manifest.
             if (Build.VERSION.SDK_INT >= 31) setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED)
         }
         val id = installer.createSession(params)
         installer.openSession(id).use { session ->
-            session.openWrite(Release.APK_NAME, 0, file.length()).use { out ->
-                file.inputStream().use { it.copyTo(out) }
-                session.fsync(out)
+            try {
+                session.openWrite(Release.APK_NAME, 0, file.length()).use { out ->
+                    file.inputStream().use { it.copyTo(out) }
+                    session.fsync(out)
+                }
+                val flags = PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0)
+                val done = PendingIntent.getBroadcast(app, id, Intent(app, UpdateReceiver::class.java), flags)
+                session.commit(done.intentSender)
+            } catch (e: Exception) {
+                // A half-written session would stay staged on the phone: drop it.
+                runCatching { session.abandon() }
+                throw e
             }
-            val flags = PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0)
-            val done = PendingIntent.getBroadcast(app, id, Intent(app, UpdateReceiver::class.java), flags)
-            session.commit(done.intentSender)
         }
     }
 
@@ -260,17 +322,19 @@ class Updates(
     }
 }
 
-/** Hears back from Android's installer: shows its question, or reports how the install went. */
+/** Hears back from Android's installer: its question for the user, or how the install went. */
 class UpdateReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
+        val updates = (context.applicationContext as? StampApp)?.updates ?: return
         val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)
         if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) {
             @Suppress("DEPRECATION")
             val ask = (if (Build.VERSION.SDK_INT >= 33) intent.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)
             else intent.getParcelableExtra(Intent.EXTRA_INTENT)) ?: return
-            context.startActivity(ask.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            // The app's screen starts it, now or as soon as the user comes back.
+            updates.confirm(ask)
             return
         }
-        (context.applicationContext as? StampApp)?.updates?.result(status, intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE))
+        updates.result(status, intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE))
     }
 }
