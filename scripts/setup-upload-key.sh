@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Make the Play upload key once per build machine, outside the repo:
+# Make Stamp's release key once ever, outside the repo:
 #   ~/.config/stamp/upload.jks          the keystore
 #   ~/.config/stamp/upload.properties   its path, alias and password, mode 600
-# Play App Signing holds the real app signing key. If this upload key is lost, ask for an
-# upload key reset in Play Console; nothing is lost for installed users.
+# It signs the GitHub APK and is Play's app signing key too. Losing it means no update can ever
+# install over an existing copy, so back up the folder. Another machine gets a copy of it; never
+# run this on a second machine.
 set -euo pipefail
 umask 077
 DIR="${XDG_CONFIG_HOME:-$HOME/.config}/stamp"

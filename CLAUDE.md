@@ -8,13 +8,14 @@ on it.
 
 ## Releases and versions
 
-- **No GitHub releases.** Never run `gh release create` and never push a version tag until the
-  owner says a version is ready. Old releases were deleted on purpose.
-- **versionName stays below 1.0.** 1.0 is the release, and only the owner calls it. Within 0.x,
-  bump as often as you like.
-- Every build that goes to the owner's phone gets a higher `versionCode` and a new
-  `versionName` first, in `app/build.gradle.kts`. Never install two different builds under the
-  same code.
+- **1.0.0 shipped on the owner's call (2026-11-15).** A GitHub release happens only when the
+  owner says a version is ready to go out; never cut one on your own.
+- A release carries the APK signed with the release key, attached under the fixed name
+  `stamp.apk`, so `https://github.com/marcusbandit/stamp/releases/latest/download/stamp.apk`
+  always serves the newest one. The owner's site links there.
+- The tag is `v` plus `versionName`. Every build that leaves this machine gets a higher
+  `versionCode` and a new `versionName` first, in `app/build.gradle.kts`. Never install two
+  different builds under the same code.
 - Branches, pushes and PRs are fine: `<type>/<issue>-<slug>`, a `code-review --comment` pass,
   then squash merge.
 
@@ -71,14 +72,34 @@ systemd scope; never call `./gradlew` directly.
   IFD 0x8769, push to `/sdcard/Pictures/`, then send `MEDIA_SCANNER_SCAN_FILE` for each one.
   Use invented places and dates only.
 
+## Signing
+
+The release key lives in `~/.config/stamp/` on one build machine (`upload.jks` plus
+`upload.properties`, made by `scripts/setup-upload-key.sh`), never in the repo. It signs the
+public APK and the Play bundle alike, so Play is set up with this key as its app signing key
+and a phone can move between the download and the store. Losing it means no update can ever
+install over an existing copy, so keep a private backup of that folder.
+
+    scripts/apk.sh       the public APK as stamp.apk, signature checked
+    scripts/bundle.sh    the Play bundle, same key, signature checked
+
+There is one release key, not one per machine. A second machine that builds releases gets a copy
+of `~/.config/stamp/`; running `scripts/setup-upload-key.sh` there would make a different key.
+
+A plain `scripts/build.sh :app:assembleRelease` without the property signs with the build
+machine's debug key. That build cannot update a release-key install, and the other way round,
+which fails with `INSTALL_FAILED_UPDATE_INCOMPATIBLE`. Never uninstall to get past that on the
+owner's phone without a backup first: Settings, Save a backup, then Restore after.
+
 ## Installing on the owner's phone
 
-The phone gets the minified release build, never the debug one: a debuggable Compose build is
-several times slower and makes the app feel broken. `scripts/build.sh :app:assembleRelease`
-signs it with the build machine's debug key. Each machine has its own, so a build from a
-different machine than the installed one fails with `INSTALL_FAILED_UPDATE_INCOMPATIBLE`. Never
-uninstall to get past that, since it wipes the owner's marks; build on the machine that made the
-installed copy.
+The phone gets `stamp.apk` from `scripts/apk.sh`, never the debug build: a debuggable Compose
+build is several times slower and makes the app feel broken.
+
+The owner's phone held debug-key builds up to 0.47.1, so the first release-key install cannot go
+over them. Once, and only with the owner there: in the app, Settings, Save a backup; check the
+file exists; `adb uninstall com.marcusrosado.stamp`; install `stamp.apk`; then Settings, Restore
+from a backup. After that, `install -r` works for every later release.
 
 Use plain adb over Wi-Fi first: `adb mdns services` finds the phone's `_adb._tcp` entry on the
 LAN, then `adb connect <ip>:5555` and `adb -s <ip>:5555 install -r <apk>`. Only when the phone

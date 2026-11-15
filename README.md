@@ -43,8 +43,9 @@ answers for the Play Console forms, and `docs/privacy.md` is the privacy policy.
 
 ```sh
 python3 -I tools/build_icon.py   # after changing the logo
-scripts/setup-upload-key.sh      # once per build machine: upload key in ~/.config/stamp/
-scripts/bundle.sh                # signed app-release.aab for Play
+scripts/setup-upload-key.sh      # once ever: the release key in ~/.config/stamp/, then back it up
+scripts/apk.sh                   # signed stamp.apk for a GitHub release
+scripts/bundle.sh                # signed app-release.aab for Play, same key
 ```
 
 ## Country data
