@@ -33,7 +33,10 @@ F-Droid read:
   No user data goes with either. The
   Play bundle has no update check and no install permission: `scripts/bundle.sh` builds it with
   `-Pstamp.play=true`.
-- Is data encrypted in transit? Yes: the only traffic is HTTPS downloads of public map files.
+- Is data encrypted in transit? Yes: every request is HTTPS, map file downloads and outline lookups alike.
+- Why the outline lookups are not "shared location": they name a city the user tapped on the map,
+  not where the phone is, and carry no identifier. If Play reads it differently, declare
+  "Approximate location, shared, not collected, for app functionality" rather than drop the feature.
 - Can users request deletion? Uninstalling deletes everything; the form question is not shown
   when nothing is collected.
 
@@ -59,7 +62,8 @@ for the heat map. Play reviews every app that holds it, and the console form ask
   location and adds it to a heat map of where the user spends their time, built over months. It
   must run while the app is closed, since the point is to sample the user's normal day. The
   location is coarse only, is stored on the device, and is never transmitted. The feature is off
-  until the user turns it on, and Settings, Heat map turns it off and clears every point."
+  until the user turns it on. Settings, Heat map turns it off, and Clear the heat map there
+  deletes every point."
 - **Prominent disclosure:** shown before every ask, in the app's own words. The introduction's heat
   map page says it in its text, and the switch in Settings, Heat map opens a dialog first:
   "Stamp collects your approximate location about once an hour, even when the app is closed or not

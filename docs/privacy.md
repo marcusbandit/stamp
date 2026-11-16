@@ -54,7 +54,7 @@ These files are map data, not your data. They are kept outside your backup and a
 when needed.
 
 When you tap a city on the map that Stamp has no outline for, it asks OpenStreetMap's public
-servers (Nominatim and Overpass) for the outline, sending the city's name, its country code and
+servers (nominatim.openstreetmap.org, and overpass-api.de run by FOSSGIS) for the outline, sending the city's name, its country code and
 the area around its centre. The request carries nothing about you or your trips; like any
 website, those servers see the address your phone connects from. An outline of a city you marked
 is kept on the phone, outside your backup; any other is forgotten when the app closes. You can

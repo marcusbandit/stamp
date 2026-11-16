@@ -185,7 +185,7 @@ fun Onboarding(
                             "About once an hour, at a random moment, Stamp collects your approximate location, " +
                                 "even when the app is closed or not in use. Over months it builds a map of where " +
                                 "you spend your time. The places stay on this phone and go in your backups. " +
-                                "Android asks for your rough location, then to allow it all the time.",
+                                "Android then asks you to allow it all the time.",
                         ) {
                             HeatPreview(atlas, seen, Modifier.clip(androidx.compose.foundation.shape.RoundedCornerShape(16.dp)))
                         }

@@ -600,6 +600,10 @@ private fun placesLabel(n: Int) = if (n == 1) "1 place" else "%,d places".format
 @Composable
 private fun HeatPage(state: AppState) {
     val context = LocalContext.current
+    // Allow all the time may be given on Android's own page; looked at again on every return.
+    var back by remember { androidx.compose.runtime.mutableIntStateOf(0) }
+    androidx.lifecycle.compose.LifecycleResumeEffect(Unit) { back++; onPauseOrDispose { } }
+    val allowed = remember(back) { com.marcusrosado.stamp.data.Hourly.allowed(context) }
     val scope = rememberCoroutineScope()
     val askHourly = rememberHourlyAsk { granted -> state.onHourly(granted) }
     var clearing by remember { mutableStateOf(false) }
@@ -612,10 +616,10 @@ private fun HeatPage(state: AppState) {
     // Android lets an app read the location in the background only after it says so in its own
     // words, right before asking.
     var disclosing by remember { mutableStateOf(false) }
-    SwitchPref("Note where I am every hour", null, state.hourly && com.marcusrosado.stamp.data.Hourly.allowed(context)) { on ->
+    SwitchPref("Note where I am every hour", null, state.hourly && allowed) { on ->
         when {
             !on -> state.onHourly(false)
-            com.marcusrosado.stamp.data.Hourly.allowed(context) -> state.onHourly(true)
+            allowed -> state.onHourly(true)
             else -> disclosing = true
         }
     }
@@ -626,8 +630,8 @@ private fun HeatPage(state: AppState) {
             text = {
                 Text(
                     "Stamp collects your approximate location about once an hour, even when the app is closed " +
-                        "or not in use, to build your heat map. It stays on this phone. Android asks for your " +
-                        "rough location, then to allow it all the time.",
+                        "or not in use, to build your heat map. It stays on this phone. Android then asks you " +
+                        "to allow it all the time.",
                 )
             },
             confirmButton = { TextButton(onClick = { disclosing = false; askHourly() }) { Text("Turn on") } },
