@@ -236,6 +236,21 @@ class StampApp : Application() {
         }
         // First of the rest, so a crash anywhere after it leaves a report on the phone.
         CrashLog.install(this)
+        // The schedule outlives the app, but a permission taken back in Android's settings ends it.
+        com.marcusrosado.stamp.data.Hourly.schedule(this, hourly.on.value && com.marcusrosado.stamp.data.Hourly.allowed(this))
+        // Nothing heavy here: the hourly sample starts the process on its own too, up to 24 times
+        // a day, and needs none of the map data. The screen starts the rest with warmUp().
+    }
+
+    private val warm = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /**
+     * Starts reading the marks, the map data and the rest of what the screens need, once per
+     * process. MainActivity calls it first thing, so a process the hourly sample started reads
+     * only the heat map's file.
+     */
+    fun warmUp() {
+        if (!warm.compareAndSet(false, true)) return
         // Starts reading the marks now, on the IO thread; the first screen waits for them.
         visitsLoading.start()
         // Leaving the app, every change is on disk before Android may end the process. Usually
@@ -269,8 +284,6 @@ class StampApp : Application() {
         cityAreas.start()
         scope.launch(Dispatchers.IO) { cityOutlines.start() }
         scope.launch(Dispatchers.IO) { seen.load() }
-        // The schedule outlives the app, but a permission taken back in Android's settings ends it.
-        com.marcusrosado.stamp.data.Hourly.schedule(this, hourly.on.value && com.marcusrosado.stamp.data.Hourly.allowed(this))
         // Grants for photos of removed memories, visits or countries go back to Android.
         // Never while a file that could not be read is still set aside: an empty store would hand
         // every grant back, and restoring that file would then point at photos Stamp may no longer open.

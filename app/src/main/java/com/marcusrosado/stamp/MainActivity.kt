@@ -15,9 +15,11 @@ import com.marcusrosado.stamp.ui.StampTheme
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
+        val app = application as StampApp
+        // First: the map data and the marks start reading while the window is set up.
+        app.warmUp()
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
-        val app = application as StampApp
         if (app.visitsLoading.isCompleted) show(app) else {
             // The marks are still being read off the main thread: hold the first frame, so the
             // launch screen stays up instead of an empty window, and show the app once they are in.
