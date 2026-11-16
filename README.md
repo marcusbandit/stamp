@@ -69,3 +69,10 @@ python3 -m venv .venv && .venv/bin/pip install shapely
 .venv/bin/python -I tools/build_countries.py --like app/src/main/assets/countries.geojson \
     ne_10m_admin_0_countries.geojson app/src/main/assets/countries_10m.geojson
 ```
+
+## License
+
+Stamp is source-available, the way Aseprite is: build it yourself and every feature is yours for
+free, Pro included. Sharing or selling builds is not allowed; the Play Store build with Pro is how
+the app is paid for. The terms are in [LICENSE.md](LICENSE.md). Bundled map data and fonts keep
+their own licenses, listed there.
