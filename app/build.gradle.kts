@@ -60,7 +60,7 @@ android {
             // The release key when scripts/apk.sh or scripts/bundle.sh passes it, else the local
             // debug key for a fast test build. Never publish the debug-key one.
             signingConfig = signingConfigs.findByName("upload") ?: signingConfigs.getByName("debug")
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
     compileOptions {

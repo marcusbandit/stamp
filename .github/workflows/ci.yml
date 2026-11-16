@@ -22,3 +22,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - name: Unit tests, debug build and the release lint
         run: ./gradlew --console=plain :app:testDebugUnitTest :app:assembleDebug :app:lintVitalRelease
+      # The release build runs R8, which fails on what a debug build never checks. Signed with the
+      # runner's debug key; the release key never leaves its build machine.
+      - name: Release builds, GitHub and Play
+        run: ./gradlew --console=plain :app:assembleRelease && ./gradlew --console=plain :app:bundleRelease -Pstamp.play=true
