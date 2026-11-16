@@ -47,6 +47,14 @@ class VisitStoreTest {
         assertEquals("Lisbon with friends", again.title("Visit 1"))
         assertEquals("Visit 1", again.copy(name = " ").title("Visit 1"))
         assertFalse("a named trip is not blank", again.isBlank)
+        // Renaming changes only the name, so a memory added since is kept.
+        val r = store()
+        val id = r.visits.value["PRT"]!!.trips.single().id
+        r.addMemories(id, listOf(Memory("", text = "Sardines")))
+        r.renameTrip(id, " Porto ")
+        val renamed = r.visits.value["PRT"]!!.trips.single()
+        assertEquals("Porto", renamed.name)
+        assertEquals(1, renamed.memories.size)
     }
 
     @Test fun placesKeepMemoriesOfTheirOwn() {
