@@ -37,6 +37,18 @@ class VisitStoreTest {
         assertEquals(ev, v["DNK"]?.evidence)
     }
 
+    @Test fun aTripKeepsItsName() {
+        val s = store()
+        s.set("PRT", TravelState.Visited)
+        val t = s.visits.value["PRT"]!!.trips.single()
+        s.updateTrip(t.copy(name = "  Lisbon with friends "))
+        val again = store().visits.value["PRT"]!!.trips.single()
+        assertEquals("Lisbon with friends", again.name)
+        assertEquals("Lisbon with friends", again.title("Visit 1"))
+        assertEquals("Visit 1", again.copy(name = " ").title("Visit 1"))
+        assertFalse("a named trip is not blank", again.isBlank)
+    }
+
     @Test fun marksSurviveARestart() {
         store().apply { set("PER", TravelState.Visited); setHome("DNK") }
         val again = store()

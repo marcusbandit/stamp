@@ -831,6 +831,7 @@ class VisitStore(private val file: File) {
     }
 
     private fun tripJson(t: Trip) = JSONObject().put("id", t.id).apply {
+        if (t.name.isNotBlank()) put("name", t.name.trim())
         if (t.lands.isNotEmpty()) put("lands", JSONArray(t.lands))
         t.date?.let { put("date", it.key) }
         t.until?.let { put("until", it.key) }
@@ -881,6 +882,7 @@ class VisitStore(private val file: File) {
 
     private fun parseTrip(t: JSONObject, lands: List<String>) = Trip(
         id = t.optString("id").ifEmpty { newTripId() },
+        name = t.optString("name").trim(),
         date = t.optString("date").takeIf { it.isNotEmpty() }?.let { PartialDate.parse(it) },
         until = t.optString("until").takeIf { it.isNotEmpty() }?.let { PartialDate.parse(it) },
         now = t.optBoolean("now"),

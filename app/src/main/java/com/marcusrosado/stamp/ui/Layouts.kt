@@ -497,7 +497,7 @@ private fun StampMap(
                         ) {
                             Column {
                                 Text(
-                                    if (oneTrip) legName ?: where.ifEmpty { "A trip" } else where.ifEmpty { "A trip" },
+                                    if (oneTrip) legName ?: t.title(where.ifEmpty { "A trip" }) else t.title(where.ifEmpty { "A trip" }),
                                     style = MaterialTheme.typography.bodyLarge,
                                 )
                                 val second = if (oneTrip) rangeLabel(t.date, t.until) else listOfNotNull(legName, rangeLabel(t.date, t.until)).joinToString(" · ").ifEmpty { null }

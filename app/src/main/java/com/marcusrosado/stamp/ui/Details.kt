@@ -200,7 +200,15 @@ fun TripsSection(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     // Living somewhere is not a numbered stay: it says whether the user still does.
-                    if (!lived) Text("Visit ${i + 1}", modifier = Modifier.width(72.dp), style = MaterialTheme.typography.bodyMedium)
+                    // A named trip shows its name; the rest keep their number.
+                    if (!lived || t.name.isNotBlank()) Text(
+                        t.title("Visit ${i + 1}"),
+                        modifier = if (t.name.isBlank()) Modifier.width(72.dp) else Modifier.widthIn(max = 160.dp).padding(end = 12.dp),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = if (t.name.isBlank()) null else androidx.compose.ui.text.font.FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    )
                     val when_ = if (lived) stayLabel(t) else rangeLabel(t.date, t.until)
                     Text(
                         when_ ?: if (lived) "Add dates" else "Add a date",
@@ -210,7 +218,7 @@ fun TripsSection(
                     // The only visit of a visited country stays; there is nothing to remove.
                     if (trips.size > 1) {
                         IconButton(onClick = { if (t.isBlank) onRemove(t) else removing = t }) {
-                            Icon(Icons.Filled.Close, contentDescription = if (lived) "Remove this time living here" else "Remove visit ${i + 1}", modifier = Modifier.size(18.dp))
+                            Icon(Icons.Filled.Close, contentDescription = if (lived) "Remove this time living here" else "Remove ${t.title("visit ${i + 1}")}", modifier = Modifier.size(18.dp))
                         }
                     }
                 }
