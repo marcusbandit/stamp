@@ -152,6 +152,12 @@ class AppState(
     /** Whether Stamp notes where the phone is about once an hour. */
     val hourly: Boolean = false,
     val onHourly: (Boolean) -> Unit = {},
+    /** Whether Stamp Pro is the user's; always in a build from source. */
+    val pro: Boolean = true,
+    /** Whether this build sells Pro: the Play build. */
+    val proSold: Boolean = false,
+    val proPrice: String? = null,
+    val onBuyPro: (android.app.Activity) -> Unit = {},
     /** Whether a tapped city's outline is fetched when Stamp has none. */
     val fetchOutlines: Boolean = true,
     val onFetchOutlines: (Boolean) -> Unit = {},
@@ -181,6 +187,7 @@ fun Root(app: StampApp) {
     var scanOpen by rememberSaveable { mutableStateOf(false) }
     // The scan opened on the Google Photos steps, from Settings or the introduction.
     var scanTakeout by rememberSaveable { mutableStateOf(false) }
+    val proOwned by app.pro.unlocked.collectAsStateWithLifecycle()
     // The introduction opened again from Settings: shown over the app, which keeps its place.
     var replaying by rememberSaveable { mutableStateOf(false) }
     val home by app.visits.home.collectAsStateWithLifecycle()
@@ -199,6 +206,8 @@ fun Root(app: StampApp) {
                 onHere = app.here::set,
                 onHourly = app::setHourly,
                 seen = app.seen.points.value,
+                heatLocked = !proOwned,
+                onBuyPro = app.pro::buy,
                 onTakeout = {
                     if (app.scanner.state.value !is ScanState.Running) app.scanner.cancel()
                     app.flags.set(FLAG_ONBOARDED, true)
@@ -234,6 +243,8 @@ fun Root(app: StampApp) {
                         onHere = app.here::set,
                         onHourly = app::setHourly,
                         seen = app.seen.points.value,
+                        heatLocked = !proOwned,
+                        onBuyPro = app.pro::buy,
                         onTakeout = {
                             if (app.scanner.state.value !is ScanState.Running) app.scanner.cancel()
                             replaying = false
@@ -311,7 +322,11 @@ private fun App(
             null -> null
         }
     }
-    val follow by app.followLines.on.collectAsStateWithLifecycle()
+    // Pro features: the switches keep what the user chose, and only count with Pro.
+    val pro by app.pro.unlocked.collectAsStateWithLifecycle()
+    val proPrice by app.pro.price.collectAsStateWithLifecycle()
+    val followOn by app.followLines.on.collectAsStateWithLifecycle()
+    val follow = followOn && pro
     val lines by app.routePacks.net.collectAsStateWithLifecycle()
     val lastBackup by app.lastBackup.collectAsStateWithLifecycle()
     val here by app.here.on.collectAsStateWithLifecycle()
@@ -355,8 +370,10 @@ private fun App(
     // One the user logged is kept on the phone; any other only until the app closes.
     val fetchOutlines by app.fetchOutlines.on.collectAsStateWithLifecycle()
     val seen by app.seen.points.collectAsStateWithLifecycle()
-    val heatMap by app.heatMap.on.collectAsStateWithLifecycle()
-    val hourly by app.hourly.on.collectAsStateWithLifecycle()
+    val heatMapOn by app.heatMap.on.collectAsStateWithLifecycle()
+    val hourlyOn by app.hourly.on.collectAsStateWithLifecycle()
+    val heatMap = heatMapOn && pro
+    val hourly = hourlyOn && pro
     val keptOutlines by app.cityOutlines.kept.collectAsStateWithLifecycle()
     val logged = remember(visits) { visits.values.flatMapTo(HashSet()) { it.cities + it.wantCities + it.livedPlaces } }
     val loggedNow by rememberUpdatedState(logged)
@@ -519,6 +536,10 @@ private fun App(
             followLines = follow,
             fetchOutlines = fetchOutlines,
             seen = seen,
+            pro = pro,
+            proSold = app.pro.sold,
+            proPrice = proPrice,
+            onBuyPro = app.pro::buy,
             heatMap = heatMap,
             onHeatMap = app.heatMap::set,
             hourly = hourly,

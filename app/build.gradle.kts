@@ -32,7 +32,13 @@ android {
         versionCode = 101
         versionName = "1.1.0"
         buildConfigField("boolean", "SELF_UPDATE", "${!playBuild}")
+        // Only the Play build sells Pro. A build from source has every feature (LICENSE.md).
+        buildConfigField("boolean", "PRO_SOLD", "$playBuild")
     }
+
+    // Each build's ProStore: Play Billing in the Play build, everything unlocked otherwise. The
+    // billing library is only in the Play build, so a build from source carries none of it.
+    sourceSets.getByName("main").kotlin.srcDir(if (playBuild) "src/play/java" else "src/full/java")
 
     if (playBuild) sourceSets.getByName("release").manifest.srcFile("src/play/AndroidManifest.xml")
 
@@ -86,6 +92,7 @@ dependencies {
     implementation(libs.androidx.work)
     implementation(libs.commons.compress)
     implementation(libs.androidx.window)
+    if (playBuild) implementation(libs.billing)
     testImplementation(libs.junit)
     testImplementation(libs.orgjson)
 }

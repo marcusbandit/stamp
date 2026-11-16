@@ -134,6 +134,9 @@ class StampApp : Application() {
         com.marcusrosado.stamp.data.Hourly.schedule(this, on)
     }
 
+    /** Stamp Pro: sold in the Play build, always unlocked in a build from source. */
+    val pro: com.marcusrosado.stamp.data.ProStore by lazy { com.marcusrosado.stamp.data.proStore(this, flags) }
+
     /** Whether the heat map of the places seen shows on the map. */
     val heatMap by lazy { Toggle(FLAG_NO_HEAT_MAP) }
 
