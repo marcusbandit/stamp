@@ -74,6 +74,21 @@ for the heat map. Play reviews every app that holds it, and the console form ask
 - **Risk:** Play rejects background location that is not core to the app. If it is refused, the Play
   bundle can ship without the hourly look and keep the heat map from photos only.
 
+## Stamp Pro
+
+The Play bundle sells Pro, rail and road lines plus the heat map, as one in-app product. A build
+from source and the GitHub APK have every feature (LICENSE.md).
+
+1. Payments profile: Play Console, Settings, Payments profile. A merchant account is needed
+   before any product can be priced.
+2. Monetize with Play, Products, One-time products, Create one-time product. Product ID
+   `stamp_pro` exactly, the id `data/ProStores.kt` in `src/play` asks for. Name "Stamp Pro".
+   Add a purchase option, set the price, then Activate.
+3. Add the testers' accounts under Settings, License testing, so the closed test can buy Pro
+   without being charged.
+4. Data safety: Google Play handles the payment; Stamp only asks Play whether Pro is owned, so the
+   form's answers do not change.
+
 ## Other forms
 
 - App access: everything works without an account or login.

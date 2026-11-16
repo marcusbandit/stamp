@@ -76,6 +76,7 @@ import androidx.compose.material.icons.outlined.Backup
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Whatshot
+import androidx.compose.material.icons.outlined.WorkspacePremium
 import androidx.compose.material.icons.outlined.Map
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.PhotoLibrary
@@ -141,6 +142,7 @@ private enum class Page(val title: String, val icon: ImageVector) {
     Map("Map", Icons.Outlined.Map),
     Memories("Memories", Icons.Outlined.PhotoLibrary),
     Heat("Heat map", Icons.Outlined.Whatshot),
+    Pro("Stamp Pro", Icons.Outlined.WorkspacePremium),
     Backup("Backup & export", Icons.Outlined.Backup),
     About("About Stamp", Icons.Outlined.Info),
 }
@@ -162,6 +164,8 @@ private class Found(
 @Composable
 fun SettingsScreen(state: AppState, contentPadding: PaddingValues, modifier: Modifier = Modifier) {
     var open by rememberSaveable { mutableStateOf<Page?>(null) }
+    // The page a Pro row opened Stamp Pro from, for back to return to.
+    var proFrom by rememberSaveable { mutableStateOf<Page?>(null) }
     var query by rememberSaveable { mutableStateOf("") }
     val access = rememberPhotoAccess()
     val home = state.home?.let { state.atlas.byId[it] }
@@ -187,6 +191,7 @@ fun SettingsScreen(state: AppState, contentPadding: PaddingValues, modifier: Mod
             else -> "Version ${BuildConfig.VERSION_NAME}"
         }
         Page.Home -> null
+        Page.Pro -> if (state.pro) "Yours, thank you" else listOfNotNull("Rail and road lines, heat map", state.proPrice).joinToString(" · ")
     }
     val found = listOf(
         Found("Theme", Page.Appearance, "look colours colors dark light wallpaper match phone font"),
@@ -217,15 +222,19 @@ fun SettingsScreen(state: AppState, contentPadding: PaddingValues, modifier: Mod
             query, { query = it }, found, selected, ::summary, home, been,
             onIntro = state.onIntro,
             onOpen = { query = ""; onOpen(it) }, contentPadding, m,
+            proSold = state.proSold,
         )
     }
     val page: @Composable (Page, (() -> Unit)?) -> Unit = { p, back ->
+        // Opened from a Pro row, back returns to that page.
+        androidx.activity.compose.BackHandler(enabled = p == Page.Pro && proFrom != null && back == null) { open = proFrom; proFrom = null }
         PageFrame(p.title, back, contentPadding) {
             when (p) {
                 Page.Appearance -> AppearancePage(state)
-                Page.Map -> MapPage(state)
+                Page.Map -> MapPage(state, onPro = { proFrom = Page.Map; open = Page.Pro })
                 Page.Memories -> MemoriesPage(state, access)
-                Page.Heat -> HeatPage(state)
+                Page.Heat -> HeatPage(state, onPro = { proFrom = Page.Heat; open = Page.Pro })
+                Page.Pro -> ProPage(state)
                 Page.Backup -> BackupPage(state)
                 Page.About -> AboutPage(stamp)
                 Page.Home -> HomePage(state)
@@ -260,7 +269,7 @@ fun SettingsScreen(state: AppState, contentPadding: PaddingValues, modifier: Mod
                 // cancel or when the next page opens, never as this one starts to slide away.
                 try {
                     progress.collect { back = it.progress }
-                    open = null
+                    open = if (open == Page.Pro) proFrom.also { proFrom = null } else null
                 } catch (e: CancellationException) {
                     back = 0f
                     throw e
@@ -278,7 +287,7 @@ fun SettingsScreen(state: AppState, contentPadding: PaddingValues, modifier: Mod
                             shape = RoundedCornerShape((back * 32).dp)
                             clip = back > 0f
                         },
-                    ) { page(p) { open = null } }
+                    ) { page(p) { open = if (p == Page.Pro) proFrom.also { proFrom = null } else null } }
                 }
             }
         }
@@ -307,6 +316,8 @@ private fun TopList(
     onOpen: (Page) -> Unit,
     padding: PaddingValues,
     modifier: Modifier,
+    /** The Play build lists Stamp Pro; a build from source has nothing to sell. */
+    proSold: Boolean = false,
 ) {
     Column(
         modifier.verticalScroll(rememberScrollState()).padding(padding).padding(horizontal = 16.dp),
@@ -362,6 +373,7 @@ private fun TopList(
             ),
             selected,
         )
+        if (proSold) Cards(listOf(Page.Pro).map { p -> Entry(p.title, summary(p), p.icon, page = p) { onOpen(p) } }, selected)
         Cards(listOf(Page.Appearance, Page.Map).map { p -> Entry(p.title, summary(p), p.icon, page = p) { onOpen(p) } }, selected)
         Cards(listOf(Page.Memories, Page.Heat, Page.Backup).map { p -> Entry(p.title, summary(p), p.icon, page = p) { onOpen(p) } }, selected)
         Cards(
@@ -486,6 +498,43 @@ private fun Pref(title: String, summary: String? = null, onClick: (() -> Unit)? 
     }
 }
 
+/** A Pro feature's row in a build that sells Pro and does not have it: it opens Stamp Pro. */
+@Composable
+private fun ProPref(title: String, onPro: () -> Unit) {
+    Pref(title, onClick = onPro) {
+        androidx.compose.material3.AssistChip(
+            onClick = onPro,
+            label = { Text("Pro") },
+            leadingIcon = { Icon(Icons.Outlined.WorkspacePremium, contentDescription = null, modifier = Modifier.size(18.dp)) },
+        )
+    }
+}
+
+/** What Pro brings, with the user's own heat map, and the one button that buys it. */
+@Composable
+private fun ProPage(state: AppState) {
+    val activity = LocalContext.current as? android.app.Activity
+    Box(Modifier.padding(horizontal = 24.dp, vertical = 8.dp).clip(RoundedCornerShape(20.dp))) {
+        HeatPreview(state.atlas, state.seen)
+    }
+    Category("In Pro")
+    Pref("A heat map of where you spend your time")
+    Pref("Trips that follow real railways and roads")
+    Spacer(Modifier.height(16.dp))
+    Box(Modifier.padding(horizontal = 24.dp)) {
+        if (state.pro) {
+            Text("Pro is yours. Thank you for paying for Stamp.", style = MaterialTheme.typography.titleMedium)
+        } else {
+            androidx.compose.material3.Button(
+                onClick = { activity?.let(state.onBuyPro) },
+                enabled = activity != null,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text(state.proPrice?.let { "Get Stamp Pro · $it" } ?: "Get Stamp Pro") }
+        }
+    }
+    Spacer(Modifier.height(16.dp))
+}
+
 /** A row with a switch, set off by a thin line the way Settings does it. */
 @Composable
 private fun SwitchPref(title: String, summary: String?, on: Boolean, onChange: (Boolean) -> Unit) {
@@ -502,7 +551,7 @@ private fun AppearancePage(state: AppState) {
 }
 
 @Composable
-private fun MapPage(state: AppState) {
+private fun MapPage(state: AppState, onPro: () -> Unit) {
     val palette = LocalMapPalette.current
     Category("Islands and overseas parts")
     Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -518,7 +567,8 @@ private fun MapPage(state: AppState) {
     Category("On the map")
     SwitchPref("Routes between cities", null, state.routes, state.onRoutes)
     if (state.routes) TravelLegend(Modifier.padding(start = 24.dp, end = 24.dp, top = 4.dp, bottom = 12.dp))
-    SwitchPref("Follow railways and roads", null, state.followLines, state.onFollowLines)
+    if (state.pro) SwitchPref("Follow railways and roads", null, state.followLines, state.onFollowLines)
+    else ProPref("Follow railways and roads", onPro)
     SwitchPref("Fetch city outlines", null, state.fetchOutlines, state.onFetchOutlines)
     // Where the phone is: on asks for the rough location if the phone has not allowed it yet.
     val context = LocalContext.current
@@ -598,7 +648,7 @@ private fun MemoriesPage(state: AppState, access: PhotoAccess) {
 private fun placesLabel(n: Int) = if (n == 1) "1 place" else "%,d places".format(n)
 
 @Composable
-private fun HeatPage(state: AppState) {
+private fun HeatPage(state: AppState, onPro: () -> Unit) {
     val context = LocalContext.current
     // Allow all the time may be given on Android's own page; looked at again on every return.
     var back by remember { androidx.compose.runtime.mutableIntStateOf(0) }
@@ -610,15 +660,21 @@ private fun HeatPage(state: AppState) {
     Box(Modifier.padding(horizontal = 24.dp, vertical = 8.dp).clip(RoundedCornerShape(20.dp))) {
         HeatPreview(state.atlas, state.seen)
     }
+    // The places are kept without Pro too, so buying it shows a heat map that is already there;
+    // seeing and clearing them stays free. Turning the hourly look off always works.
     Category("On the map")
-    SwitchPref("Show the heat map", null, state.heatMap, state.onHeatMap)
+    if (state.pro) SwitchPref("Show the heat map", null, state.heatMap, state.onHeatMap)
+    else ProPref("Show the heat map", onPro)
     Category("Where you go")
     // Android lets an app read the location in the background only after it says so in its own
     // words, right before asking.
     var disclosing by remember { mutableStateOf(false) }
-    SwitchPref("Note where I am every hour", null, state.hourly && allowed) { on ->
+    if (!state.pro && !state.hourlyChosen) ProPref("Note where I am every hour", onPro)
+    else SwitchPref("Note where I am every hour", null, if (state.pro) state.hourly && allowed else state.hourlyChosen) { on ->
         when {
             !on -> state.onHourly(false)
+            // Pro went away while it was on: off works, on again needs Pro.
+            !state.pro -> onPro()
             allowed -> state.onHourly(true)
             else -> disclosing = true
         }

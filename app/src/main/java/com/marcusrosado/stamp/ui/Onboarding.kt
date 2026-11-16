@@ -74,6 +74,12 @@ fun Onboarding(
     onHere: (Boolean) -> Unit,
     /** Leaves the introduction for the Google Photos import's steps. */
     onTakeout: () -> Unit = {},
+    /** True in the Play build without Pro: the heat map page offers Pro before the location ask. */
+    heatLocked: Boolean = false,
+    /** Opens Play's purchase sheet for Pro. */
+    onBuyPro: (android.app.Activity) -> Unit = {},
+    /** Pro's price as Play shows it, once known. */
+    proPrice: String? = null,
     /** Turns the hourly look for the heat map on, once the phone has allowed it. */
     onHourly: (Boolean) -> Unit = {},
     /** The places already seen, so the heat map's page shows the user's own once there are some. */
@@ -185,7 +191,7 @@ fun Onboarding(
                             "About once an hour, at a random moment, Stamp collects your approximate location, " +
                                 "even when the app is closed or not in use. Over months it builds a map of where " +
                                 "you spend your time. The places stay on this phone and go in your backups. " +
-                                "Android then asks you to allow it all the time.",
+                                "Android then asks you to allow it all the time." + if (heatLocked) " The heat map is part of Stamp Pro." else "",
                         ) {
                             HeatPreview(atlas, seen, Modifier.clip(androidx.compose.foundation.shape.RoundedCornerShape(16.dp)))
                         }
@@ -236,7 +242,11 @@ fun Onboarding(
                     TextButton(onClick = { page = 4 }, Modifier.fillMaxWidth()) { Text("Skip for now") }
                 }
                 4 -> {
-                    Button(onClick = askHourly, Modifier.fillMaxWidth()) { Text("Build my heat map") }
+                    val activity = androidx.compose.ui.platform.LocalContext.current as? android.app.Activity
+                    if (heatLocked) Button(onClick = { activity?.let(onBuyPro) }, Modifier.fillMaxWidth(), enabled = activity != null) {
+                        Text(proPrice?.let { "Get Stamp Pro · $it" } ?: "Get Stamp Pro")
+                    }
+                    else Button(onClick = askHourly, Modifier.fillMaxWidth()) { Text("Build my heat map") }
                     TextButton(onClick = { page = 5 }, Modifier.fillMaxWidth()) { Text("Skip for now") }
                 }
                 5 -> {

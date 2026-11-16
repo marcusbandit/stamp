@@ -127,6 +127,13 @@ never written into this repo. After installing, run
 `adb shell cmd package compile -m speed -f com.marcusrosado.stamp` so the first taps are not
 spent in the JIT.
 
+## License and Pro
+
+Source-available under `LICENSE.md`, the Aseprite model the owner chose (2026-11-16, #96): anyone
+may build it for themselves with every feature, nobody may share or sell builds. The Play build
+sells Pro: rail and road lines, and the heat map with the hourly look. Until Stamp is live on Play,
+the GitHub APK is the full Pro version; #100 holds the question for when the Play listing goes live.
+
 ## Public repo
 
 The repository is public. No emails, IPs, hostnames, home paths or real personal data in code,
