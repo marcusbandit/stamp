@@ -393,13 +393,16 @@ class VisitStore(private val file: File) {
 
     @Synchronized
     fun updateTrip(trip: Trip) {
-        val stay = if (trip.now) trip.copy(until = null) else trip
+        val stay = (if (trip.now) trip.copy(until = null) else trip).copy(name = trip.name.trim())
         // Where the trip started stays put; its other lands follow its stops when it settles.
         trips = trips.map { if (it.id == trip.id) stay.copy(lands = it.lands) else it }
         // One home at a time: living here now ends "now" everywhere else.
         if (stay.now) trips = trips.map { if (it.id != stay.id && it.now) it.copy(now = false) else it }
         save()
     }
+
+    /** Names a trip; an empty name gives it back its number. Only the name changes. */
+    fun renameTrip(tripId: String, name: String) = changeTrip(tripId) { it.copy(name = name.trim()) }
 
     /** Removes a trip everywhere. A Visited or Lived place always keeps at least one. */
     @Synchronized
@@ -746,9 +749,9 @@ class VisitStore(private val file: File) {
         fun kept(m: Mark, k: String) = k in used || '.' in k || k in m.livedPlaces || k in m.wantCities
         marks = marks.mapValues { (_, m) -> if (m.cityNotes.keys.all { kept(m, it) }) m else m.copy(cityNotes = m.cityNotes.filterKeys { kept(m, it) }) }
         // A memory of a pin that went stays with the country.
-        marks = marks.mapValues { (_, m) ->
-            if (m.memories.none { it.place != null && isPin(it.place) && it.place !in pins }) m
-            else m.copy(memories = m.memories.map { if (it.place != null && isPin(it.place) && it.place !in pins) it.copy(place = null) else it })
+        fun gone(m: Memory) = m.place != null && isPin(m.place) && m.place !in pins
+        if (marks.values.any { mk -> mk.memories.any(::gone) }) marks = marks.mapValues { (_, m) ->
+            if (m.memories.none(::gone)) m else m.copy(memories = m.memories.map { if (gone(it)) it.copy(place = null) else it })
         }
         settled = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<Trip, Boolean>(trips.size * 2)).apply { addAll(trips) }
         settledGeo = g

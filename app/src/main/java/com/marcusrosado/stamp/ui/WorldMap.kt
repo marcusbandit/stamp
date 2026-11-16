@@ -664,7 +664,8 @@ private fun allCityLayersJson(p: MapPalette) = CITY_STEPS.mapIndexed { i, (zoom,
 // City names in the cities view, by size the way the dots are: the biggest first, smaller ones as
 // the map zooms in. Bigger cities sit higher in the stack, so where two names would collide the
 // bigger one is placed and the smaller one waits for more room.
-private val LABEL_STEPS = listOf(2.5 to 2_000_000, 3.8 to 600_000, 5.0 to 200_000, 6.3 to 60_000, 7.6 to 15_000)
+// The last step has no floor, so a small town the user logged gets its name too.
+private val LABEL_STEPS = listOf(2.5 to 2_000_000, 3.8 to 600_000, 5.0 to 200_000, 6.3 to 60_000, 7.6 to 0)
 
 private fun cityLabelLayersJson(p: MapPalette): String {
     val ink = if (p.land.luminance() < 0.5f) "#F1F1EE" else "#1D1D1B"
