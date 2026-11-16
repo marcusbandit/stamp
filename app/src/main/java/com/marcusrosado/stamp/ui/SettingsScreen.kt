@@ -192,6 +192,7 @@ fun SettingsScreen(state: AppState, contentPadding: PaddingValues, modifier: Mod
         Found("Theme", Page.Appearance, "look colours colors dark light wallpaper match phone font"),
         Found("Islands and overseas parts", Page.Map, "land mass split corsica hawaii reunion places"),
         Found("Find countries in your photos", Page.Memories, "scan camera gallery"),
+        Found("Import from Google Photos", Page.Memories, "google photos takeout cloud export zip import"),
         Found("Photo access", Page.Memories, "permission allow gallery"),
         Found("Photos on the map", Page.Memories, "previews pictures zoom"),
         Found("Routes between cities", Page.Map, "lines dashed trip path plane train bus walk bike car ferry travel"),
@@ -585,6 +586,7 @@ private fun MemoriesPage(state: AppState, access: PhotoAccess) {
     val context = LocalContext.current
     Category("Your photos")
     Pref("Find countries in your photos", onClick = state.onOpenNewScan)
+    Pref("Import from Google Photos", onClick = state.onOpenTakeout)
     Pref("Photo access", access.value, onClick = {
         context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null)))
     })

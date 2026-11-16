@@ -46,12 +46,14 @@ class Seen(private val file: File) {
     // places out rather than saving none and wiping them on the next restore.
     private var unreadable = false
 
-    private data class Key(val lat: Int, val lon: Int, val time: Long, val from: SeenFrom)
+    private data class Key(val lat: Int, val lon: Int, val time: Long, val hourly: Boolean)
 
-    private fun key(p: SeenPoint) = Key(
-        floor(p.lat * 1000).toInt(), floor(p.lon * 1000).toInt(),
-        if (p.from == SeenFrom.Hourly) p.ms / HOUR else p.ms / DAY, p.from,
-    )
+    // A photo on the phone and the same photo in a Google Photos export are one point, so the
+    // two photo sources share their squares; hourly samples keep their own.
+    private fun key(p: SeenPoint): Key {
+        val hourly = p.from == SeenFrom.Hourly
+        return Key(floor(p.lat * 1000).toInt(), floor(p.lon * 1000).toInt(), if (hourly) p.ms / HOUR else p.ms / DAY, hourly)
+    }
 
     /** Reads the file once; every other call does this first. Never on the main thread. */
     @Synchronized

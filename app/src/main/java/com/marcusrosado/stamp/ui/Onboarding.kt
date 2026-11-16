@@ -72,6 +72,8 @@ fun Onboarding(
     onLook: (String) -> Unit,
     /** Whether the user let Stamp use the rough location, so the switch in Settings follows it. */
     onHere: (Boolean) -> Unit,
+    /** Leaves the introduction for the Google Photos import's steps. */
+    onTakeout: () -> Unit = {},
     /** Turns the hourly look for the heat map on, once the phone has allowed it. */
     onHourly: (Boolean) -> Unit = {},
     /** The places already seen, so the heat map's page shows the user's own once there are some. */
@@ -239,6 +241,7 @@ fun Onboarding(
                 }
                 5 -> {
                     Button(onClick = ask, Modifier.fillMaxWidth()) { Text("Scan this phone") }
+                    androidx.compose.material3.OutlinedButton(onClick = onTakeout, Modifier.fillMaxWidth()) { Text("Import from Google Photos") }
                     TextButton(onClick = { page = 6 }, Modifier.fillMaxWidth()) { Text("Skip for now") }
                 }
                 else -> Button(onClick = { onDone(false) }, Modifier.fillMaxWidth()) { Text("Start") }
