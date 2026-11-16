@@ -75,6 +75,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.Backup
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Whatshot
 import androidx.compose.material.icons.outlined.Map
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.PhotoLibrary
@@ -139,6 +140,7 @@ private enum class Page(val title: String, val icon: ImageVector) {
     Appearance("Appearance", Icons.Outlined.Palette),
     Map("Map", Icons.Outlined.Map),
     Memories("Memories", Icons.Outlined.PhotoLibrary),
+    Heat("Heat map", Icons.Outlined.Whatshot),
     Backup("Backup & export", Icons.Outlined.Backup),
     About("About Stamp", Icons.Outlined.Info),
 }
@@ -167,10 +169,17 @@ fun SettingsScreen(state: AppState, contentPadding: PaddingValues, modifier: Mod
     val stamp = state.app
     val update by stamp.updates.state.collectAsStateWithLifecycle()
 
+    // The hourly look counts as on only while Android still lets it run.
+    val hourlyOn = state.hourly && com.marcusrosado.stamp.data.Hourly.allowed(LocalContext.current)
     fun summary(p: Page): String? = when (p) {
         Page.Appearance -> Looks.firstOrNull { it.id == state.look }?.name ?: "Match phone"
         Page.Map -> if (state.split) "Islands as separate places" else "Islands as part of their country"
         Page.Memories -> access.label
+        Page.Heat -> when {
+            state.seen.isEmpty() && !hourlyOn -> "Off"
+            hourlyOn -> "Every hour · ${placesLabel(state.seen.size)}"
+            else -> placesLabel(state.seen.size)
+        }
         Page.Backup -> if (state.lastBackup > 0) "Last backup ${date(state.lastBackup)}" else "Not backed up yet"
         Page.About -> when (val u = update) {
             is com.marcusrosado.stamp.data.Update.Available -> "Version ${BuildConfig.VERSION_NAME} · ${u.release.version} is out"
@@ -188,6 +197,10 @@ fun SettingsScreen(state: AppState, contentPadding: PaddingValues, modifier: Mod
         Found("Routes between cities", Page.Map, "lines dashed trip path plane train bus walk bike car ferry travel"),
         Found("Follow railways and roads", Page.Map, "rail tracks motorway highway download real line"),
         Found("Mark the country I'm in", Page.Map, "location gps where am i here current country"),
+        Found("Fetch city outlines", Page.Map, "city boundary outline border openstreetmap download"),
+        Found("Note where I am every hour", Page.Heat, "location history hourly track tracking background gps"),
+        Found("Show the heat map", Page.Heat, "heat map heatmap density where i have been places"),
+        Found("Clear the heat map", Page.Heat, "delete remove location history forget"),
         Found("Save a backup", Page.Backup, "export file json copy"),
         Found("Restore from a backup", Page.Backup, "import file json"),
         Found("Spreadsheet", Page.Backup, "export csv excel sheets"),
@@ -211,6 +224,7 @@ fun SettingsScreen(state: AppState, contentPadding: PaddingValues, modifier: Mod
                 Page.Appearance -> AppearancePage(state)
                 Page.Map -> MapPage(state)
                 Page.Memories -> MemoriesPage(state, access)
+                Page.Heat -> HeatPage(state)
                 Page.Backup -> BackupPage(state)
                 Page.About -> AboutPage(stamp)
                 Page.Home -> HomePage(state)
@@ -348,7 +362,7 @@ private fun TopList(
             selected,
         )
         Cards(listOf(Page.Appearance, Page.Map).map { p -> Entry(p.title, summary(p), p.icon, page = p) { onOpen(p) } }, selected)
-        Cards(listOf(Page.Memories, Page.Backup).map { p -> Entry(p.title, summary(p), p.icon, page = p) { onOpen(p) } }, selected)
+        Cards(listOf(Page.Memories, Page.Heat, Page.Backup).map { p -> Entry(p.title, summary(p), p.icon, page = p) { onOpen(p) } }, selected)
         Cards(
             listOf(
                 Entry("Introduction", null, Icons.Outlined.School, onClick = onIntro),
@@ -578,6 +592,42 @@ private fun MemoriesPage(state: AppState, access: PhotoAccess) {
     SwitchPref("Photos on the map", "From city zoom in", state.mapPhotos, state.onMapPhotos)
 }
 
+/** "1 place", "1,204 places". */
+private fun placesLabel(n: Int) = if (n == 1) "1 place" else "%,d places".format(n)
+
+@Composable
+private fun HeatPage(state: AppState) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val askHourly = rememberHourlyAsk { granted -> state.onHourly(granted) }
+    var clearing by remember { mutableStateOf(false) }
+    Box(Modifier.padding(horizontal = 24.dp, vertical = 8.dp).clip(RoundedCornerShape(20.dp))) {
+        HeatPreview(state.atlas, state.seen)
+    }
+    Category("On the map")
+    SwitchPref("Show the heat map", null, state.heatMap, state.onHeatMap)
+    Category("Where you go")
+    SwitchPref("Note where I am every hour", null, state.hourly && com.marcusrosado.stamp.data.Hourly.allowed(context)) { on ->
+        if (on) askHourly() else state.onHourly(false)
+    }
+    Category("Saved")
+    val by = state.seen.groupingBy { it.from }.eachCount()
+    Pref("Every hour", placesLabel(by[com.marcusrosado.stamp.data.SeenFrom.Hourly] ?: 0))
+    Pref("Photos on this phone", placesLabel(by[com.marcusrosado.stamp.data.SeenFrom.Photo] ?: 0))
+    Pref("Google Photos", placesLabel(by[com.marcusrosado.stamp.data.SeenFrom.GooglePhotos] ?: 0))
+    if (state.seen.isNotEmpty()) Pref("Clear the heat map", onClick = { clearing = true })
+    if (clearing) {
+        LossDialog(
+            Loss("Clear the heat map?", "Every saved place goes. Your countries, trips and photos stay.", "Clear"),
+            onConfirm = {
+                clearing = false
+                scope.launch(Dispatchers.IO) { state.app.seen.clear() }
+            },
+            onDismiss = { clearing = false },
+        )
+    }
+}
+
 @Composable
 private fun BackupPage(state: AppState) {
     val context = LocalContext.current
@@ -589,7 +639,7 @@ private fun BackupPage(state: AppState) {
         uri ?: return@rememberLauncherForActivityResult
         scope.launch {
             val ok = withContext(Dispatchers.IO) {
-                runCatching { context.contentResolver.openOutputStream(uri, "wt")?.use { it.write(state.app.visits.backup().toByteArray()) } != null }.getOrDefault(false)
+                runCatching { context.contentResolver.openOutputStream(uri, "wt")?.use { it.write(state.app.backupText().toByteArray()) } != null }.getOrDefault(false)
             }
             if (ok) { state.app.backedUp(System.currentTimeMillis()); say("Backup saved") } else say("Couldn't save the backup there")
         }
@@ -635,7 +685,7 @@ private fun BackupPage(state: AppState) {
                 pending = null
                 // Reading and saving a large backup is file work: off the main thread.
                 restoring.launch {
-                    val ok = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { state.app.visits.restore(text) }
+                    val ok = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { state.app.restoreText(text) }
                     say(if (ok) "Backup restored" else "That file isn't a Stamp backup")
                 }
             },

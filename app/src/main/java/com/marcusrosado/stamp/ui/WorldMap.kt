@@ -117,6 +117,8 @@ fun WorldMap(
     selectedRegion: String? = null,
     /** The city picked, ringed. */
     selectedCity: Pair<Double, Double>? = null,
+    /** Where the user has been, as squares with a count, drawn as a heat map; empty draws none. */
+    heat: List<com.marcusrosado.stamp.data.HeatCell> = emptyList(),
     /** The picked city's outline, drawn over the map; null draws none. */
     selectedArea: List<Shape>? = null,
     /** Where the map rests after each move: zoom, then south, west, north and east. */
@@ -465,6 +467,15 @@ fun WorldMap(
             FeatureCollection.fromFeatures(listOfNotNull(selectedCity?.let { (lat, lon) -> Feature.fromGeometry(Point.fromLngLat(lon, lat)) })),
         )
     }
+    LaunchedEffect(style, heat) {
+        val s = style ?: return@LaunchedEffect
+        val json = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            FeatureCollection.fromFeatures(heat.map { c ->
+                Feature.fromGeometry(Point.fromLngLat(c.lon, c.lat)).apply { addNumberProperty("n", c.count) }
+            })
+        }
+        s.getSourceAs<GeoJsonSource>(SOURCE_HEAT)?.setGeoJson(json)
+    }
     LaunchedEffect(style, selectedArea) {
         val s = style ?: return@LaunchedEffect
         s.getSourceAs<GeoJsonSource>(SOURCE_SPOT_AREA)?.setGeoJson(
@@ -628,6 +639,7 @@ private val COMPLETE_LAYERS = listOf("complete-glow", "complete-line", "complete
 private const val SOURCE_ALL_CITIES = "all-cities"
 private const val SOURCE_SPOT = "spot"
 private const val SOURCE_SPOT_AREA = "spot-area"
+private const val SOURCE_HEAT = "heat"
 
 /** A city as the cities view draws it: a dot, more of them as the map zooms in. */
 class CityDot(val id: String, val lat: Double, val lon: Double, val population: Int, val mine: Boolean, val name: String = "")
@@ -744,7 +756,8 @@ private fun styleJson(p: MapPalette) = """
     "$SOURCE_WANT_CITIES": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
     "$SOURCE_ALL_CITIES": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
     "$SOURCE_SPOT": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
-    "$SOURCE_SPOT_AREA": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } }
+    "$SOURCE_SPOT_AREA": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
+    "$SOURCE_HEAT": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } }
   },
   "layers": [
     { "id": "ocean", "type": "background", "paint": { "background-color": "${hex(p.ocean)}" } },
@@ -782,6 +795,14 @@ private fun styleJson(p: MapPalette) = """
     { "id": "city-areas-line", "type": "line", "source": "$SOURCE_AREAS",
       "paint": { "line-color": "${hex(p.ocean)}", "line-width": ["interpolate", ["linear"], ["zoom"], 4, 0.8, 7, 1.8],
                  "line-opacity": ["interpolate", ["linear"], ["zoom"], 2, 0, 4, 0.9] } },
+    { "id": "heat", "type": "heatmap", "source": "$SOURCE_HEAT",
+      "paint": { "heatmap-weight": ["interpolate", ["linear"], ["get", "n"], 1, 0.3, 24, 1],
+                 "heatmap-intensity": ["interpolate", ["linear"], ["zoom"], 0, 0.7, 9, 2.2],
+                 "heatmap-radius": ["interpolate", ["linear"], ["zoom"], 0, 5, 4, 12, 9, 26, 12, 40],
+                 "heatmap-color": ["interpolate", ["linear"], ["heatmap-density"],
+                     0, "rgba(255,214,102,0)", 0.12, "rgba(255,214,102,0.5)", 0.4, "rgba(255,159,67,0.75)",
+                     0.7, "rgba(238,82,83,0.85)", 1, "rgba(176,24,64,0.95)"],
+                 "heatmap-opacity": 0.85 } },
     { "id": "selected-casing", "type": "line", "source": "$SOURCE_SELECTED", "maxzoom": $FINE_FULL,
       "paint": { "line-color": "${hex(p.ocean)}", "line-width": 5.0 } },
     { "id": "$LAYER_SELECTED", "type": "line", "source": "$SOURCE_SELECTED", "maxzoom": $FINE_FULL,

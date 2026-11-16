@@ -25,7 +25,10 @@ on it.
 - **Locations come from this phone, or nowhere.** The scan reads EXIF GPS through MediaStore,
   on the device, and with the owner's go-ahead (2026-11-13) the app may ask for the coarse
   location once per launch to mark the country the phone is in; it is asked in the
-  introduction and switched off in Settings. There is no Google Photos route for finding countries, no Takeout
+  introduction and switched off in Settings. With the owner's ask (2026-11-16) the app may also
+  note the coarse location about once an hour, at a random moment, for the heat map: opt-in,
+  asked in the introduction and in Settings, Heat map, with Allow all the time since it runs
+  while the app is closed. The points stay on the phone in `seen.tsv` and go in the backup. There is no Google Photos route for finding countries, no Takeout
   import, and no picker used to import places. No Google API returns photo locations.
 - **Memories may use the system photo picker.** Attaching photos and videos to a visit's stops
   offers suggestions from this phone (taken on those dates near that place) plus the system

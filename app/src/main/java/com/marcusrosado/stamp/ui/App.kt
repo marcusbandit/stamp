@@ -142,6 +142,14 @@ class AppState(
     /** Whether train, car and bus legs follow the real rails and roads. */
     val followLines: Boolean = true,
     val onFollowLines: (Boolean) -> Unit = {},
+    /** Every place the user is known to have been, for the heat map. */
+    val seen: List<com.marcusrosado.stamp.data.SeenPoint> = emptyList(),
+    /** Whether the heat map shows on the map. */
+    val heatMap: Boolean = true,
+    val onHeatMap: (Boolean) -> Unit = {},
+    /** Whether Stamp notes where the phone is about once an hour. */
+    val hourly: Boolean = false,
+    val onHourly: (Boolean) -> Unit = {},
     /** Whether a tapped city's outline is fetched when Stamp has none. */
     val fetchOutlines: Boolean = true,
     val onFetchOutlines: (Boolean) -> Unit = {},
@@ -185,6 +193,8 @@ fun Root(app: StampApp) {
                 look = lookId,
                 onLook = app::setLook,
                 onHere = app.here::set,
+                onHourly = app::setHourly,
+                seen = app.seen.points.value,
                 onDone = { openScan ->
                     app.flags.set(FLAG_ONBOARDED, true)
                     onboarded = true
@@ -209,6 +219,8 @@ fun Root(app: StampApp) {
                         look = lookId,
                         onLook = app::setLook,
                         onHere = app.here::set,
+                        onHourly = app::setHourly,
+                        seen = app.seen.points.value,
                         onDone = { openScan ->
                             replaying = false
                             scanOpen = openScan
@@ -321,6 +333,9 @@ private fun App(
     // A tapped city's outline: the bundled one, one kept or fetched before, or one fetched now.
     // One the user logged is kept on the phone; any other only until the app closes.
     val fetchOutlines by app.fetchOutlines.on.collectAsStateWithLifecycle()
+    val seen by app.seen.points.collectAsStateWithLifecycle()
+    val heatMap by app.heatMap.on.collectAsStateWithLifecycle()
+    val hourly by app.hourly.on.collectAsStateWithLifecycle()
     val keptOutlines by app.cityOutlines.kept.collectAsStateWithLifecycle()
     val logged = remember(visits) { visits.values.flatMapTo(HashSet()) { it.cities + it.wantCities + it.livedPlaces } }
     val loggedNow by rememberUpdatedState(logged)
@@ -476,6 +491,11 @@ private fun App(
             onSpot = { spot = it; if (it != null) selectedId = null },
             followLines = follow,
             fetchOutlines = fetchOutlines,
+            seen = seen,
+            heatMap = heatMap,
+            onHeatMap = app.heatMap::set,
+            hourly = hourly,
+            onHourly = app::setHourly,
             onFetchOutlines = app.fetchOutlines::set,
             onFollowLines = app.followLines::set,
             lastBackup = lastBackup,
