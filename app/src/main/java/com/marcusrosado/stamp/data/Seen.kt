@@ -42,6 +42,9 @@ class Seen(private val file: File) {
     val points: StateFlow<List<SeenPoint>> = _points.asStateFlow()
     private val keys = HashSet<Key>()
     private var loaded = false
+    // The file was there but could not be read: it is left as it is, and a backup leaves the
+    // places out rather than saving none and wiping them on the next restore.
+    private var unreadable = false
 
     private data class Key(val lat: Int, val lon: Int, val time: Long, val from: SeenFrom)
 
@@ -56,8 +59,9 @@ class Seen(private val file: File) {
         if (loaded) return
         loaded = true
         val out = ArrayList<SeenPoint>()
-        if (file.exists()) runCatching {
-            file.forEachLine { line -> parse(line)?.let { if (keys.add(key(it))) out += it } }
+        if (file.exists()) {
+            val read = runCatching { file.forEachLine { line -> parse(line)?.let { if (keys.add(key(it))) out += it } } }
+            unreadable = read.isFailure
         }
         _points.value = out
     }
@@ -81,10 +85,11 @@ class Seen(private val file: File) {
         replace(if (from == null) emptyList() else _points.value.filter { it.from != from })
     }
 
-    /** The points as they go in a backup. */
+    /** The points as they go in a backup, or null when the file could not be read. */
     @Synchronized
-    fun json(): JSONArray {
+    fun json(): JSONArray? {
         load()
+        if (unreadable) return null
         return JSONArray(_points.value.map { line(it) })
     }
 

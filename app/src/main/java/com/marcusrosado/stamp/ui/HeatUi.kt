@@ -33,8 +33,12 @@ fun rememberHourlyAsk(onResult: (Boolean) -> Unit): () -> Unit {
         (context as? android.app.Activity)?.shouldShowRequestPermissionRationale(permission) == false
     val always = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         val bg = Hourly.BACKGROUND
-        if (!granted && bg != null && refusedForGood(bg)) settings()
-        done(Hourly.allowed(context))
+        if (!granted && bg != null && refusedForGood(bg)) {
+            // Only Android's own page can give it now. The hourly look is switched on and waits:
+            // it starts sampling the hour after Allow all the time is chosen there.
+            settings()
+            done(true)
+        } else done(Hourly.allowed(context))
     }
     val rough = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         when {
@@ -55,7 +59,7 @@ fun rememberHourlyAsk(onResult: (Boolean) -> Unit): () -> Unit {
 /** A world map with the user's own heat on it, or a made-up one before there is any. */
 @Composable
 fun HeatPreview(atlas: Atlas, seen: List<SeenPoint>, modifier: Modifier = Modifier) {
-    val cells = if (seen.isEmpty()) SampleHeat else Seen.cells(seen, step = 2.0)
+    val cells = androidx.compose.runtime.remember(seen) { if (seen.isEmpty()) SampleHeat else Seen.cells(seen, step = 2.0) }
     MiniMap(atlas, { null }, modifier, heat = cells)
 }
 

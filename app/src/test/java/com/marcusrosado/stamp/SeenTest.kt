@@ -39,7 +39,7 @@ class SeenTest {
         val s = seen()
         s.add(listOf(SeenPoint(5, 1.5, -2.5, SeenFrom.Photo)))
         val other = Seen(File(dir, "other.tsv"))
-        other.restore(s.json())
+        other.restore(s.json()!!)
         assertEquals(s.points.value, other.points.value)
     }
 

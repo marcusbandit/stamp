@@ -138,7 +138,10 @@ class StampApp : Application() {
     val heatMap by lazy { Toggle(FLAG_NO_HEAT_MAP) }
 
     /** Everything a backup file holds: the marks and trips, and the places seen. */
-    fun backupText(): String = org.json.JSONObject(visits.backup()).put("seen", seen.json()).toString()
+    fun backupText(): String {
+        val places = seen.json() ?: return visits.backup()
+        return org.json.JSONObject(visits.backup()).put("seen", places).toString()
+    }
 
     /**
      * Restores a backup. The places seen are replaced only when the backup has them, so an older
@@ -146,7 +149,8 @@ class StampApp : Application() {
      */
     fun restoreText(text: String): Boolean {
         if (!visits.restore(text)) return false
-        runCatching { org.json.JSONObject(text).optJSONArray("seen") }.getOrNull()?.let { seen.restore(it) }
+        // The marks are in; a place file that cannot be written leaves the heat map as it was.
+        runCatching { org.json.JSONObject(text).optJSONArray("seen")?.let { seen.restore(it) } }
         return true
     }
 

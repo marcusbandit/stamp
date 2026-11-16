@@ -163,7 +163,7 @@ fun Onboarding(
                             "Stamp knows where you are",
                             "Open the app abroad and the country you are in is marked as visited, with the map " +
                                 "already there. Stamp asks the phone for a rough position, enough to name the " +
-                                "country and nothing closer, and it never leaves the phone.",
+                                "country and nothing closer, and it never leaves the phone. Settings, Map turns it off.",
                         ) {
                             Panel {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -184,14 +184,16 @@ fun Onboarding(
                             "A heat map of your life",
                             "About once an hour, at a random moment, Stamp notes roughly where the phone is. " +
                                 "Over months it builds a map of where you spend your time. The places stay on " +
-                                "this phone and go in your backups.",
+                                "this phone and go in your backups. Android asks for your rough location, then " +
+                                "to allow it all the time, since Stamp looks while it is closed.",
                         ) {
                             HeatPreview(atlas, seen, Modifier.clip(androidx.compose.foundation.shape.RoundedCornerShape(16.dp)))
                         }
                         5 -> Page(
                             "Your photos know where you have been",
                             "Stamp reads where your photos were taken and finds the countries, with the first and " +
-                                "last date you were in each. Everything is read right here on this phone.",
+                                "last date you were in each. Everything is read right here on this phone, and " +
+                                "you choose which countries to add.",
                         ) {
                             PhotoPreview()
                         }
@@ -212,31 +214,6 @@ fun Onboarding(
                                 StateButtons(sample, onSet = { sample = it })
                             }
                         }
-                    }
-                    if (p == 3) {
-                        Spacer(Modifier.height(12.dp))
-                        Text(
-                            "Turn it off any time in Settings, under Map.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    if (p == 4) {
-                        Spacer(Modifier.height(12.dp))
-                        Text(
-                            "Android asks twice: for your rough location, then to allow it all the time, since " +
-                                "Stamp looks while it is closed. Choose Allow all the time on that page.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    if (p == 5) {
-                        Spacer(Modifier.height(12.dp))
-                        Text(
-                            "Scanning asks to see your photos. Nothing is uploaded, and you choose which countries to add.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
                     }
                 }
             }
