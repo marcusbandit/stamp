@@ -231,15 +231,15 @@ class StampApp : Application() {
         // is written first and this runs after it; out of memory, encoding the store would fail.
         val crash = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, error ->
-            if (error !is OutOfMemoryError) loadedVisits()?.let { runCatching { it.flush() } }
+            // Only a process that read the marks has any to save; a worker's never did.
+            if (error !is OutOfMemoryError && warm.get()) loadedVisits()?.let { runCatching { it.flush() } }
             crash?.uncaughtException(thread, error)
         }
         // First of the rest, so a crash anywhere after it leaves a report on the phone.
         CrashLog.install(this)
-        // The schedule outlives the app, but a permission taken back in Android's settings ends it.
-        com.marcusrosado.stamp.data.Hourly.schedule(this, hourly.on.value && com.marcusrosado.stamp.data.Hourly.allowed(this))
-        // Nothing heavy here: the hourly sample starts the process on its own too, up to 24 times
-        // a day, and needs none of the map data. The screen starts the rest with warmUp().
+        // Nothing else here: the hourly sample starts the process on its own too, up to 24 times a
+        // day, and needs none of the map data. The screen starts the rest with warmUp(), and the
+        // marks, the atlas and the cities start reading the first time anything touches them.
     }
 
     private val warm = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -251,6 +251,8 @@ class StampApp : Application() {
      */
     fun warmUp() {
         if (!warm.compareAndSet(false, true)) return
+        // The schedule outlives the app, but a permission taken back in Android's settings ends it.
+        com.marcusrosado.stamp.data.Hourly.schedule(this, hourly.on.value && com.marcusrosado.stamp.data.Hourly.allowed(this))
         // Starts reading the marks now, on the IO thread; the first screen waits for them.
         visitsLoading.start()
         // Leaving the app, every change is on disk before Android may end the process. Usually

@@ -21,7 +21,9 @@ import java.util.concurrent.TimeUnit
 class Hourly(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
         val app = applicationContext as StampApp
-        if (!app.hourly.on.value || !allowed(applicationContext)) return Result.success()
+        // Switched off, or the permission was taken back in Android's settings: the schedule ends
+        // here, and turning the hourly look on again starts it anew.
+        if (!app.hourly.on.value || !allowed(applicationContext)) { schedule(applicationContext, false); return Result.success() }
         val (lat, lon) = Here.find(applicationContext, maxAge = 20 * 60_000L) ?: return Result.success()
         app.seen.add(listOf(SeenPoint(System.currentTimeMillis(), lat, lon, SeenFrom.Hourly)))
         return Result.success()
