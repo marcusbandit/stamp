@@ -646,6 +646,10 @@ private fun placesLabel(n: Int) = if (n == 1) "1 place" else "%,d places".format
 @Composable
 private fun HeatPage(state: AppState, onPro: () -> Unit) {
     val context = LocalContext.current
+    // Allow all the time may be given on Android's own page; looked at again on every return.
+    var back by remember { androidx.compose.runtime.mutableIntStateOf(0) }
+    androidx.lifecycle.compose.LifecycleResumeEffect(Unit) { back++; onPauseOrDispose { } }
+    val allowed = remember(back) { com.marcusrosado.stamp.data.Hourly.allowed(context) }
     val scope = rememberCoroutineScope()
     val askHourly = rememberHourlyAsk { granted -> state.onHourly(granted) }
     var clearing by remember { mutableStateOf(false) }
@@ -661,8 +665,30 @@ private fun HeatPage(state: AppState, onPro: () -> Unit) {
     Category("On the map")
     SwitchPref("Show the heat map", null, state.heatMap, state.onHeatMap)
     Category("Where you go")
-    SwitchPref("Note where I am every hour", null, state.hourly && com.marcusrosado.stamp.data.Hourly.allowed(context)) { on ->
-        if (on) askHourly() else state.onHourly(false)
+    // Android lets an app read the location in the background only after it says so in its own
+    // words, right before asking.
+    var disclosing by remember { mutableStateOf(false) }
+    SwitchPref("Note where I am every hour", null, state.hourly && allowed) { on ->
+        when {
+            !on -> state.onHourly(false)
+            allowed -> state.onHourly(true)
+            else -> disclosing = true
+        }
+    }
+    if (disclosing) {
+        SeamAlertDialog(
+            onDismissRequest = { disclosing = false },
+            title = { Text("Build your heat map") },
+            text = {
+                Text(
+                    "Stamp collects your approximate location about once an hour, even when the app is closed " +
+                        "or not in use, to build your heat map. It stays on this phone. Android then asks you " +
+                        "to allow it all the time.",
+                )
+            },
+            confirmButton = { TextButton(onClick = { disclosing = false; askHourly() }) { Text("Turn on") } },
+            dismissButton = { TextButton(onClick = { disclosing = false }) { Text("Not now") } },
+        )
     }
     Category("Saved")
     val by = state.seen.groupingBy { it.from }.eachCount()
