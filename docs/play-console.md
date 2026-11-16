@@ -25,12 +25,18 @@ F-Droid read:
 ## Data safety
 
 - Does the app collect or share any of the required user data types? **No.**
-- Data is processed on the device only, so nothing counts as collected. Photo locations and the
-  rough location are read on the device and never transmitted. The internet permission is used
-  only to download public rail and road files by country code; no user data goes with it. The
+- Data is processed on the device only, so nothing counts as collected. Photo locations, the
+  places read from a Google Takeout export, and the rough location (once per launch, and hourly
+  when the user turns the heat map on) are read on the device and never transmitted. The internet
+  permission is used only for public map data: rail and road files asked for by country code, and
+  a tapped city's outline from OpenStreetMap asked for by the city's name, country code and centre.
+  No user data goes with either. The
   Play bundle has no update check and no install permission: `scripts/bundle.sh` builds it with
   `-Pstamp.play=true`.
-- Is data encrypted in transit? Yes: the only traffic is HTTPS downloads of public map files.
+- Is data encrypted in transit? Yes: every request is HTTPS, map file downloads and outline lookups alike.
+- Why the outline lookups are not "shared location": they name a city the user tapped on the map,
+  not where the phone is, and carry no identifier. If Play reads it differently, declare
+  "Approximate location, shared, not collected, for app functionality" rather than drop the feature.
 - Can users request deletion? Uninstalling deletes everything; the form question is not shown
   when nothing is collected.
 
@@ -46,6 +52,27 @@ is not enough. Suggested answer:
 > taken. The same access lets Stamp suggest photos taken on a visit's dates near that place.
 > Everything is read on the device, and nothing read from photos is ever transmitted. Users can grant partial
 > access, and the app also offers the system picker for attaching single photos to a visit.
+
+## Location permissions declaration (background location)
+
+The Play bundle asks for `ACCESS_BACKGROUND_LOCATION` only when the user turns on the hourly look
+for the heat map. Play reviews every app that holds it, and the console form asks for:
+
+- **Feature that needs it:** Heat map. "About once an hour, Stamp reads the phone's approximate
+  location and adds it to a heat map of where the user spends their time, built over months. It
+  must run while the app is closed, since the point is to sample the user's normal day. The
+  location is coarse only, is stored on the device, and is never transmitted. The feature is off
+  until the user turns it on. Settings, Heat map turns it off, and Clear the heat map there
+  deletes every point."
+- **Prominent disclosure:** shown before every ask, in the app's own words. The introduction's heat
+  map page says it in its text, and the switch in Settings, Heat map opens a dialog first:
+  "Stamp collects your approximate location about once an hour, even when the app is closed or not
+  in use, to build your heat map. It stays on this phone." Its buttons are Turn on and Not now.
+- **Video:** up to 30 seconds on YouTube (unlisted is fine) showing the disclosure, the two Android
+  prompts (While using the app, then Allow all the time), and the heat map. Record it on a phone or
+  the emulator with `adb shell screenrecord`.
+- **Risk:** Play rejects background location that is not core to the app. If it is refused, the Play
+  bundle can ship without the hourly look and keep the heat map from photos only.
 
 ## Other forms
 

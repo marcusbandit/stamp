@@ -7,12 +7,15 @@ Keep as much or as little as you like
 A country on its own is a complete entry. When you want more, add visits with a year, a month or exact days, the cities you saw, a heart and a star rating, and the regions you covered. Countries you lived in hold stays with their dates.
 
 Remember the trip
-Each visit has a timeline of dated stops. Pin a place by hand or pick a town from over 150,000 bundled cities, reorder the stops, and attach photos, videos and short notes. Stamp suggests photos taken on those dates near that place.
+Each visit has a timeline of dated stops and a name of its own. Pin a place by hand or pick a town from over 150,000 bundled cities, reorder the stops, and attach photos, videos and short notes, to a trip or to any country, city or region. Stamp suggests photos taken on those dates near that place.
+
+A heat map of your life
+Turn on the hourly look and Stamp notes roughly where you are about once an hour, so over months your map glows where you spend your time. Photos from a scan and from a Google Photos export add to it, and the places stay even after you delete the photos.
 
 Private by design
-No account, no ads, no tracking, and no internet permission. Your marks, notes and photo links stay on this phone. The map is drawn from shapes bundled with the app, so it works on a plane.
+No account, no ads, no tracking. Your marks, notes, places and photo links stay on this phone. The map is drawn from shapes bundled with the app, so it works on a plane. The internet is used only for public map data: rail and road lines and city outlines.
 
 Made for every screen
 Portrait, landscape and unfolded layouts, so it reads like a book on a foldable and like a map on a tablet.
 
-Country shapes from Natural Earth. Cities from GeoNames, CC BY 4.0.
+Country shapes from Natural Earth. Cities from GeoNames, CC BY 4.0. City outlines and rail and road lines © OpenStreetMap contributors, ODbL.

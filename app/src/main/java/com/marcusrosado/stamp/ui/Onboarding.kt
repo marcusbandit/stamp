@@ -182,10 +182,10 @@ fun Onboarding(
                         }
                         4 -> Page(
                             "A heat map of your life",
-                            "About once an hour, at a random moment, Stamp notes roughly where the phone is. " +
-                                "Over months it builds a map of where you spend your time. The places stay on " +
-                                "this phone and go in your backups. Android asks for your rough location, then " +
-                                "to allow it all the time, since Stamp looks while it is closed.",
+                            "About once an hour, at a random moment, Stamp collects your approximate location, " +
+                                "even when the app is closed or not in use. Over months it builds a map of where " +
+                                "you spend your time. The places stay on this phone and go in your backups. " +
+                                "Android then asks you to allow it all the time.",
                         ) {
                             HeatPreview(atlas, seen, Modifier.clip(androidx.compose.foundation.shape.RoundedCornerShape(16.dp)))
                         }

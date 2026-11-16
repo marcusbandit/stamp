@@ -155,7 +155,8 @@ class CityOutlines(private val dir: File, private val agent: String, private val
 
     companion object {
         const val BASE = "https://nominatim.openstreetmap.org"
-        private val OVERPASS = listOf("https://overpass-api.de/api/interpreter", "https://overpass.private.coffee/api/interpreter")
+        // The main public Overpass server only, the one the privacy policy names.
+        private val OVERPASS = listOf("https://overpass-api.de/api/interpreter")
         private const val SIMPLIFY = "0.0003"
 
         /**
