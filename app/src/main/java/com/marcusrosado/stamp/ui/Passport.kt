@@ -323,7 +323,7 @@ private fun TripRow(
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(
-                    flags.joinToString(", ") { it.name },
+                    t.title(flags.joinToString(", ") { it.name }),
                     style = MaterialTheme.typography.titleMedium,
                     maxLines = 1,
                     overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,

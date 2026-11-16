@@ -497,8 +497,10 @@ private fun StampMap(
                         ) {
                             Column {
                                 Text(
-                                    if (oneTrip) legName ?: where.ifEmpty { "A trip" } else where.ifEmpty { "A trip" },
+                                    (if (oneTrip) legName else null) ?: t.title(where.ifEmpty { "A trip" }),
                                     style = MaterialTheme.typography.bodyLarge,
+                                    maxLines = 2,
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                                 )
                                 val second = if (oneTrip) rangeLabel(t.date, t.until) else listOfNotNull(legName, rangeLabel(t.date, t.until)).joinToString(" · ").ifEmpty { null }
                                 second?.let {

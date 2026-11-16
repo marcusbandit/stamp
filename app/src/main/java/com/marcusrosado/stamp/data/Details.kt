@@ -66,6 +66,8 @@ data class PartialDate(val year: Int, val month: Int? = null, val day: Int? = nu
  */
 data class Trip(
     val id: String,
+    /** The user's own name for the trip, such as "Interrail 2019"; empty for none. */
+    val name: String = "",
     /** When the visit was, or when the stay began. */
     val date: PartialDate? = null,
     /** City ids, in the order they were added. */
@@ -127,7 +129,7 @@ data class Trip(
      * stay going on now: one that can be taken back without losing anything the user told.
      */
     fun isBareVisitTo(cityId: String): Boolean =
-        cities == listOf(cityId) && date == null && until == null && memories.isEmpty() && !now
+        cities == listOf(cityId) && date == null && until == null && memories.isEmpty() && !now && name.isBlank()
 
     /** The ways the user went from [from] to [to], or none when they did not say. */
     fun waysBetween(from: String, to: String): List<Travel> = legBetween(from, to)?.ways.orEmpty()
@@ -154,7 +156,10 @@ data class Trip(
         get() = legs.filter { (it.from == Leg.START || it.from in cities) && (it.to == Leg.END || it.to in cities) }
 
     val isBlank: Boolean
-        get() = date == null && until == null && cities.isEmpty() && !now && memories.isEmpty()
+        get() = date == null && until == null && cities.isEmpty() && !now && memories.isEmpty() && name.isBlank()
+
+    /** What the trip is called: the user's name for it, or [fallback], such as "Visit 2". */
+    fun title(fallback: String): String = name.trim().ifEmpty { fallback }
 
     /**
      * When the user was at [place], as far as anything says: their own dates first, then the

@@ -58,6 +58,8 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.AddAPhoto
 import androidx.compose.material.icons.outlined.EditNote
+import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.material.icons.outlined.Flight
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Hotel
@@ -122,6 +124,8 @@ import java.time.ZoneId
 /** What the timeline can change. Every call names the visit it is about. */
 class TimelineActions(
     val onDates: (Trip) -> Unit,
+    /** Names the trip; an empty name gives it back its number. */
+    val onRename: (String) -> Unit,
     val onStopDates: (place: String, arrived: PartialDate?, left: PartialDate?) -> Unit,
     /** Puts the trip's stops in a new order. */
     val onStopOrder: (cities: List<String>) -> Unit,
@@ -207,6 +211,7 @@ fun VisitTimeline(
         ?: stops.lastOrNull()?.takeIf { reached == "end" } ?: stops.firstOrNull())
         ?.let { placeOf(it, visit, places) }?.let { it.lat to it.lon }
     var editingDates by remember { mutableStateOf(false) }
+    var naming by remember { mutableStateOf(false) }
     var stopDates by remember { mutableStateOf<String?>(null) }
     // The leg being told, as the stops it runs between.
     var leg by remember { mutableStateOf<Pair<String, String>?>(null) }
@@ -265,12 +270,15 @@ fun VisitTimeline(
                         // A trip across borders names every place it went: "Germany → Austria → Italy".
                         where = trip.lands.map(landName).distinct().takeIf { it.size > 1 }?.joinToString("  →  ") ?: country.name,
                         // Living somewhere is not a numbered stay: it is where the user lives or lived.
-                        title = if (lived) (if (trip.now) "Living here" else "Lived here") else "Visit $number",
+                        title = trip.title(if (lived) (if (trip.now) "Living here" else "Lived here") else "Visit $number"),
                         // "Living here" needs no "Living here now" under it.
-                        dates = if (lived && trip.now && trip.date == null) null else rangeLabel(trip.date, trip.until, trip.now),
+                        // A named home still says the user lives there.
+                        dates = if (lived && trip.now && trip.date == null) "Living here".takeIf { trip.name.isNotBlank() }
+                            else rangeLabel(trip.date, trip.until, trip.now),
                         photo = hero,
                         onBack = onDismiss,
                         onDates = { editingDates = true },
+                        onName = { naming = true },
                         // Bent, the map is always beside the timeline, so there is nothing to toggle.
                         mapShown = if (map != null && LocalHinge.current == null) showMap else null,
                         // With the map shown it is the picture: the header shrinks to a title row.
@@ -478,6 +486,14 @@ fun VisitTimeline(
             }
           }
         }
+        if (naming) {
+            NameDialog(
+                trip.name,
+                title = if (lived) "Name this stay" else "Name this trip",
+                onDone = { actions.onRename(it); naming = false },
+                onDismiss = { naming = false },
+            )
+        }
         if (editingDates) {
             val done: (Trip) -> Unit = { actions.onDates(it); editingDates = false }
             if (lived) {
@@ -562,6 +578,7 @@ private fun Hero(
     photo: Memory?,
     onBack: () -> Unit,
     onDates: () -> Unit,
+    onName: () -> Unit,
     /** Whether the map shows beside the timeline; null when there is no map to show. */
     mapShown: Boolean? = null,
     onMap: () -> Unit = {},
@@ -571,7 +588,7 @@ private fun Hero(
     if (compact) {
         Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 12.dp, top = 8.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
-            HeroTitles(where, title, dates, onDates, big = false, modifier = Modifier.weight(1f).padding(start = 4.dp))
+            HeroTitles(where, title, dates, onDates, onName, big = false, modifier = Modifier.weight(1f).padding(start = 4.dp))
             if (mapShown != null) MapButton(mapShown, onMap)
         }
         return
@@ -601,16 +618,30 @@ private fun Hero(
             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
         }
         if (mapShown != null) MapButton(mapShown, onMap, Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(12.dp))
-        HeroTitles(where, title, dates, onDates, big = true, modifier = Modifier.align(Alignment.BottomStart).padding(horizontal = 24.dp, vertical = 12.dp))
+        HeroTitles(where, title, dates, onDates, onName, big = true, modifier = Modifier.align(Alignment.BottomStart).padding(horizontal = 24.dp, vertical = 12.dp))
     }
 }
 
-/** Where the trip went, its name and its dates; the dates open their dialog. */
+/** Where the trip went, its name and its dates; the name and the dates open their dialogs. */
 @Composable
-private fun HeroTitles(where: String, title: String, dates: String?, onDates: () -> Unit, big: Boolean, modifier: Modifier) {
+private fun HeroTitles(where: String, title: String, dates: String?, onDates: () -> Unit, onName: () -> Unit, big: Boolean, modifier: Modifier) {
     Column(modifier) {
         Text(where, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Text(title, style = if (big) MaterialTheme.typography.headlineLarge else MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+        Row(
+            Modifier.clip(RoundedCornerShape(8.dp)).clickable(onClickLabel = "Rename", onClick = onName),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                title,
+                style = if (big) MaterialTheme.typography.headlineLarge else MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            Spacer(Modifier.width(8.dp))
+            Icon(Icons.Outlined.Edit, contentDescription = null, modifier = Modifier.size(if (big) 20.dp else 18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
         Text(
             dates ?: "Add dates",
             style = if (big) MaterialTheme.typography.bodyLarge else MaterialTheme.typography.bodyMedium,
@@ -1186,6 +1217,35 @@ private fun DateRow(label: String, value: PartialDate?, guess: PartialDate?, onE
             TextButton(onClick = onClear) { Text("Clear") }
         }
     }
+}
+
+/** Names a trip; an empty name gives it back its number. */
+@Composable
+private fun NameDialog(name: String, title: String, onDone: (String) -> Unit, onDismiss: () -> Unit) {
+    var text by remember { mutableStateOf(androidx.compose.ui.text.input.TextFieldValue(name, androidx.compose.ui.text.TextRange(name.length))) }
+    val focus = remember { androidx.compose.ui.focus.FocusRequester() }
+    // The field lives in the dialog's own window, which may not be attached on the first frame.
+    androidx.compose.runtime.LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+    SeamAlertDialog(
+        onDismissRequest = onDismiss,
+        outsideCloses = text.text == name,
+        title = { Text(title) },
+        text = {
+            OutlinedTextField(
+                value = text,
+                onValueChange = { text = it },
+                singleLine = true,
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                    capitalization = androidx.compose.ui.text.input.KeyboardCapitalization.Sentences,
+                    imeAction = androidx.compose.ui.text.input.ImeAction.Done,
+                ),
+                keyboardActions = androidx.compose.foundation.text.KeyboardActions(onDone = { onDone(text.text) }),
+                modifier = Modifier.fillMaxWidth().focusRequester(focus),
+            )
+        },
+        confirmButton = { TextButton(onClick = { onDone(text.text) }) { Text("Done") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 /** "3 Jan 2025 to 20 Jan 2025", "From 3 Jan 2025", or null. */

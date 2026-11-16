@@ -82,6 +82,7 @@ class DetailActions(
     val onRating: (id: String, rating: Int) -> Unit,
     val onAddTrip: (id: String) -> Unit,
     val onUpdateTrip: (trip: Trip) -> Unit,
+    val onRenameTrip: (tripId: String, name: String) -> Unit,
     val onRemoveTrip: (id: String, tripId: String) -> Unit,
     /** A null trip puts the city on a new visit. */
     val onAddCity: (id: String, tripId: String?, cityId: String) -> Unit,
@@ -200,7 +201,16 @@ fun TripsSection(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     // Living somewhere is not a numbered stay: it says whether the user still does.
-                    if (!lived) Text("Visit ${i + 1}", modifier = Modifier.width(72.dp), style = MaterialTheme.typography.bodyMedium)
+                    // A named trip shows its name; the rest keep their number.
+                    val named = t.name.isNotBlank()
+                    if (!lived || named) Text(
+                        t.title("Visit ${i + 1}"),
+                        modifier = if (named) Modifier.widthIn(max = 160.dp).padding(end = 12.dp) else Modifier.width(72.dp),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = if (named) FontWeight.Medium else null,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    )
                     val when_ = if (lived) stayLabel(t) else rangeLabel(t.date, t.until)
                     Text(
                         when_ ?: if (lived) "Add dates" else "Add a date",
@@ -210,7 +220,7 @@ fun TripsSection(
                     // The only visit of a visited country stays; there is nothing to remove.
                     if (trips.size > 1) {
                         IconButton(onClick = { if (t.isBlank) onRemove(t) else removing = t }) {
-                            Icon(Icons.Filled.Close, contentDescription = if (lived) "Remove this time living here" else "Remove visit ${i + 1}", modifier = Modifier.size(18.dp))
+                            Icon(Icons.Filled.Close, contentDescription = if (lived) "Remove this time living here" else "Remove ${t.title("visit ${i + 1}")}", modifier = Modifier.size(18.dp))
                         }
                     }
                 }
@@ -233,6 +243,7 @@ fun TripsSection(
                     if (lived) stayLabel(t) else rangeLabel(t.date, t.until),
                     t.places.size.takeIf { it > 0 }?.let { if (it == 1) "1 city" else "$it cities" },
                     t.memories.size.takeIf { it > 0 }?.let { if (it == 1) "1 memory" else "$it memories" },
+                    t.name.takeIf { it.isNotBlank() }?.let { "its name" },
                 ).joinToString(", ").ifEmpty { "Nothing filled in yet" },
                 "Remove",
             ),
