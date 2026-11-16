@@ -27,6 +27,7 @@ import com.marcusrosado.stamp.data.Atlas
 import com.marcusrosado.stamp.data.Country
 import com.marcusrosado.stamp.data.FineShapes
 import com.marcusrosado.stamp.data.Shape
+import androidx.compose.ui.graphics.luminance
 import com.marcusrosado.stamp.data.TravelState
 import com.marcusrosado.stamp.data.Visit
 import org.maplibre.android.camera.CameraPosition
@@ -116,6 +117,8 @@ fun WorldMap(
     selectedRegion: String? = null,
     /** The city picked, ringed. */
     selectedCity: Pair<Double, Double>? = null,
+    /** The picked city's outline, drawn over the map; null draws none. */
+    selectedArea: List<Shape>? = null,
     /** Where the map rests after each move: zoom, then south, west, north and east. */
     onViewport: ((DoubleArray) -> Unit)? = null,
     /** False while a page covers the whole map: its icons stop gliding until it shows again. */
@@ -436,6 +439,7 @@ fun WorldMap(
                     addStringProperty("id", c.id)
                     addNumberProperty("pop", c.population)
                     addBooleanProperty("mine", c.mine)
+                    addStringProperty("name", c.name)
                 }
             })
         }
@@ -459,6 +463,18 @@ fun WorldMap(
         val s = style ?: return@LaunchedEffect
         s.getSourceAs<GeoJsonSource>(SOURCE_SPOT)?.setGeoJson(
             FeatureCollection.fromFeatures(listOfNotNull(selectedCity?.let { (lat, lon) -> Feature.fromGeometry(Point.fromLngLat(lon, lat)) })),
+        )
+    }
+    LaunchedEffect(style, selectedArea) {
+        val s = style ?: return@LaunchedEffect
+        s.getSourceAs<GeoJsonSource>(SOURCE_SPOT_AREA)?.setGeoJson(
+            FeatureCollection.fromFeatures(listOfNotNull(selectedArea?.takeIf { it.isNotEmpty() }?.let { shapes ->
+                Feature.fromGeometry(
+                    MultiPolygon.fromLngLats(
+                        shapes.map { sh -> (listOf(sh.outer) + sh.holes).map { r -> r.xs.indices.map { i -> Point.fromLngLat(r.xs[i], r.ys[i]) } } },
+                    ),
+                )
+            })),
         )
     }
     LaunchedEffect(style, wantCities) {
@@ -611,9 +627,10 @@ private const val LAYER_REGIONS = "regions-fill"
 private val COMPLETE_LAYERS = listOf("complete-glow", "complete-line", "complete-glow-fine", "complete-line-fine")
 private const val SOURCE_ALL_CITIES = "all-cities"
 private const val SOURCE_SPOT = "spot"
+private const val SOURCE_SPOT_AREA = "spot-area"
 
 /** A city as the cities view draws it: a dot, more of them as the map zooms in. */
-class CityDot(val id: String, val lat: Double, val lon: Double, val population: Int, val mine: Boolean)
+class CityDot(val id: String, val lat: Double, val lon: Double, val population: Int, val mine: Boolean, val name: String = "")
 
 // Bigger cities first: a dot for every city over a million from the start, smaller ones as the
 // map zooms in. A city on a visit or wanted shows from the start whatever its size.
@@ -631,6 +648,30 @@ private fun allCityLayersJson(p: MapPalette) = CITY_STEPS.mapIndexed { i, (zoom,
                  "circle-color": "${hex(p.selected)}", "circle-opacity": 0.55,
                  "circle-stroke-color": "${hex(p.ocean)}", "circle-stroke-width": 0.6 } }"""
 }.joinToString(",\n")
+
+// City names in the cities view, by size the way the dots are: the biggest first, smaller ones as
+// the map zooms in. Bigger cities sit higher in the stack, so where two names would collide the
+// bigger one is placed and the smaller one waits for more room.
+// The last step has no floor, so a small town the user logged gets its name too.
+private val LABEL_STEPS = listOf(2.5 to 2_000_000, 3.8 to 600_000, 5.0 to 200_000, 6.3 to 60_000, 7.6 to 0)
+
+private fun cityLabelLayersJson(p: MapPalette): String {
+    val ink = if (p.land.luminance() < 0.5f) "#F1F1EE" else "#1D1D1B"
+    return LABEL_STEPS.indices.reversed().joinToString(",\n") { i ->
+        val (zoom, least) = LABEL_STEPS[i]
+        val most = LABEL_STEPS.getOrNull(i - 1)?.second
+        val filter = if (most == null) """[">=", ["get", "pop"], $least]"""
+        else """["all", [">=", ["get", "pop"], $least], ["<", ["get", "pop"], $most]]"""
+        val size = 13.5 - i * 0.8
+        """    { "id": "city-labels-$i", "type": "symbol", "source": "$SOURCE_ALL_CITIES", "minzoom": $zoom, "filter": $filter,
+      "layout": { "text-field": ["get", "name"], "text-font": ["NotoSansMedium"],
+                  "text-size": ["interpolate", ["linear"], ["zoom"], $zoom, $size, ${zoom + 4}, ${size + 3}],
+                  "text-anchor": "top", "text-offset": [0, 0.55], "text-max-width": 8,
+                  "text-padding": 3, "symbol-sort-key": ["-", 0, ["get", "pop"]] },
+      "paint": { "text-color": "$ink", "text-halo-color": "${hex(p.land)}", "text-halo-width": 1.4,
+                 "text-opacity": ["interpolate", ["linear"], ["zoom"], $zoom, 0, ${zoom + 0.4}, 1] } }"""
+    }
+}
 
 /** Which countries draw as their regions, the shapes of those regions, and each region's mark. */
 class RegionLayer(
@@ -686,6 +727,7 @@ private fun styleJson(p: MapPalette) = """
 {
   "version": 8,
   "name": "stamp",
+  "glyphs": "asset://glyphs/{fontstack}/{range}.pbf",
   "sources": {
     "countries": { "type": "geojson", "data": "asset://${StampApp.COUNTRIES_ASSET}" },
     "countries-fine": { "type": "geojson", "data": "asset://${StampApp.FINE_COUNTRIES_ASSET}" },
@@ -701,7 +743,8 @@ private fun styleJson(p: MapPalette) = """
     "$SOURCE_REGIONS": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
     "$SOURCE_WANT_CITIES": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
     "$SOURCE_ALL_CITIES": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
-    "$SOURCE_SPOT": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } }
+    "$SOURCE_SPOT": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
+    "$SOURCE_SPOT_AREA": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } }
   },
   "layers": [
     { "id": "ocean", "type": "background", "paint": { "background-color": "${hex(p.ocean)}" } },
@@ -757,9 +800,14 @@ ${allCityLayersJson(p)},
       "paint": { "circle-radius": ["interpolate", ["linear"], ["zoom"], 1, 2.5, 6, 5],
                  "circle-color": "${hex(p.want)}",
                  "circle-stroke-color": "${hex(p.ocean)}", "circle-stroke-width": 1.2 } },
+    { "id": "spot-area-fill", "type": "fill", "source": "$SOURCE_SPOT_AREA",
+      "paint": { "fill-color": "${hex(p.selected)}", "fill-opacity": 0.16 } },
+    { "id": "spot-area-line", "type": "line", "source": "$SOURCE_SPOT_AREA",
+      "paint": { "line-color": "${hex(p.selected)}", "line-width": ["interpolate", ["linear"], ["zoom"], 4, 1.2, 9, 2.4] } },
     { "id": "spot-city", "type": "circle", "source": "$SOURCE_SPOT",
       "paint": { "circle-radius": 9, "circle-color": "rgba(0,0,0,0)",
                  "circle-stroke-color": "${hex(p.selected)}", "circle-stroke-width": 2.5 } },
+${cityLabelLayersJson(p)},
 $ROUTE_ICONS_JSON,
     { "id": "photos", "type": "symbol", "source": "$SOURCE_PHOTOS", "minzoom": 4.5,
       "layout": { "icon-image": ["get", "img"], "icon-allow-overlap": false,

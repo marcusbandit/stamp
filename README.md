@@ -18,6 +18,8 @@ runs on the phone. Nothing is uploaded, and there is no account.
 | `data/VisitStore.kt` | The marks, saved as JSON in the app's private storage |
 | `scan/PhotoScanner.kt` | Reads EXIF positions from MediaStore and tallies them per country |
 | `ui/WorldMap.kt` | MapLibre map drawn from the bundled GeoJSON, with no tiles |
+| `data/CityOutlines.kt` | A tapped city's outline from OpenStreetMap when the bundled set lacks one |
+| `assets/glyphs/` | Noto Sans Medium glyphs for city names on the map (SIL Open Font License, `OFL.txt`) |
 | `data/RouteNet.kt`, `data/RoutePacks.kt` | Rail and road packs: download per country, follow a leg along the real line |
 | `data/Updates.kt`, `ui/UpdateUi.kt` | Asks GitHub for the latest release and installs it from inside the app |
 | `ui/Onboarding.kt` | First launch: what Stamp does, the photo scan, how to mark a country |
