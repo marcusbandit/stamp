@@ -360,7 +360,7 @@ private fun TopList(
             selected,
         )
         Cards(listOf(Page.Appearance, Page.Map).map { p -> Entry(p.title, summary(p), p.icon, page = p) { onOpen(p) } }, selected)
-        Cards(listOf(Page.Memories, Page.Backup).map { p -> Entry(p.title, summary(p), p.icon, page = p) { onOpen(p) } }, selected)
+        Cards(listOf(Page.Memories, Page.Heat, Page.Backup).map { p -> Entry(p.title, summary(p), p.icon, page = p) { onOpen(p) } }, selected)
         Cards(
             listOf(
                 Entry("Introduction", null, Icons.Outlined.School, onClick = onIntro),
