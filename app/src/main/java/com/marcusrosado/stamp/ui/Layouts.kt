@@ -446,6 +446,17 @@ private fun Card(state: AppState, shown: com.marcusrosado.stamp.data.Country, mo
         onTripOpened = state.onTripOpened,
         onTripClosed = state.onTripClosed,
         tripMap = { m, at -> TripMap(state, m, at) },
+        inCountry = remember(shown, state.split, state.visits, state.places, state.atlas) {
+            // Whole countries take in their islands; split, each land mass is its own.
+            val own = state.split || shown.isPart
+            fun mine(land: String?) = land != null && (if (own) land == shown.id else state.atlas.countryOf(land) == shown.id)
+            val visit = state.visits[shown.id]
+            val inCountry: InPlace = { t, stop ->
+                if (stop == null) mine(t.home)
+                else placeOf(stop, visit, state.places)?.let { p -> mine(state.atlas.locate(p.lat, p.lon)?.id) } ?: true
+            }
+            inCountry
+        },
     )
 }
 
@@ -571,8 +582,8 @@ private fun StampMap(
             if (!state.mapPhotos) return@remember emptyList()
             // The first photo kept at each place; places only, not the visit as a whole.
             state.visits.values.filter { it.state.counts }.flatMap { v ->
-                v.trips.flatMap { t -> t.memories.filter { it.media != null && it.place != null } }
-                    .groupBy { it.place!! }
+                (v.trips.flatMap { t -> t.memories } + v.memories).filter { it.media != null && it.place != null }
+                    .groupBy { com.marcusrosado.stamp.data.placeIdOf(it.place!!) }
                     .mapNotNull { (place, ms) ->
                         val at = placeOf(place, v, state.places) ?: return@mapNotNull null
                         val m = ms.first()
@@ -713,6 +724,16 @@ private fun PlaceFor(state: AppState, spot: Spot, modifier: Modifier) {
                 onNote = { l, r -> state.details.onCityNote(spot.countryId, spot.regionId, com.marcusrosado.stamp.data.Note(l, r, note?.name.orEmpty())) },
                 onClose = { state.onSpot(null) },
                 modifier = modifier,
+                memories = state.visits[spot.countryId]?.let { v ->
+                    {
+                        // A region's trip memories are those of its cities.
+                        val inRegion: InPlace = { _, stop ->
+                            stop?.let { s -> state.places?.byId?.get(com.marcusrosado.stamp.data.placeIdOf(s)) }
+                                ?.let { c -> state.places?.regionIdOf(c) } == spot.regionId
+                        }
+                        MemoriesOf(spot.countryId, spot.regionId, name, v, null, state.details, inPlace = remember(spot.regionId, state.places) { inRegion })
+                    }
+                },
             )
             why?.let { place ->
                 SeamAlertDialog(
@@ -747,6 +768,7 @@ private fun PlaceFor(state: AppState, spot: Spot, modifier: Modifier) {
                 onMore = { state.onBeenToCity(spot.cityId) },
                 onLess = { state.onForgetCity(spot.cityId) },
                 canLess = trips.any { it.isBareVisitTo(spot.cityId) },
+                memories = state.visits[spot.countryId]?.let { v -> { MemoriesOf(spot.countryId, spot.cityId, spot.name, v, spot.lat to spot.lon, state.details) } },
             )
         }
     }

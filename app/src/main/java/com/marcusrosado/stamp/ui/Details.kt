@@ -105,6 +105,10 @@ class DetailActions(
     val onAddMemories: (tripId: String, memories: List<Memory>) -> Unit,
     val onUpdateMemory: (tripId: String, memory: Memory) -> Unit,
     val onRemoveMemory: (tripId: String, memoryId: String) -> Unit,
+    /** Keeps memories with a place of a country, or the country itself when the place is null. */
+    val onAddPlaceMemories: (id: String, place: String?, memories: List<Memory>) -> Unit,
+    val onUpdatePlaceMemory: (id: String, memory: Memory) -> Unit,
+    val onRemovePlaceMemory: (id: String, memoryId: String) -> Unit,
     val onAddRegion: (id: String, regionId: String) -> Unit,
     val onRemoveRegion: (id: String, regionId: String) -> Unit,
 )
@@ -362,6 +366,8 @@ fun CityDialog(
      * with it; a day trip takes only itself.
      */
     removeAsk: Loss? = removeLabel?.let { Loss("$it?", "Its dates, day trips and the ways to and from it go too.", "Remove") },
+    /** The place's memories, drawn under its stars. */
+    memories: (@Composable () -> Unit)? = null,
 ) {
     var renaming by remember { mutableStateOf(false) }
     var removing by remember { mutableStateOf(false) }
@@ -410,6 +416,7 @@ fun CityDialog(
                     onLoved = { onNote(note.copy(loved = it)) },
                     onRating = { onNote(note.copy(rating = it)) },
                 )
+                memories?.invoke()
                 if (onShowOnMap != null) {
                     // A rename being typed is kept, as Done would keep it.
                     TextButton(onClick = {
@@ -678,4 +685,45 @@ private fun DateRow(label: String, value: String?, onClick: () -> Unit) {
         Text(label, modifier = Modifier.width(64.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(value ?: "Not set", color = if (value == null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
     }
+}
+
+/** Whether a trip's stop, or with null the trip as a whole, belongs to a place. */
+typealias InPlace = (trip: Trip, stop: String?) -> Boolean
+
+/** A city's or pin's own stops: any stop at [place], a second stop there included. */
+fun stopsAt(place: String): InPlace = { _, stop -> stop?.let(::placeIdOf) == place }
+
+/**
+ * Every memory of place [place] of [visit], or of the whole country when null: those kept for
+ * the place itself, and those from trips whose stop [inPlace] says is there, oldest first.
+ */
+fun memoriesAt(visit: Visit, place: String?, inPlace: InPlace): List<ShownMemory> {
+    val own = visit.memories.filter { place == null || it.place == place }.map { ShownMemory(it, null) }
+    val fromTrips = visit.trips.flatMap { t -> t.memories.filter { m -> inPlace(t, m.place) }.map { ShownMemory(it, t.id) } }
+    return (own + fromTrips).distinctBy { it.memory.media ?: ("text:" + it.memory.id) }
+        .sortedBy { if (it.memory.takenMs > 0) it.memory.takenMs else Long.MAX_VALUE }
+}
+
+/**
+ * The memories of a place as a section, kept with country [id]; [place] null is the country
+ * itself. [inPlace] says which trips' memories are of the place: a stop at a city by default,
+ * every stop in a region for a region, and only those inside the country for a country, so a
+ * trip across a border shows each country its own.
+ */
+@Composable
+fun MemoriesOf(
+    id: String, place: String?, where: String, visit: Visit, near: Pair<Double, Double>?, actions: DetailActions,
+    inPlace: InPlace = if (place == null) { _, _ -> true } else stopsAt(place),
+) {
+    val shown = remember(visit, place, inPlace) { memoriesAt(visit, place, inPlace) }
+    val trips = remember(visit, place, inPlace) { if (place == null) visit.trips else visit.trips.filter { t -> t.places.any { inPlace(t, it) } } }
+    PlaceMemories(
+        where = where,
+        memories = shown,
+        trips = trips,
+        near = near,
+        onAdd = { actions.onAddPlaceMemories(id, place, it) },
+        onUpdate = { s, m -> if (s.tripId != null) actions.onUpdateMemory(s.tripId, m) else actions.onUpdatePlaceMemory(id, m) },
+        onRemove = { s -> if (s.tripId != null) actions.onRemoveMemory(s.tripId, s.memory.id) else actions.onRemovePlaceMemory(id, s.memory.id) },
+    )
 }

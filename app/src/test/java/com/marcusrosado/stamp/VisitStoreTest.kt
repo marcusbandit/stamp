@@ -57,6 +57,29 @@ class VisitStoreTest {
         assertEquals(1, renamed.memories.size)
     }
 
+    @Test fun placesKeepMemoriesOfTheirOwn() {
+        val s = store()
+        s.set("JPN", TravelState.Visited)
+        s.addPlaceMemories("JPN", null, listOf(Memory("", media = "content://a", takenMs = 5)))
+        s.addPlaceMemories("JPN", "1850147", listOf(Memory("", text = "Ramen at midnight"), Memory("", media = "content://b")))
+        // The same photo twice at one place is kept once.
+        s.addPlaceMemories("JPN", "1850147", listOf(Memory("", media = "content://b")))
+        val v = store().visits.value["JPN"]!!
+        assertEquals(3, v.memories.size)
+        assertEquals(listOf(null, "1850147", "1850147"), v.memories.map { it.place })
+        assertTrue(v.hasDetails)
+        val text = v.memories.first { it.text.isNotEmpty() }
+        s.updatePlaceMemory("JPN", text.copy(text = "Ramen at two", place = null))
+        assertEquals("1850147", s.visits.value["JPN"]!!.memories.first { it.id == text.id }.place)
+        s.removePlaceMemory("JPN", text.id)
+        assertEquals(2, s.visits.value["JPN"]!!.memories.size)
+        // A new mark keeps them; clearing the place takes them with it.
+        s.set("JPN", TravelState.Lived)
+        assertEquals(2, s.visits.value["JPN"]!!.memories.size)
+        s.set("JPN", null)
+        assertNull(s.visits.value["JPN"])
+    }
+
     @Test fun marksSurviveARestart() {
         store().apply { set("PER", TravelState.Visited); setHome("DNK") }
         val again = store()
