@@ -53,10 +53,15 @@ data class Visit(
     val wantCities: List<String> = emptyList(),
     /** Regions and cities, by id, the user lived in. */
     val livedPlaces: List<String> = emptyList(),
+    /**
+     * Photos, videos and moments kept for the place itself, not one trip: [Memory.place] is a
+     * city, region or pin of it, or null for the country as a whole.
+     */
+    val memories: List<Memory> = emptyList(),
 ) {
     /** True when clearing the mark would throw away something the user entered. */
     val hasDetails: Boolean
-        get() = loved || rating > 0 || trips.any { !it.isBlank } || regions.isNotEmpty() || wantRegions.isNotEmpty() || wantCities.isNotEmpty() || livedPlaces.isNotEmpty()
+        get() = loved || rating > 0 || trips.any { !it.isBlank } || regions.isNotEmpty() || wantRegions.isNotEmpty() || wantCities.isNotEmpty() || livedPlaces.isNotEmpty() || memories.isNotEmpty()
 
     /** Every city on any visit, each once, in the order first visited. */
     val cities: List<String> get() = trips.flatMap { it.places }.distinct()
@@ -90,6 +95,7 @@ private data class Mark(
     val wantRegions: List<String> = emptyList(),
     val wantCities: List<String> = emptyList(),
     val livedPlaces: List<String> = emptyList(),
+    val memories: List<Memory> = emptyList(),
 )
 
 /**
@@ -253,6 +259,7 @@ class VisitStore(private val file: File) {
             state = new.state, evidence = new.evidence, loved = new.loved,
             rating = new.rating.coerceIn(0, MAX_RATING), regions = new.regions, cityNotes = new.cityNotes,
             split = new.splitRegions, wantRegions = new.wantRegions, wantCities = new.wantCities, livedPlaces = new.livedPlaces,
+            memories = new.memories,
         ))
         save()
     }
@@ -617,6 +624,23 @@ class VisitStore(private val file: File) {
         t.copy(memories = t.memories.filterNot { it.id == memoryId })
     }
 
+    /**
+     * Keeps memories with place [place] of country [id], or with the country itself when null,
+     * outside any trip. A photo already kept there is not added twice.
+     */
+    fun addPlaceMemories(id: String, place: String?, add: List<Memory>) = edit(id) { v ->
+        val known = v.memories.filter { it.place == place }.mapNotNull { it.media }.toSet()
+        val fresh = add.filter { it.media == null || it.media !in known }
+            .map { it.copy(id = it.id.ifEmpty { newTripId() }, place = place) }
+        v.copy(memories = (v.memories + fresh).sortedBy { if (it.takenMs > 0) it.takenMs else Long.MAX_VALUE })
+    }
+
+    fun updatePlaceMemory(id: String, memory: Memory) = edit(id) { v ->
+        v.copy(memories = v.memories.map { if (it.id == memory.id) memory.copy(place = it.place) else it })
+    }
+
+    fun removePlaceMemory(id: String, memoryId: String) = edit(id) { v -> v.copy(memories = v.memories.filterNot { it.id == memoryId }) }
+
     // ------------------------------------------------------------------ photos and home
 
     /**
@@ -721,6 +745,11 @@ class VisitStore(private val file: File) {
         // Notes go with their place: a region's stays, as does a city's that is lived in or wanted.
         fun kept(m: Mark, k: String) = k in used || '.' in k || k in m.livedPlaces || k in m.wantCities
         marks = marks.mapValues { (_, m) -> if (m.cityNotes.keys.all { kept(m, it) }) m else m.copy(cityNotes = m.cityNotes.filterKeys { kept(m, it) }) }
+        // A memory of a pin that went stays with the country.
+        marks = marks.mapValues { (_, m) ->
+            if (m.memories.none { it.place != null && isPin(it.place) && it.place !in pins }) m
+            else m.copy(memories = m.memories.map { if (it.place != null && isPin(it.place) && it.place !in pins) it.copy(place = null) else it })
+        }
         settled = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<Trip, Boolean>(trips.size * 2)).apply { addAll(trips) }
         settledGeo = g
         settledPins = pins
@@ -767,6 +796,7 @@ class VisitStore(private val file: File) {
                 trips = ts, regions = m.regions, cityNotes = m.cityNotes,
                 pins = pinsOn(ts),
                 splitRegions = m.split, wantRegions = m.wantRegions, wantCities = m.wantCities, livedPlaces = m.livedPlaces,
+                memories = m.memories,
             )
         }
         _visits.value = view
@@ -817,6 +847,7 @@ class VisitStore(private val file: File) {
                     if (m.wantRegions.isNotEmpty()) put("wantRegions", JSONArray(m.wantRegions))
                     if (m.wantCities.isNotEmpty()) put("wantCities", JSONArray(m.wantCities))
                     if (m.livedPlaces.isNotEmpty()) put("livedPlaces", JSONArray(m.livedPlaces))
+                    if (m.memories.isNotEmpty()) put("memories", memoriesJson(m.memories))
                     if (m.cityNotes.isNotEmpty()) put("cityNotes", JSONObject().apply {
                         for ((cid, n) in m.cityNotes) put(cid, JSONObject().apply { if (n.loved) put("loved", true); if (n.rating > 0) put("rating", n.rating); if (n.name.isNotBlank()) put("name", n.name) })
                     })
@@ -851,16 +882,35 @@ class VisitStore(private val file: File) {
         if (t.slept.isNotEmpty()) put("slept", JSONObject(t.slept.filterKeys { it in t.cities }))
         t.start?.let { put("start", it) }
         t.end?.let { put("end", it) }
-        if (t.memories.isNotEmpty()) put("memories", JSONArray(t.memories.map { m ->
-            JSONObject().put("id", m.id).apply {
-                m.place?.let { put("place", it) }
-                m.media?.let { put("media", it) }
-                if (m.video) put("video", true)
-                if (m.text.isNotEmpty()) put("text", m.text)
-                if (m.takenMs > 0) put("taken", m.takenMs)
-            }
-        }))
+        if (t.memories.isNotEmpty()) put("memories", memoriesJson(t.memories))
     }
+
+    private fun memoriesJson(list: List<Memory>) = JSONArray(list.map { m ->
+        JSONObject().put("id", m.id).apply {
+            m.place?.let { put("place", it) }
+            m.media?.let { put("media", it) }
+            if (m.video) put("video", true)
+            if (m.text.isNotEmpty()) put("text", m.text)
+            if (m.takenMs > 0) put("taken", m.takenMs)
+        }
+    })
+
+    private fun parseMemories(a: JSONArray?): List<Memory> = a?.let {
+        (0 until a.length()).mapNotNull { k ->
+            val m = a.optJSONObject(k) ?: return@mapNotNull null
+            val media = m.optString("media").ifEmpty { null }
+            val text = m.optString("text")
+            if (media == null && text.isBlank()) return@mapNotNull null
+            Memory(
+                id = m.optString("id").ifEmpty { newTripId() },
+                place = m.optString("place").ifEmpty { null },
+                media = media,
+                video = m.optBoolean("video"),
+                text = text,
+                takenMs = m.optLong("taken"),
+            )
+        }
+    }.orEmpty()
 
     private fun load(): Read {
         if (!file.exists()) return Read(emptyMap(), emptyList(), emptyMap(), false)
@@ -914,22 +964,7 @@ class VisitStore(private val file: File) {
         }.orEmpty(),
         slept = t.optJSONObject("slept")?.let { o -> o.keys().asSequence().associateWith { o.optString(it) }.filterValues { it.isNotEmpty() } }.orEmpty(),
         end = t.optString("end").ifEmpty { null },
-        memories = t.optJSONArray("memories")?.let { a ->
-            (0 until a.length()).mapNotNull { k ->
-                val m = a.optJSONObject(k) ?: return@mapNotNull null
-                val media = m.optString("media").ifEmpty { null }
-                val text = m.optString("text")
-                if (media == null && text.isBlank()) return@mapNotNull null
-                Memory(
-                    id = m.optString("id").ifEmpty { newTripId() },
-                    place = m.optString("place").ifEmpty { null },
-                    media = media,
-                    video = m.optBoolean("video"),
-                    text = text,
-                    takenMs = m.optLong("taken"),
-                )
-            }
-        }.orEmpty(),
+        memories = parseMemories(t.optJSONArray("memories")),
         lands = lands,
     )
 
@@ -973,6 +1008,7 @@ class VisitStore(private val file: File) {
                 wantRegions = strings(o.optJSONArray("wantRegions")),
                 wantCities = strings(o.optJSONArray("wantCities")),
                 livedPlaces = strings(o.optJSONArray("livedPlaces")),
+                memories = parseMemories(o.optJSONArray("memories")),
                 cityNotes = o.optJSONObject("cityNotes")?.let { n ->
                     n.keys().asSequence().mapNotNull { k ->
                         val x = n.optJSONObject(k) ?: return@mapNotNull null

@@ -843,6 +843,66 @@ private fun DatePart(d: PartialDate?, guessed: Boolean) {
 }
 
 /** A stop's photos, videos and moments in a row, ending with a tile that adds another. */
+/** A memory as a place shows it, with the trip it was kept on, or null when kept for the place itself. */
+class ShownMemory(val memory: Memory, val tripId: String?)
+
+/**
+ * The memories of a place, from every trip there and kept for the place itself: a row of tiles
+ * with one to add more, or a button to add the first. New ones are kept for the place.
+ */
+@Composable
+fun PlaceMemories(
+    where: String,
+    memories: List<ShownMemory>,
+    /** The trips that went there, whose dates find photos to suggest. */
+    trips: List<Trip>,
+    /** Where the place is; null for a whole country, whose photos are only suggested for a single trip. */
+    near: Pair<Double, Double>?,
+    onAdd: (List<Memory>) -> Unit,
+    onUpdate: (ShownMemory, Memory) -> Unit,
+    onRemove: (ShownMemory) -> Unit,
+) {
+    var adding by remember { mutableStateOf(false) }
+    var viewing by remember { mutableStateOf<String?>(null) }
+    if (memories.isEmpty()) {
+        TextButton(onClick = { adding = true }, contentPadding = PaddingValues(horizontal = 4.dp)) {
+            Icon(Icons.Outlined.AddAPhoto, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("Add a memory")
+        }
+    } else {
+        Column {
+            Text("Memories", fontWeight = FontWeight.Medium)
+            MemoryRow(memories.map { it.memory }, onOpen = { viewing = it.id }, onAdd = { adding = true })
+        }
+    }
+    if (adding) {
+        val dated = trips.filter { it.date != null || it.until != null }
+        val win = if (near == null && dated.size != 1) null else window(
+            dated.mapNotNull { it.date ?: it.until }.minOrNull(),
+            dated.mapNotNull { it.until ?: it.date }.maxOrNull(),
+        )
+        AddMemorySheet(
+            where = where,
+            window = win,
+            near = near,
+            already = memories.mapNotNull { it.memory.media }.toSet(),
+            onAdd = onAdd,
+            onDismiss = { adding = false },
+        )
+    }
+    viewing?.let { id ->
+        val shown = memories.firstOrNull { it.memory.id == id }
+        if (shown == null) { viewing = null; return@let }
+        MemoryViewer(
+            memory = shown.memory,
+            onSave = { onUpdate(shown, it) },
+            onRemove = { onRemove(shown); viewing = null },
+            onDismiss = { viewing = null },
+        )
+    }
+}
+
 @Composable
 private fun MemoryRow(memories: List<Memory>, onOpen: (Memory) -> Unit, onAdd: () -> Unit) {
     // With nothing kept yet, the memory button beside the dates asks instead of an empty tile.

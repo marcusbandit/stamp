@@ -569,7 +569,7 @@ private fun StampMap(
             if (!state.mapPhotos) return@remember emptyList()
             // The first photo kept at each place; places only, not the visit as a whole.
             state.visits.values.filter { it.state.counts }.flatMap { v ->
-                v.trips.flatMap { t -> t.memories.filter { it.media != null && it.place != null } }
+                (v.trips.flatMap { t -> t.memories } + v.memories).filter { it.media != null && it.place != null }
                     .groupBy { it.place!! }
                     .mapNotNull { (place, ms) ->
                         val at = placeOf(place, v, state.places) ?: return@mapNotNull null
@@ -711,6 +711,7 @@ private fun PlaceFor(state: AppState, spot: Spot, modifier: Modifier) {
                 onNote = { l, r -> state.details.onCityNote(spot.countryId, spot.regionId, com.marcusrosado.stamp.data.Note(l, r, note?.name.orEmpty())) },
                 onClose = { state.onSpot(null) },
                 modifier = modifier,
+                memories = state.visits[spot.countryId]?.let { v -> { MemoriesOf(spot.countryId, spot.regionId, name, v, null, state.details) } },
             )
             why?.let { place ->
                 SeamAlertDialog(
@@ -745,6 +746,7 @@ private fun PlaceFor(state: AppState, spot: Spot, modifier: Modifier) {
                 onMore = { state.onBeenToCity(spot.cityId) },
                 onLess = { state.onForgetCity(spot.cityId) },
                 canLess = trips.any { it.isBareVisitTo(spot.cityId) },
+                memories = state.visits[spot.countryId]?.let { v -> { MemoriesOf(spot.countryId, spot.cityId, spot.name, v, spot.lat to spot.lon, state.details) } },
             )
         }
     }

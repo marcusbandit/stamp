@@ -104,6 +104,10 @@ class DetailActions(
     val onAddMemories: (tripId: String, memories: List<Memory>) -> Unit,
     val onUpdateMemory: (tripId: String, memory: Memory) -> Unit,
     val onRemoveMemory: (tripId: String, memoryId: String) -> Unit,
+    /** Keeps memories with a place of a country, or the country itself when the place is null. */
+    val onAddPlaceMemories: (id: String, place: String?, memories: List<Memory>) -> Unit = { _, _, _ -> },
+    val onUpdatePlaceMemory: (id: String, memory: Memory) -> Unit = { _, _ -> },
+    val onRemovePlaceMemory: (id: String, memoryId: String) -> Unit = { _, _ -> },
     val onAddRegion: (id: String, regionId: String) -> Unit,
     val onRemoveRegion: (id: String, regionId: String) -> Unit,
 )
@@ -359,6 +363,8 @@ fun CityDialog(
      * with it; a day trip takes only itself.
      */
     removeAsk: Loss? = removeLabel?.let { Loss("$it?", "Its dates, day trips and the ways to and from it go too.", "Remove") },
+    /** The place's memories, drawn under its stars. */
+    memories: (@Composable () -> Unit)? = null,
 ) {
     var renaming by remember { mutableStateOf(false) }
     var removing by remember { mutableStateOf(false) }
@@ -407,6 +413,7 @@ fun CityDialog(
                     onLoved = { onNote(note.copy(loved = it)) },
                     onRating = { onNote(note.copy(rating = it)) },
                 )
+                memories?.invoke()
                 if (onShowOnMap != null) {
                     // A rename being typed is kept, as Done would keep it.
                     TextButton(onClick = {
@@ -675,4 +682,33 @@ private fun DateRow(label: String, value: String?, onClick: () -> Unit) {
         Text(label, modifier = Modifier.width(64.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(value ?: "Not set", color = if (value == null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
     }
+}
+
+/**
+ * Every memory of place [place] of [visit], or of the whole country when null: those kept for
+ * the place itself and those from its trips' stops there, oldest first.
+ */
+fun memoriesAt(visit: Visit, place: String?): List<ShownMemory> {
+    val own = visit.memories.filter { place == null || it.place == place }.map { ShownMemory(it, null) }
+    val fromTrips = visit.trips.flatMap { t ->
+        t.memories.filter { m -> place == null || m.place?.let { p -> com.marcusrosado.stamp.data.placeIdOf(p) } == place }.map { ShownMemory(it, t.id) }
+    }
+    return (own + fromTrips).distinctBy { it.memory.media ?: ("text:" + it.memory.id) }
+        .sortedBy { if (it.memory.takenMs > 0) it.memory.takenMs else Long.MAX_VALUE }
+}
+
+/** The memories of a place as a section, kept with country [id]; [place] null is the country itself. */
+@Composable
+fun MemoriesOf(id: String, place: String?, where: String, visit: Visit, near: Pair<Double, Double>?, actions: DetailActions) {
+    val shown = remember(visit, place) { memoriesAt(visit, place) }
+    val trips = remember(visit, place) { if (place == null) visit.trips else visit.trips.filter { place in it.places } }
+    PlaceMemories(
+        where = where,
+        memories = shown,
+        trips = trips,
+        near = near,
+        onAdd = { actions.onAddPlaceMemories(id, place, it) },
+        onUpdate = { s, m -> if (s.tripId != null) actions.onUpdateMemory(s.tripId, m) else actions.onUpdatePlaceMemory(id, m) },
+        onRemove = { s -> if (s.tripId != null) actions.onRemoveMemory(s.tripId, s.memory.id) else actions.onRemovePlaceMemory(id, s.memory.id) },
+    )
 }

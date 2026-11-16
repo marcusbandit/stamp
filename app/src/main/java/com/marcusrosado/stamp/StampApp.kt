@@ -223,7 +223,7 @@ class StampApp : Application() {
         scope.launch(Dispatchers.IO) {
             val visits = visitsLoading.await()
             if (visits.damaged || setAside.value.isNotEmpty()) return@launch
-            val inUse = visits.visits.value.values.flatMap { it.trips }.flatMap { it.memories }.mapNotNull { it.media }.toSet()
+            val inUse = visits.visits.value.values.flatMap { v -> v.trips.flatMap { it.memories } + v.memories }.mapNotNull { it.media }.toSet()
             com.marcusrosado.stamp.scan.Memories.releaseUnused(this@StampApp, inUse)
         }
     }

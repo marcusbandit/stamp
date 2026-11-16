@@ -269,6 +269,8 @@ fun PlaceCard(
     onLess: () -> Unit = {},
     /** False when no visit can go without losing its dates or memories. */
     canLess: Boolean = true,
+    /** The place's memories, shown once it has been visited. */
+    memories: (@Composable () -> Unit)? = null,
 ) {
     Column(
         modifier.verticalScroll(rememberScrollState()).padding(16.dp),
@@ -301,5 +303,6 @@ fun PlaceCard(
                 }
             }
         }
+        if (state?.counts == true) memories?.invoke()
     }
 }

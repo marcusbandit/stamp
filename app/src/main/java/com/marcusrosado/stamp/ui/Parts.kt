@@ -201,6 +201,7 @@ fun CountryDetail(
                 onLoved = { actions.onLoved(country.id, it) },
                 onRating = { actions.onRating(country.id, it) },
             )
+            MemoriesOf(country.id, null, country.name, visit, near = null, actions = actions)
             TripsSection(
                 visit.trips,
                 lived = visit.state == TravelState.Lived,
@@ -399,6 +400,12 @@ fun CountryDetail(
                 openCity = null
             },
             onDismiss = { openCity = null },
+            memories = visit?.takeIf { it.state.counts }?.let { v ->
+                {
+                    val p = placeOf(cid, v, places)
+                    MemoriesOf(country.id, cid, p?.name ?: country.name, v, p?.let { it.lat to it.lon }, actions)
+                }
+            },
         )
     }
     if (pickingRegion && places != null) {
@@ -514,6 +521,7 @@ fun lossOf(id: String, name: String, visit: Visit?, to: TravelState?, parts: Lis
         val loved = all.count { it.loved }
         val regions = all.sumOf { it.regions.size }
         val cities = all.sumOf { it.cities.size }
+        val kept = all.sumOf { it.memories.size }
         val lost = listOfNotNull(
             trips.takeIf { it > 0 }?.let { if (livedOnly) "the dates you lived here" else visitsLabel(it) },
             when (rated.size) { 0 -> null; 1 -> "your ${rated[0].rating}-star rating"; else -> "your star ratings" },
@@ -522,6 +530,7 @@ fun lossOf(id: String, name: String, visit: Visit?, to: TravelState?, parts: Lis
             cities.takeIf { it > 0 }?.let { n ->
                 (if (n == 1) "1 city" else "$n cities") + if (all.any { it.cityNotes.isNotEmpty() }) " with their hearts and stars" else ""
             },
+            kept.takeIf { it > 0 }?.let { if (it == 1) "1 memory" else "$it memories" },
         )
         return Loss("Clear $name?", "This also removes ${lost.joinToString(", ")}.", "Clear")
     }
