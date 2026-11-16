@@ -609,8 +609,30 @@ private fun HeatPage(state: AppState) {
     Category("On the map")
     SwitchPref("Show the heat map", null, state.heatMap, state.onHeatMap)
     Category("Where you go")
+    // Android lets an app read the location in the background only after it says so in its own
+    // words, right before asking.
+    var disclosing by remember { mutableStateOf(false) }
     SwitchPref("Note where I am every hour", null, state.hourly && com.marcusrosado.stamp.data.Hourly.allowed(context)) { on ->
-        if (on) askHourly() else state.onHourly(false)
+        when {
+            !on -> state.onHourly(false)
+            com.marcusrosado.stamp.data.Hourly.allowed(context) -> state.onHourly(true)
+            else -> disclosing = true
+        }
+    }
+    if (disclosing) {
+        SeamAlertDialog(
+            onDismissRequest = { disclosing = false },
+            title = { Text("Build your heat map") },
+            text = {
+                Text(
+                    "Stamp collects your approximate location about once an hour, even when the app is closed " +
+                        "or not in use, to build your heat map. It stays on this phone. Android asks for your " +
+                        "rough location, then to allow it all the time.",
+                )
+            },
+            confirmButton = { TextButton(onClick = { disclosing = false; askHourly() }) { Text("Turn on") } },
+            dismissButton = { TextButton(onClick = { disclosing = false }) { Text("Not now") } },
+        )
     }
     Category("Saved")
     val by = state.seen.groupingBy { it.from }.eachCount()

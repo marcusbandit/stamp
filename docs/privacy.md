@@ -4,7 +4,7 @@ title: Stamp privacy policy
 
 # Stamp privacy policy
 
-Last updated 15 November 2026, for the update check.
+Last updated 16 November 2026, for the heat map, the Google Photos import and city outlines.
 
 Stamp keeps everything you enter on your phone. It has no account, no ads and no analytics, and
 it never sends your marks, trips, places or photos anywhere.
@@ -20,13 +20,24 @@ and video on the phone and works out which countries they were taken in. It read
 details when it suggests photos for a stop on a visit. The pictures themselves are never copied,
 changed or sent anywhere.
 
-When you attach a photo or video to a visit, Stamp keeps a link to that file so it can show it
-later. The file stays where it is in your gallery.
+When you attach a photo or video to a visit or a place, Stamp keeps a link to that file so it can
+show it later. The file stays where it is in your gallery.
+
+When you import from Google Photos, you download a Google Takeout export yourself and choose its
+zip files in Stamp. Stamp reads only the small location files inside, the place and date of each
+photo, and never the pictures. Stamp never signs in to your Google account.
+
+If you turn on the hourly look for the heat map, Stamp asks the phone's own location service
+for its rough position about once an hour, at a random moment, also while Stamp is closed. The
+position is saved on the phone and never sent anywhere. You can turn it off and clear every saved
+place in Settings, Heat map.
 
 ## What Stamp stores
 
-Your marks, visits, dates, ratings, notes and photo links are saved in the app's private storage
-on this phone. Uninstalling Stamp deletes them.
+Your marks, visits, dates, ratings, notes, photo links and the places of your heat map are saved
+in the app's private storage on this phone, and in the backup file you save yourself. The places
+a photo scan or an import found stay after you delete those photos or the export; only the
+pictures are gone. Uninstalling Stamp deletes everything.
 
 If Android backup is turned on in your phone's settings, Android may include this storage in your
 own device backup. That backup belongs to your Google account; the Stamp developer cannot see it.
@@ -41,6 +52,13 @@ account, no identifier and nothing about your trips. You can turn this off in Se
 
 These files are map data, not your data. They are kept outside your backup and are fetched again
 when needed.
+
+When you tap a city on the map that Stamp has no outline for, it asks OpenStreetMap's public
+servers (Nominatim and Overpass) for the outline, sending the city's name, its country code and
+the area around its centre. The request carries nothing about you or your trips; like any
+website, those servers see the address your phone connects from. An outline of a city you marked
+is kept on the phone, outside your backup; any other is forgotten when the app closes. You can
+turn this off in Settings, Map.
 
 A copy of Stamp installed from its GitHub release also asks GitHub, when it opens, which version
 is the latest. The request names no one and carries nothing about you. If you tap Update, Stamp
@@ -59,7 +77,9 @@ Nothing. Stamp does not collect personal data and does not share data with anyon
 
 - Rough location, if you turn on "Mark the country I'm in": to find which country the phone is in.
   It is read on the phone and never sent anywhere.
-- Internet: only to download the rail and road files and the updates described above.
+- Rough location all the time, if you turn on the hourly look: to add a point to your heat map
+  about once an hour while Stamp is closed. It is read on the phone and never sent anywhere.
+- Internet: only for the rail and road files, city outlines and the updates described above.
 - Install apps, in the GitHub copy only: to install a newer Stamp when you tap Update. Android
   asks you once before it allows this.
 
