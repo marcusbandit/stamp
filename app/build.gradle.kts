@@ -29,8 +29,8 @@ android {
         applicationId = "com.marcusrosado.stamp"
         minSdk = 26
         targetSdk = 36
-        versionCode = 101
-        versionName = "1.1.0"
+        versionCode = 102
+        versionName = "1.2.0"
         buildConfigField("boolean", "SELF_UPDATE", "${!playBuild}")
         // Only the Play build sells Pro. A build from source has every feature (LICENSE.md).
         buildConfigField("boolean", "PRO_SOLD", "$playBuild")
@@ -60,7 +60,7 @@ android {
             // The release key when scripts/apk.sh or scripts/bundle.sh passes it, else the local
             // debug key for a fast test build. Never publish the debug-key one.
             signingConfig = signingConfigs.findByName("upload") ?: signingConfigs.getByName("debug")
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
     compileOptions {
