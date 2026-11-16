@@ -83,6 +83,7 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.exifinterface)
     implementation(libs.maplibre)
+    implementation(libs.androidx.work)
     implementation(libs.androidx.window)
     testImplementation(libs.junit)
     testImplementation(libs.orgjson)

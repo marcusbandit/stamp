@@ -14,6 +14,9 @@
     <!-- Where you are now, roughly: enough to name the country you are in and open the map
          there. Read from the phone's own location service; nothing leaves the device. -->
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <!-- The hourly look for the heat map runs while Stamp is closed, which needs Allow all the
+         time. Only ever asked for when the user switches the hourly look on. -->
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
 
     <!-- Only to fetch the rail and road lines of a country a trip goes through, from the public
          data repository, and to ask GitHub whether a newer Stamp is out. The map itself is

@@ -21,7 +21,13 @@ private const val BOTTOM_LAT = -57.0
  * live map would be too much: the passport header and the onboarding pages.
  */
 @Composable
-fun MiniMap(atlas: Atlas, colorOf: (String) -> Color?, modifier: Modifier = Modifier) {
+fun MiniMap(
+    atlas: Atlas,
+    colorOf: (String) -> Color?,
+    modifier: Modifier = Modifier,
+    /** Places been to, drawn as warm glows over the countries; the onboarding's heat map preview. */
+    heat: List<com.marcusrosado.stamp.data.HeatCell> = emptyList(),
+) {
     val palette = LocalMapPalette.current
     val countries = remember(atlas) { atlas.countries.filter { it.id != "ATA" } }
     Box(
@@ -46,12 +52,33 @@ fun MiniMap(atlas: Atlas, colorOf: (String) -> Color?, modifier: Modifier = Modi
                     c.id to p
                 }
                 val hairline = Stroke(width = 0.6f)
+                val most = heat.maxOfOrNull { it.count }?.coerceAtLeast(1) ?: 1
+                val glow = w / 40f
                 onDrawBehind {
                     for ((id, p) in paths) {
                         drawPath(p, colorOf(id) ?: palette.miniLand)
                         drawPath(p, palette.ocean, style = hairline)
                     }
+                    for (c in heat) {
+                        val at = androidx.compose.ui.geometry.Offset(
+                            ((c.lon + 180.0) / 360.0 * w).toFloat(),
+                            ((TOP_LAT - c.lat) / (TOP_LAT - BOTTOM_LAT) * h).toFloat(),
+                        )
+                        val k = 0.35f + 0.65f * (c.count.toFloat() / most)
+                        val r = glow * (0.6f + k)
+                        drawCircle(
+                            androidx.compose.ui.graphics.Brush.radialGradient(
+                                listOf(HeatHot.copy(alpha = 0.9f * k), HeatWarm.copy(alpha = 0.5f * k), HeatWarm.copy(alpha = 0f)),
+                                center = at, radius = r,
+                            ),
+                            radius = r, center = at,
+                        )
+                    }
                 }
             },
     )
 }
+
+/** The heat map's colours, the same on the map and in previews. */
+val HeatHot = Color(0xFFEE5253)
+val HeatWarm = Color(0xFFFF9F43)

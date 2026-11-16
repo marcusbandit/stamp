@@ -535,6 +535,10 @@ private fun StampMap(
                 .map { CityDot(it.id, it.lat, it.lon, it.population, it.id in mine, it.name) }
         }
     }
+    val heat by androidx.compose.runtime.produceState(emptyList<com.marcusrosado.stamp.data.HeatCell>(), state.seen, state.heatMap) {
+        value = if (!state.heatMap) emptyList()
+        else kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { com.marcusrosado.stamp.data.Seen.cells(state.seen) }
+    }
     val wantCities = remember(state.visits, state.places) {
         state.visits.values.flatMap { v -> v.wantCities.mapNotNull { placeOf(it, v, state.places) } }.map { it.lat to it.lon }.distinct()
     }
@@ -549,6 +553,7 @@ private fun StampMap(
         selectedRegion = (state.spot as? Spot.Region)?.regionId,
         selectedCity = (state.spot as? Spot.City)?.let { it.lat to it.lon },
         selectedArea = state.spotArea.takeIf { state.spot is Spot.City },
+        heat = heat,
         onViewport = if (selectable) state.onViewport else null,
         onCity = if (selectable) { id ->
             val c = state.places?.byId?.get(id)

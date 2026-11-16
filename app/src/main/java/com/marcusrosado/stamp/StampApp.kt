@@ -112,6 +112,44 @@ class StampApp : Application() {
         }
     }
 
+    /** A switch that is off until the user turns it on, which leaves a flag file behind. */
+    inner class OffUntilOn(private val onFlag: String) {
+        val on = kotlinx.coroutines.flow.MutableStateFlow(flags.get(onFlag))
+
+        fun set(value: Boolean) {
+            on.value = value
+            scope.launch(lookWriter) { flags.set(onFlag, on.value) }
+        }
+    }
+
+    /** Every place the user is known to have been, for the heat map: hourly samples and photo positions. */
+    val seen by lazy { com.marcusrosado.stamp.data.Seen(File(filesDir, SEEN_FILE)) }
+
+    /** Whether Stamp notes where the phone is about once an hour. Off until the user turns it on. */
+    val hourly by lazy { OffUntilOn(FLAG_HOURLY) }
+
+    /** Turns the hourly look on or off, and starts or stops its schedule with it. */
+    fun setHourly(on: Boolean) {
+        hourly.set(on)
+        com.marcusrosado.stamp.data.Hourly.schedule(this, on)
+    }
+
+    /** Whether the heat map of the places seen shows on the map. */
+    val heatMap by lazy { Toggle(FLAG_NO_HEAT_MAP) }
+
+    /** Everything a backup file holds: the marks and trips, and the places seen. */
+    fun backupText(): String = org.json.JSONObject(visits.backup()).put("seen", seen.json()).toString()
+
+    /**
+     * Restores a backup. The places seen are replaced only when the backup has them, so an older
+     * backup never wipes the heat map. False and nothing changed when it is no Stamp backup.
+     */
+    fun restoreText(text: String): Boolean {
+        if (!visits.restore(text)) return false
+        runCatching { org.json.JSONObject(text).optJSONArray("seen") }.getOrNull()?.let { seen.restore(it) }
+        return true
+    }
+
     /** Whether a country's separate land masses, such as Corsica or Hawaii, are marked on their own. */
     val split by lazy { Toggle(FLAG_WHOLE) }
 
@@ -226,6 +264,9 @@ class StampApp : Application() {
         }
         cityAreas.start()
         scope.launch(Dispatchers.IO) { cityOutlines.start() }
+        scope.launch(Dispatchers.IO) { seen.load() }
+        // The schedule outlives the app, but a permission taken back in Android's settings ends it.
+        com.marcusrosado.stamp.data.Hourly.schedule(this, hourly.on.value && com.marcusrosado.stamp.data.Hourly.allowed(this))
         // Grants for photos of removed memories, visits or countries go back to Android.
         // Never while a file that could not be read is still set aside: an empty store would hand
         // every grant back, and restoring that file would then point at photos Stamp may no longer open.
@@ -251,6 +292,9 @@ class StampApp : Application() {
         private const val FLAG_NO_ROUTES = "no_routes"
         private const val FLAG_NO_FOLLOW_LINES = "no_follow_lines"
         private const val FLAG_NO_CITY_OUTLINES = "no_city_outlines"
+        private const val FLAG_HOURLY = "hourly_here"
+        private const val FLAG_NO_HEAT_MAP = "no_heat_map"
+        const val SEEN_FILE = "seen.tsv"
         private const val FLAG_NO_HERE = "no_here"
         private const val FLAG_NO_UPDATE_CHECK = "no_update_check"
         private const val MAP_VIEW_FILE = "map_view.txt"

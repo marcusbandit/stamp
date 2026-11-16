@@ -52,12 +52,12 @@ private val Sample = mapOf(
     "NZL" to TravelState.Want, "KEN" to TravelState.Want, "ARG" to TravelState.Want,
 )
 
-private const val PAGES = 6
+private const val PAGES = 7
 
 /**
- * First launch. Five short pages: what Stamp is for, picking a look, the home country, finding countries in
- * photos (what it gives, then the ask), and how to mark
- * a country by hand. Every step can be skipped.
+ * First launch. Seven short pages: what Stamp is for, picking a look, the home country, the
+ * country the phone is in, the hourly heat map, finding countries in photos (what it gives,
+ * then the ask), and how to mark a country by hand. Every step can be skipped.
  *
  * [onDone] gets true when the user started a scan, so the scan flow opens.
  */
@@ -72,6 +72,10 @@ fun Onboarding(
     onLook: (String) -> Unit,
     /** Whether the user let Stamp use the rough location, so the switch in Settings follows it. */
     onHere: (Boolean) -> Unit,
+    /** Turns the hourly look for the heat map on, once the phone has allowed it. */
+    onHourly: (Boolean) -> Unit = {},
+    /** The places already seen, so the heat map's page shows the user's own once there are some. */
+    seen: List<com.marcusrosado.stamp.data.SeenPoint> = emptyList(),
     /** Set when the introduction is seen again: a close button, and back from the first page leaves. */
     onClose: (() -> Unit)? = null,
 ) {
@@ -82,12 +86,13 @@ fun Onboarding(
     BackHandler(enabled = page == 0 && !picking && onClose != null) { onClose?.invoke() }
     val ask = rememberPhotoAccess(
         onGranted = { onStartScan(); onDone(true) },
-        onDenied = { page = 5 },
+        onDenied = { page = 6 },
     )
     // Where the phone is: asked once, and the introduction moves on whatever the answer.
     val askHere = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
     ) { granted -> onHere(granted); page = 4 }
+    val askHourly = rememberHourlyAsk { granted -> onHourly(granted); page = 5 }
     if (picking) {
         HomePicker(atlas, home, onPick = { onHome(it); picking = false }, onClose = { picking = false })
         return
@@ -174,6 +179,14 @@ fun Onboarding(
                             }
                         }
                         4 -> Page(
+                            "A heat map of your life",
+                            "About once an hour, at a random moment, Stamp notes roughly where the phone is. " +
+                                "Over months it builds a map of where you spend your time. The places stay on " +
+                                "this phone and go in your backups.",
+                        ) {
+                            HeatPreview(atlas, seen, Modifier.clip(androidx.compose.foundation.shape.RoundedCornerShape(16.dp)))
+                        }
+                        5 -> Page(
                             "Your photos know where you have been",
                             "Stamp reads where your photos were taken and finds the countries, with the first and " +
                                 "last date you were in each. Everything is read right here on this phone.",
@@ -209,6 +222,15 @@ fun Onboarding(
                     if (p == 4) {
                         Spacer(Modifier.height(12.dp))
                         Text(
+                            "Android asks twice: for your rough location, then to allow it all the time, since " +
+                                "Stamp looks while it is closed. Choose Allow all the time on that page.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (p == 5) {
+                        Spacer(Modifier.height(12.dp))
+                        Text(
                             "Scanning asks to see your photos. Nothing is uploaded, and you choose which countries to add.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -235,8 +257,12 @@ fun Onboarding(
                     TextButton(onClick = { page = 4 }, Modifier.fillMaxWidth()) { Text("Skip for now") }
                 }
                 4 -> {
-                    Button(onClick = ask, Modifier.fillMaxWidth()) { Text("Scan this phone") }
+                    Button(onClick = askHourly, Modifier.fillMaxWidth()) { Text("Build my heat map") }
                     TextButton(onClick = { page = 5 }, Modifier.fillMaxWidth()) { Text("Skip for now") }
+                }
+                5 -> {
+                    Button(onClick = ask, Modifier.fillMaxWidth()) { Text("Scan this phone") }
+                    TextButton(onClick = { page = 6 }, Modifier.fillMaxWidth()) { Text("Skip for now") }
                 }
                 else -> Button(onClick = { onDone(false) }, Modifier.fillMaxWidth()) { Text("Start") }
             }
