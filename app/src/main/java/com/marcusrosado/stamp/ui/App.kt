@@ -323,13 +323,14 @@ private fun App(
     val fetchOutlines by app.fetchOutlines.on.collectAsStateWithLifecycle()
     val keptOutlines by app.cityOutlines.kept.collectAsStateWithLifecycle()
     val logged = remember(visits) { visits.values.flatMapTo(HashSet()) { it.cities + it.wantCities + it.livedPlaces } }
+    val loggedNow by rememberUpdatedState(logged)
     val citySpot = (spot as? Spot.City)?.cityId
     val spotArea by produceState<List<com.marcusrosado.stamp.data.Shape>?>(null, citySpot, cityAreas, fetchOutlines, places) {
         val id = citySpot ?: run { value = null; return@produceState }
         value = cityAreas.of(id) ?: app.cityOutlines.known(id)
         if (value != null || !fetchOutlines) return@produceState
         val city = places?.byId?.get(id) ?: return@produceState
-        value = app.cityOutlines.fetch(city, logged = id in app.visits.visits.value.values.flatMap { it.cities + it.wantCities + it.livedPlaces })
+        value = app.cityOutlines.fetch(city, logged = id in loggedNow)
     }
     LaunchedEffect(logged) { app.cityOutlines.keepLogged(logged) }
 

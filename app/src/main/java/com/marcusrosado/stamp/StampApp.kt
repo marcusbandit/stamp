@@ -129,7 +129,7 @@ class StampApp : Application() {
 
     /** Outlines fetched for cities, kept for the ones the user logged, outside the backup. */
     val cityOutlines by lazy {
-        com.marcusrosado.stamp.data.CityOutlines(File(noBackupFilesDir, "city-outlines"), "Stamp/${BuildConfig.VERSION_NAME} (Android travel map)")
+        com.marcusrosado.stamp.data.CityOutlines(File(noBackupFilesDir, "city-outlines"), "Stamp/${BuildConfig.VERSION_NAME} (Android travel map)", scope)
     }
 
     /** The rail and road packs, kept outside the user's backup: map data, fetched again at will. */
