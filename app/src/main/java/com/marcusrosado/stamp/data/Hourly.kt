@@ -21,7 +21,9 @@ import java.util.concurrent.TimeUnit
 class Hourly(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
         val app = applicationContext as StampApp
-        if (!app.hourly.on.value || !allowed(applicationContext)) return Result.success()
+        // Switched off, or the permission was taken back in Android's settings: the schedule ends
+        // here, and turning the hourly look on again starts it anew.
+        if (!app.hourly.on.value || !allowed(applicationContext)) { schedule(applicationContext, false); return Result.success() }
         // The hourly look is Pro; the sample never talks to Play, so it reads the purchase Play last confirmed.
         if (com.marcusrosado.stamp.BuildConfig.PRO_SOLD && !app.flags.get(ProStore.FLAG)) return Result.success()
         val (lat, lon) = Here.find(applicationContext, maxAge = 20 * 60_000L) ?: return Result.success()
