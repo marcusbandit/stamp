@@ -393,13 +393,16 @@ class VisitStore(private val file: File) {
 
     @Synchronized
     fun updateTrip(trip: Trip) {
-        val stay = if (trip.now) trip.copy(until = null) else trip
+        val stay = (if (trip.now) trip.copy(until = null) else trip).copy(name = trip.name.trim())
         // Where the trip started stays put; its other lands follow its stops when it settles.
         trips = trips.map { if (it.id == trip.id) stay.copy(lands = it.lands) else it }
         // One home at a time: living here now ends "now" everywhere else.
         if (stay.now) trips = trips.map { if (it.id != stay.id && it.now) it.copy(now = false) else it }
         save()
     }
+
+    /** Names a trip; an empty name gives it back its number. Only the name changes. */
+    fun renameTrip(tripId: String, name: String) = changeTrip(tripId) { it.copy(name = name.trim()) }
 
     /** Removes a trip everywhere. A Visited or Lived place always keeps at least one. */
     @Synchronized

@@ -365,6 +365,7 @@ private fun App(
                 onRating = app.visits::setRating,
                 onAddTrip = app.visits::addTrip,
                 onUpdateTrip = app.visits::updateTrip,
+                onRenameTrip = app.visits::renameTrip,
                 onRemoveTrip = app.visits::removeTrip,
                 onAddCity = app.visits::addCity,
                 onAddPin = app.visits::addPin,

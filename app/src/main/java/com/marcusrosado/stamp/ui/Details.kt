@@ -82,6 +82,7 @@ class DetailActions(
     val onRating: (id: String, rating: Int) -> Unit,
     val onAddTrip: (id: String) -> Unit,
     val onUpdateTrip: (trip: Trip) -> Unit,
+    val onRenameTrip: (tripId: String, name: String) -> Unit,
     val onRemoveTrip: (id: String, tripId: String) -> Unit,
     /** A null trip puts the city on a new visit. */
     val onAddCity: (id: String, tripId: String?, cityId: String) -> Unit,
@@ -205,11 +206,12 @@ fun TripsSection(
                 ) {
                     // Living somewhere is not a numbered stay: it says whether the user still does.
                     // A named trip shows its name; the rest keep their number.
-                    if (!lived || t.name.isNotBlank()) Text(
+                    val named = t.name.isNotBlank()
+                    if (!lived || named) Text(
                         t.title("Visit ${i + 1}"),
-                        modifier = if (t.name.isBlank()) Modifier.width(72.dp) else Modifier.widthIn(max = 160.dp).padding(end = 12.dp),
+                        modifier = if (named) Modifier.widthIn(max = 160.dp).padding(end = 12.dp) else Modifier.width(72.dp),
                         style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = if (t.name.isBlank()) null else androidx.compose.ui.text.font.FontWeight.Medium,
+                        fontWeight = if (named) FontWeight.Medium else null,
                         maxLines = 1,
                         overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                     )
@@ -245,6 +247,7 @@ fun TripsSection(
                     if (lived) stayLabel(t) else rangeLabel(t.date, t.until),
                     t.places.size.takeIf { it > 0 }?.let { if (it == 1) "1 city" else "$it cities" },
                     t.memories.size.takeIf { it > 0 }?.let { if (it == 1) "1 memory" else "$it memories" },
+                    t.name.takeIf { it.isNotBlank() }?.let { "its name" },
                 ).joinToString(", ").ifEmpty { "Nothing filled in yet" },
                 "Remove",
             ),
