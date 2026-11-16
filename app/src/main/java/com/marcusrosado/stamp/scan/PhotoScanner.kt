@@ -48,7 +48,7 @@ sealed interface ScanState {
 
     data class Done(val found: List<Found>, val total: Int, val located: Int, val source: ScanSource = ScanSource.Device) : ScanState
 
-    data class Failed(val message: String) : ScanState
+    data class Failed(val message: String, val source: ScanSource = ScanSource.Device) : ScanState
 }
 
 /**
@@ -95,7 +95,7 @@ class PhotoScanner(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                ScanState.Failed(e.message ?: e.javaClass.simpleName)
+                ScanState.Failed(e.message ?: e.javaClass.simpleName, source)
             }
             publish(gen, result)
         }
@@ -146,7 +146,8 @@ class PhotoScanner(
         }.sortedByDescending { it.evidence.lastMs }
 
         fun progress(checked: Int, total: Int) {
-            if (points.size >= 2000) keep()
+            // Handed over in large batches: each one redraws the heat map.
+            if (points.size >= 20_000) keep()
             publish(gen, ScanState.Running(checked, total, found()))
         }
 
@@ -189,13 +190,18 @@ class PhotoScanner(
     }
 
     private suspend fun readTakeout(zips: List<Uri>, c: Collector): ScanState {
+        val job = coroutineContext[Job]
         // First pass reads only the central directories, so progress has a real total.
         val total = zips.sumOf { uri -> withChannel(uri) { Takeout.countJson(it) } }
         var checked = 0
+        var photos = 0
         for (uri in zips) {
             withChannel(uri) { ch ->
-                Takeout.readZip(ch) { point ->
-                    point?.let { c.add(it.lat, it.lon, it.takenMs) }
+                Takeout.readZip(ch) { entry ->
+                    // Stop means stop, between two location files.
+                    if (job?.isActive == false) throw CancellationException("stopped")
+                    if (entry.photo) photos++
+                    entry.point?.let { c.add(it.lat, it.lon, it.takenMs) }
                     checked++
                     if (checked % 200 == 0) c.progress(checked, total)
                 }
@@ -203,12 +209,17 @@ class PhotoScanner(
             coroutineContext.ensureActive()
             c.progress(checked, total)
         }
-        return c.done(total)
+        return c.done(photos)
     }
 
     private fun <T> withChannel(uri: Uri, block: (java.nio.channels.SeekableByteChannel) -> T): T {
         val pfd = context.contentResolver.openFileDescriptor(uri, "r") ?: error("Could not open the file")
-        return pfd.use { FileInputStream(it.fileDescriptor).channel.use(block) }
+        return try {
+            pfd.use { FileInputStream(it.fileDescriptor).channel.use(block) }
+        } catch (e: java.io.IOException) {
+            // A zip handed over straight from a mail or cloud app is a stream, not a file.
+            throw IllegalStateException("Stamp could not read that zip. Download it to this phone first, then choose it from Downloads.", e)
+        }
     }
 
     private class Photo(val uri: Uri, val takenMs: Long)

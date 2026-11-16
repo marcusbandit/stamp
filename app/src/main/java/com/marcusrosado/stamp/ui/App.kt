@@ -200,6 +200,7 @@ fun Root(app: StampApp) {
                 onHourly = app::setHourly,
                 seen = app.seen.points.value,
                 onTakeout = {
+                    if (app.scanner.state.value !is ScanState.Running) app.scanner.cancel()
                     app.flags.set(FLAG_ONBOARDED, true)
                     onboarded = true
                     scanTakeout = true
@@ -234,6 +235,7 @@ fun Root(app: StampApp) {
                         onHourly = app::setHourly,
                         seen = app.seen.points.value,
                         onTakeout = {
+                            if (app.scanner.state.value !is ScanState.Running) app.scanner.cancel()
                             replaying = false
                             scanTakeout = true
                             scanOpen = true

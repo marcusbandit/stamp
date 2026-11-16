@@ -26,7 +26,8 @@ object Takeout {
         val o = runCatching { JSONObject(json) }.getOrNull() ?: return null
         val taken = o.optJSONObject("photoTakenTime") ?: return null
         val ms = (taken.optString("timestamp").toLongOrNull() ?: 0L) * 1000
-        val geo = listOf("geoDataExif", "geoData")
+        // Google's own place first: it holds any fix the user made in Google Photos.
+        val geo = listOf("geoData", "geoDataExif")
             .mapNotNull { o.optJSONObject(it) }
             .map { it.optDouble("latitude", 0.0) to it.optDouble("longitude", 0.0) }
             .firstOrNull { (lat, lon) -> !(lat == 0.0 && lon == 0.0) && !lat.isNaN() && !lon.isNaN() }
@@ -41,19 +42,26 @@ object Takeout {
     fun readZip(
         channel: SeekableByteChannel,
         onTotal: (Int) -> Unit = {},
-        onEntry: (GeoPoint?) -> Unit,
+        onEntry: (Entry) -> Unit,
     ) {
         ZipFile.builder().setSeekableByteChannel(channel).get().use { zip ->
             val entries = zip.entries.toList().filter { !it.isDirectory && it.name.endsWith(".json", ignoreCase = true) }
             onTotal(entries.size)
             for (e in entries) {
                 // A sidecar is a few hundred bytes; anything big is not one.
-                if (e.size > MAX_SIDECAR) { onEntry(null); continue }
+                if (e.size > MAX_SIDECAR) { onEntry(Entry(null, photo = false)); continue }
                 val text = zip.getInputStream(e).use { it.readBytes().decodeToString() }
-                onEntry(parseSidecar(text))
+                onEntry(Entry(parseSidecar(text), photo = isPhotoSidecar(text)))
             }
         }
     }
+
+    /** One JSON file of an export: the point it gives, if any, and whether it describes a photo at all. */
+    class Entry(val point: GeoPoint?, val photo: Boolean)
+
+    /** True for a photo's sidecar, false for album files and other metadata. */
+    fun isPhotoSidecar(json: String): Boolean =
+        runCatching { JSONObject(json).has("photoTakenTime") }.getOrDefault(false)
 
     /** Count of sidecar candidates in a zip, for progress before the real pass. */
     fun countJson(channel: SeekableByteChannel): Int =

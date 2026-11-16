@@ -151,7 +151,7 @@ fun ScanScreen(
                 state is ScanState.Failed -> Message(
                     "That did not work",
                     "Something went wrong while reading: ${state.message}",
-                    "Try again", { onReset(); if (mode == Mode.Takeout) pickZips() else ask() },
+                    "Try again", { onReset(); if (state.source == ScanSource.Takeout) pickZips() else ask() },
                 )
                 mode == Mode.Takeout -> TakeoutGuide(onPick = pickZips)
                 mode == Mode.Denied -> Denied(onRetry = ask)
@@ -213,12 +213,6 @@ fun TakeoutGuide(onPick: () -> Unit) {
         verticalArrangement = Arrangement.spacedBy(20.dp),
     ) {
         PhotoPreview()
-        Text(
-            "Google lets no app read where Google Photos were taken. Its Takeout export keeps it, so Stamp " +
-                "reads that. Only the place and the date of each photo are kept, and they stay when you delete " +
-                "the export or the photos. Stamp never signs in to your Google account.",
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
         Step(1, "Ask Google for an export") {
             Text(
                 "Open Google Takeout with only Google Photos picked. Tap Next step, keep Send download link " +
@@ -245,7 +239,8 @@ fun TakeoutGuide(onPick: () -> Unit) {
         }
         Step(4, "Choose them here") {
             Text(
-                "Select every zip at once. The countries go through the same review as a phone scan.",
+                "Select every zip at once. Only the place and date of each photo are kept, and they stay " +
+                    "after you delete the zips. The countries go through the same review as a phone scan.",
                 style = MaterialTheme.typography.bodyMedium,
             )
             Spacer(Modifier.height(8.dp))

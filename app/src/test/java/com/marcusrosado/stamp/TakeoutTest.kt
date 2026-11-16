@@ -22,10 +22,12 @@ class TakeoutTest {
         assertEquals(GeoPoint(35.67, 139.65, 1_680_000_000_000), Takeout.parseSidecar(sidecar(35.67, 139.65, 1_680_000_000)))
     }
 
-    @Test fun prefersExifPositionWhenPresent() {
+    @Test fun prefersGooglesPositionOverTheCamerasOwn() {
         val p = Takeout.parseSidecar(sidecar(1.0, 2.0, 10, exifLat = 38.7, exifLon = -9.1))!!
-        assertEquals(38.7, p.lat, 0.0)
-        assertEquals(-9.1, p.lon, 0.0)
+        assertEquals(1.0, p.lat, 0.0)
+        assertEquals(2.0, p.lon, 0.0)
+        val camera = Takeout.parseSidecar(sidecar(0.0, 0.0, 10, exifLat = 38.7, exifLon = -9.1))!!
+        assertEquals(38.7, camera.lat, 0.0)
     }
 
     @Test fun zeroZeroIsNoPosition() = assertNull(Takeout.parseSidecar(sidecar(0.0, 0.0, 10)))
@@ -44,8 +46,10 @@ class TakeoutTest {
         }
         var total = -1
         val points = mutableListOf<GeoPoint?>()
-        Files.newByteChannel(zip.toPath()).use { ch -> Takeout.readZip(ch, onTotal = { total = it }) { points += it } }
+        var photos = 0
+        Files.newByteChannel(zip.toPath()).use { ch -> Takeout.readZip(ch, onTotal = { total = it }) { points += it.point; if (it.photo) photos++ } }
         assertEquals(3, total)
+        assertEquals("album metadata is no photo", 2, photos)
         assertEquals(listOf(GeoPoint(35.67, 139.65, 100_000)), points.filterNotNull())
     }
 
