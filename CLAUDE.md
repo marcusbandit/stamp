@@ -132,7 +132,7 @@ spent in the JIT.
 Source-available under `LICENSE.md`, the Aseprite model the owner chose (2026-11-16, #96): anyone
 may build it for themselves with every feature, nobody may share or sell builds. The Play build
 sells Pro: rail and road lines, and the heat map with the hourly look. Until Stamp is live on Play,
-the GitHub APK is the full Pro version; revisit that with the owner when the Play listing goes live.
+the GitHub APK is the full Pro version; #100 holds the question for when the Play listing goes live.
 
 ## Public repo
 
