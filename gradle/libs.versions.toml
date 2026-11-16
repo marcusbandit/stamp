@@ -11,6 +11,7 @@ exifinterface = "1.4.2"
 lifecycle = "2.10.0"
 window = "1.5.0"
 work = "2.10.0"
+commonsCompress = "1.28.0"
 # Material 3 Expressive (FloatingActionButtonMenu) is newer than the Compose BOM's material3.
 material3 = "1.5.0-beta02"
 
@@ -27,6 +28,7 @@ androidx-exifinterface = { group = "androidx.exifinterface", name = "exifinterfa
 androidx-lifecycle-runtime-compose = { group = "androidx.lifecycle", name = "lifecycle-runtime-compose", version.ref = "lifecycle" }
 androidx-window = { group = "androidx.window", name = "window", version.ref = "window" }
 androidx-work = { group = "androidx.work", name = "work-runtime-ktx", version.ref = "work" }
+commons-compress = { group = "org.apache.commons", name = "commons-compress", version.ref = "commonsCompress" }
 orgjson = { group = "org.json", name = "json", version.ref = "orgjson" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 

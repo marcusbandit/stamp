@@ -219,7 +219,7 @@ class StampApp : Application() {
         // One writer at a time, so two quick picks land in the order they were made.
         scope.launch(lookWriter) { runCatching { java.io.File(filesDir, LOOK_FILE).writeText(look.value) } }
     }
-    val scanner by lazy { PhotoScanner(this, scope, { atlas.await() }, { split.on.value }) }
+    val scanner by lazy { PhotoScanner(this, scope, { atlas.await() }, { split.on.value }, onPoints = { seen.add(it) }) }
 
     override fun onCreate() {
         super.onCreate()

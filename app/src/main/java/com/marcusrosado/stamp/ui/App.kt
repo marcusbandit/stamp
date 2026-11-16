@@ -101,6 +101,8 @@ class AppState(
     val onOpenScan: () -> Unit,
     /** Starts over: drops a finished or failed scan and opens the choice of source. */
     val onOpenNewScan: () -> Unit,
+    /** Opens the Google Photos import on its steps. */
+    val onOpenTakeout: () -> Unit = {},
     val onFocused: () -> Unit,
     val onOpenCountry: (String) -> Unit,
     val onIntro: () -> Unit,
@@ -177,6 +179,8 @@ fun Root(app: StampApp) {
     val atlas by produceState<Atlas?>(null) { value = app.atlas.await() }
     var onboarded by rememberSaveable { mutableStateOf(app.flags.get(FLAG_ONBOARDED)) }
     var scanOpen by rememberSaveable { mutableStateOf(false) }
+    // The scan opened on the Google Photos steps, from Settings or the introduction.
+    var scanTakeout by rememberSaveable { mutableStateOf(false) }
     // The introduction opened again from Settings: shown over the app, which keeps its place.
     var replaying by rememberSaveable { mutableStateOf(false) }
     val home by app.visits.home.collectAsStateWithLifecycle()
@@ -195,6 +199,12 @@ fun Root(app: StampApp) {
                 onHere = app.here::set,
                 onHourly = app::setHourly,
                 seen = app.seen.points.value,
+                onTakeout = {
+                    app.flags.set(FLAG_ONBOARDED, true)
+                    onboarded = true
+                    scanTakeout = true
+                    scanOpen = true
+                },
                 onDone = { openScan ->
                     app.flags.set(FLAG_ONBOARDED, true)
                     onboarded = true
@@ -205,6 +215,8 @@ fun Root(app: StampApp) {
             App(
                 app, a, scanOpen,
                 onScanOpen = { scanOpen = it },
+                scanTakeout = scanTakeout,
+                onScanTakeout = { scanTakeout = it },
                 onIntro = { replaying = true },
             )
             if (!replaying) UnreadableSave(app)
@@ -221,6 +233,11 @@ fun Root(app: StampApp) {
                         onHere = app.here::set,
                         onHourly = app::setHourly,
                         seen = app.seen.points.value,
+                        onTakeout = {
+                            replaying = false
+                            scanTakeout = true
+                            scanOpen = true
+                        },
                         onDone = { openScan ->
                             replaying = false
                             scanOpen = openScan
@@ -240,6 +257,8 @@ private fun App(
     scanOpen: Boolean,
     onScanOpen: (Boolean) -> Unit,
     onIntro: () -> Unit,
+    scanTakeout: Boolean = false,
+    onScanTakeout: (Boolean) -> Unit = {},
 ) {
     var destination by rememberSaveable { mutableStateOf(Destination.Map) }
     // The tab a jump came from, such as "show on map" from Settings, so back returns there.
@@ -461,6 +480,12 @@ private fun App(
             onOpenScan = { onScanOpen(true) },
             onOpenNewScan = {
                 if (scan !is ScanState.Running) app.scanner.cancel()
+                onScanTakeout(false)
+                onScanOpen(true)
+            },
+            onOpenTakeout = {
+                if (scan !is ScanState.Running) app.scanner.cancel()
+                onScanTakeout(true)
                 onScanOpen(true)
             },
             onFocused = { focus = null },
@@ -622,7 +647,9 @@ private fun App(
                         destination = Destination.Passport
                     },
                     onReset = { app.scanner.cancel() },
-                    onClose = { onScanOpen(false) },
+                    onClose = { onScanOpen(false); onScanTakeout(false) },
+                    onImportTakeout = { app.scanner.importTakeout(it) },
+                    startInTakeout = scanTakeout,
                 )
             }
         }

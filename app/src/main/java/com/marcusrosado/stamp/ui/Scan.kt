@@ -3,6 +3,12 @@ package com.marcusrosado.stamp.ui
 import android.Manifest
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material3.OutlinedButton
+import com.marcusrosado.stamp.scan.ScanSource
+import com.marcusrosado.stamp.scan.Takeout
 import android.os.Build
 import android.provider.Settings
 import androidx.activity.compose.BackHandler
@@ -91,7 +97,16 @@ fun rememberPhotoAccess(onGranted: () -> Unit, onDenied: () -> Unit): () -> Unit
     return { launcher.launch(photoPermissions()) }
 }
 
-private enum class Mode { Choose, Denied }
+/** Opens the system file picker for one or more Takeout zips. */
+@Composable
+fun rememberZipPicker(onPicked: (List<Uri>) -> Unit): () -> Unit {
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) {
+        if (it.isNotEmpty()) onPicked(it)
+    }
+    return { launcher.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream")) }
+}
+
+private enum class Mode { Choose, Takeout, Denied }
 
 /**
  * Finding countries in photos, as one full-screen flow: where to look, the permission or
@@ -106,16 +121,22 @@ fun ScanScreen(
     onAdd: (found: Map<String, PhotoEvidence>, mark: Set<String>) -> Unit,
     onReset: () -> Unit,
     onClose: () -> Unit,
+    /** Reads the Google Takeout zips the user picked. */
+    onImportTakeout: (List<Uri>) -> Unit = {},
+    /** Opens straight on the Google Photos steps, as Settings and the introduction do. */
+    startInTakeout: Boolean = false,
 ) {
-    var mode by rememberSaveable { mutableStateOf(Mode.Choose) }
+    var mode by rememberSaveable { mutableStateOf(if (startInTakeout) Mode.Takeout else Mode.Choose) }
     val ask = rememberPhotoAccess(onGranted = { mode = Mode.Choose; onStartDevice() }, onDenied = { mode = Mode.Denied })
-    BackHandler { onClose() }
+    val pickZips = rememberZipPicker(onImportTakeout)
+    // The steps opened from the choice go back to it; opened on their own, back leaves.
+    BackHandler { if (mode == Mode.Takeout && state is ScanState.Idle && !startInTakeout) mode = Mode.Choose else onClose() }
 
     Box(Modifier.fillMaxSize().safeDrawingPadding(), contentAlignment = Alignment.TopCenter) {
         Column(Modifier.widthIn(max = 680.dp).fillMaxSize()) {
             Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    "Countries in your photos",
+                    if (mode == Mode.Takeout && state is ScanState.Idle) "Import from Google Photos" else "Countries in your photos",
                     style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.weight(1f).padding(start = 8.dp),
                 )
@@ -125,22 +146,23 @@ fun ScanScreen(
                 state is ScanState.Running -> Running(state)
                 state is ScanState.Done -> Review(
                     state, visits, home, onAdd,
-                    onAgain = ask,
+                    onAgain = if (state.source == ScanSource.Takeout) pickZips else ask,
                 )
                 state is ScanState.Failed -> Message(
                     "That did not work",
                     "Something went wrong while reading: ${state.message}",
-                    "Try again", { onReset(); ask() },
+                    "Try again", { onReset(); if (mode == Mode.Takeout) pickZips() else ask() },
                 )
+                mode == Mode.Takeout -> TakeoutGuide(onPick = pickZips)
                 mode == Mode.Denied -> Denied(onRetry = ask)
-                else -> Choose(onDevice = ask, onSkip = onClose)
+                else -> Choose(onDevice = ask, onTakeout = { mode = Mode.Takeout }, onSkip = onClose)
             }
         }
     }
 }
 
 @Composable
-private fun Choose(onDevice: () -> Unit, onSkip: () -> Unit) {
+private fun Choose(onDevice: () -> Unit, onTakeout: () -> Unit, onSkip: () -> Unit) {
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -155,6 +177,12 @@ private fun Choose(onDevice: () -> Unit, onSkip: () -> Unit) {
             "Photos on this phone",
             "Reads the location saved in every photo. Asks to see your photos once. Nothing is uploaded.",
             "Scan this phone", onDevice,
+        )
+        Source(
+            Icons.Filled.CloudDownload,
+            "Photos in Google Photos",
+            "For photos that are only in the cloud. Reads a Google Takeout export, which takes a few steps.",
+            "Set up the import", onTakeout,
         )
         TextButton(onClick = onSkip, modifier = Modifier.fillMaxWidth()) { Text("Not now") }
     }
@@ -173,6 +201,74 @@ private fun Source(icon: ImageVector, title: String, body: String, action: Strin
         }
         Spacer(Modifier.height(12.dp))
         Button(onClick = onClick, modifier = Modifier.fillMaxWidth()) { Text(action) }
+    }
+}
+
+/** The Takeout steps, with Google's own button names, and the file picker at the end. */
+@Composable
+fun TakeoutGuide(onPick: () -> Unit) {
+    val context = LocalContext.current
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(20.dp),
+    ) {
+        PhotoPreview()
+        Text(
+            "Google lets no app read where Google Photos were taken. Its Takeout export keeps it, so Stamp " +
+                "reads that. Only the place and the date of each photo are kept, and they stay when you delete " +
+                "the export or the photos. Stamp never signs in to your Google account.",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Step(1, "Ask Google for an export") {
+            Text(
+                "Open Google Takeout with only Google Photos picked. Tap Next step, keep Send download link " +
+                    "via email and Export once, choose .zip and 50 GB, then tap Create export.",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(onClick = {
+                runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(Takeout.TAKEOUT_URL))) }
+            }) { Text("Open Google Takeout") }
+        }
+        Step(2, "Wait for Google's email") {
+            Text(
+                "It takes a few hours, or a day or two for a big library. Stamp can be closed meanwhile.",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+        Step(3, "Download the zips on this phone") {
+            Text(
+                "Open the email here and tap Download for every part. Stamp reads only the small location " +
+                    "files inside, so a large export still goes quickly.",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+        Step(4, "Choose them here") {
+            Text(
+                "Select every zip at once. The countries go through the same review as a phone scan.",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Spacer(Modifier.height(8.dp))
+            Button(onClick = onPick) { Text("Choose the zip files") }
+        }
+    }
+}
+
+@Composable
+private fun Step(n: Int, title: String, body: @Composable () -> Unit) {
+    Row {
+        Box(
+            Modifier.size(28.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primaryContainer),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text("$n", color = MaterialTheme.colorScheme.onPrimaryContainer, fontWeight = FontWeight.Medium)
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, fontWeight = FontWeight.Medium)
+            Spacer(Modifier.height(4.dp))
+            body()
+        }
     }
 }
 
@@ -237,6 +333,11 @@ private fun Review(
 ) {
     if (state.found.isEmpty()) {
         val body = when {
+            state.source == ScanSource.Takeout && state.total == 0 ->
+                "Those files hold no Google Photos. Choose the zips from the Takeout email."
+            state.source == ScanSource.Takeout ->
+                "None of the %,d photos in the export has a location. Google keeps one only when the camera or you added it."
+                    .format(state.total)
             state.total == 0 ->
                 "Stamp could not see any photos. If you gave access to selected photos only, pick more and scan again."
             else ->

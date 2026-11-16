@@ -84,6 +84,7 @@ dependencies {
     implementation(libs.androidx.exifinterface)
     implementation(libs.maplibre)
     implementation(libs.androidx.work)
+    implementation(libs.commons.compress)
     implementation(libs.androidx.window)
     testImplementation(libs.junit)
     testImplementation(libs.orgjson)
