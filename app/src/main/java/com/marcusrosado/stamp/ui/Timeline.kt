@@ -124,6 +124,8 @@ import java.time.ZoneId
 /** What the timeline can change. Every call names the visit it is about. */
 class TimelineActions(
     val onDates: (Trip) -> Unit,
+    /** Names the trip; an empty name gives it back its number. */
+    val onRename: (String) -> Unit,
     val onStopDates: (place: String, arrived: PartialDate?, left: PartialDate?) -> Unit,
     /** Puts the trip's stops in a new order. */
     val onStopOrder: (cities: List<String>) -> Unit,
@@ -270,7 +272,9 @@ fun VisitTimeline(
                         // Living somewhere is not a numbered stay: it is where the user lives or lived.
                         title = trip.title(if (lived) (if (trip.now) "Living here" else "Lived here") else "Visit $number"),
                         // "Living here" needs no "Living here now" under it.
-                        dates = if (lived && trip.now && trip.date == null) null else rangeLabel(trip.date, trip.until, trip.now),
+                        // A named home still says the user lives there.
+                        dates = if (lived && trip.now && trip.date == null) "Living here".takeIf { trip.name.isNotBlank() }
+                            else rangeLabel(trip.date, trip.until, trip.now),
                         photo = hero,
                         onBack = onDismiss,
                         onDates = { editingDates = true },
@@ -485,7 +489,8 @@ fun VisitTimeline(
         if (naming) {
             NameDialog(
                 trip.name,
-                onDone = { actions.onDates(trip.copy(name = it.trim())); naming = false },
+                title = if (lived) "Name this stay" else "Name this trip",
+                onDone = { actions.onRename(it); naming = false },
                 onDismiss = { naming = false },
             )
         }
@@ -842,7 +847,6 @@ private fun DatePart(d: PartialDate?, guessed: Boolean) {
     )
 }
 
-/** A stop's photos, videos and moments in a row, ending with a tile that adds another. */
 /** A memory as a place shows it, with the trip it was kept on, or null when kept for the place itself. */
 class ShownMemory(val memory: Memory, val tripId: String?)
 
@@ -856,7 +860,7 @@ fun PlaceMemories(
     memories: List<ShownMemory>,
     /** The trips that went there, whose dates find photos to suggest. */
     trips: List<Trip>,
-    /** Where the place is; null for a whole country, whose photos are only suggested for a single trip. */
+    /** Where the place is; null for a whole country, which offers the gallery and writing only. */
     near: Pair<Double, Double>?,
     onAdd: (List<Memory>) -> Unit,
     onUpdate: (ShownMemory, Memory) -> Unit,
@@ -878,7 +882,8 @@ fun PlaceMemories(
     }
     if (adding) {
         val dated = trips.filter { it.date != null || it.until != null }
-        val win = if (near == null && dated.size != 1) null else window(
+        // A whole country has no point to keep suggestions near, so it offers the gallery only.
+        val win = if (near == null) null else window(
             dated.mapNotNull { it.date ?: it.until }.minOrNull(),
             dated.mapNotNull { it.until ?: it.date }.maxOrNull(),
         )
@@ -903,6 +908,7 @@ fun PlaceMemories(
     }
 }
 
+/** A stop's photos, videos and moments in a row, ending with a tile that adds another. */
 @Composable
 private fun MemoryRow(memories: List<Memory>, onOpen: (Memory) -> Unit, onAdd: () -> Unit) {
     // With nothing kept yet, the memory button beside the dates asks instead of an empty tile.
@@ -1276,20 +1282,20 @@ private fun DateRow(label: String, value: PartialDate?, guess: PartialDate?, onE
 
 /** Names a trip; an empty name gives it back its number. */
 @Composable
-private fun NameDialog(name: String, onDone: (String) -> Unit, onDismiss: () -> Unit) {
+private fun NameDialog(name: String, title: String, onDone: (String) -> Unit, onDismiss: () -> Unit) {
     var text by remember { mutableStateOf(androidx.compose.ui.text.input.TextFieldValue(name, androidx.compose.ui.text.TextRange(name.length))) }
     val focus = remember { androidx.compose.ui.focus.FocusRequester() }
-    androidx.compose.runtime.LaunchedEffect(Unit) { focus.requestFocus() }
+    // The field lives in the dialog's own window, which may not be attached on the first frame.
+    androidx.compose.runtime.LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
     SeamAlertDialog(
         onDismissRequest = onDismiss,
         outsideCloses = text.text == name,
-        title = { Text("Name this trip") },
+        title = { Text(title) },
         text = {
             OutlinedTextField(
                 value = text,
                 onValueChange = { text = it },
                 singleLine = true,
-                placeholder = { Text("Interrail 2019") },
                 keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
                     capitalization = androidx.compose.ui.text.input.KeyboardCapitalization.Sentences,
                     imeAction = androidx.compose.ui.text.input.ImeAction.Done,

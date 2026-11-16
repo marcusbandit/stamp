@@ -1,6 +1,9 @@
 package com.marcusrosado.stamp.data
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -20,48 +23,76 @@ import java.net.URLEncoder
  * since it is public map data and can be fetched again; any other stays in memory until the app
  * closes. Only the city's name, country code and the box around its centre are sent.
  */
-class CityOutlines(private val dir: File, private val agent: String) {
+class CityOutlines(private val dir: File, private val agent: String, private val scope: CoroutineScope) {
     private val lock = Mutex()
     private val session = HashMap<String, List<Shape>>()
-    // Cities OpenStreetMap had no outline for, or that failed: asked for once a launch.
+    // Cities OpenStreetMap answered with no outline for: asked for once a launch. A request that
+    // failed, offline or refused, is not remembered and is tried again on the next tap.
     private val none = HashSet<String>()
+    // A fetch under way per city, shared by every tap on it, and finished even when the tap that
+    // started it moved on to another city.
+    private val running = HashMap<String, Deferred<List<Shape>?>>()
 
     private val _kept = MutableStateFlow<Map<String, List<Shape>>>(emptyMap())
 
     /** Every outline kept on the phone, by city id; read once at launch. */
     val kept: StateFlow<Map<String, List<Shape>>> = _kept.asStateFlow()
 
-    /** Reads the kept outlines. Called once, off the main thread. */
-    fun start() {
+    /** Reads the kept outlines and clears what a write cut short. Called once, off the main thread. */
+    suspend fun start() = lock.withLock {
         val out = HashMap<String, List<Shape>>()
         dir.listFiles()?.forEach { f ->
-            if (!f.name.endsWith(".json")) return@forEach
+            if (!f.name.endsWith(".json")) { f.delete(); return@forEach }
             runCatching { parseGeometry(JSONObject(f.readText())) }.getOrNull()?.takeIf { it.isNotEmpty() }
                 ?.let { out[f.name.removeSuffix(".json")] = it } ?: f.delete()
         }
-        _kept.value = out
+        // Anything kept while the files were read stays.
+        _kept.value = out + _kept.value
     }
 
     /** The outline already at hand, kept or fetched this session; null when it is not. */
-    fun known(cityId: String): List<Shape>? = _kept.value[cityId] ?: session[cityId]
+    fun known(cityId: String): List<Shape>? = _kept.value[cityId] ?: synchronized(session) { session[cityId] }
 
     /**
      * The outline of [city], fetched when it is not at hand. [logged] keeps it on the phone. Null
      * when OpenStreetMap has none that holds the city's centre, or the fetch failed.
      */
-    suspend fun fetch(city: City, logged: Boolean): List<Shape>? = lock.withLock {
-        known(city.id)?.let { if (logged) keep(city.id, it); return@withLock it }
-        if (city.id in none) return@withLock null
-        val shapes = withContext(Dispatchers.IO) { runCatching { ask(city) }.getOrNull() }
-        if (shapes.isNullOrEmpty()) { none += city.id; return@withLock null }
-        session[city.id] = shapes
-        if (logged) keep(city.id, shapes)
-        shapes
+    suspend fun fetch(city: City, logged: Boolean): List<Shape>? {
+        val job = lock.withLock {
+            known(city.id)?.let { if (logged) keep(city.id, it); return it }
+            if (city.id in none) return null
+            running.getOrPut(city.id) {
+                scope.async(Dispatchers.IO) {
+                    var failed = false
+                    val shapes = try { ask(city) } catch (e: java.io.IOException) { failed = true; null }
+                    lock.withLock {
+                        running.remove(city.id)
+                        when {
+                            !shapes.isNullOrEmpty() -> synchronized(session) { session[city.id] = shapes }
+                            !failed -> none += city.id
+                        }
+                    }
+                    shapes
+                }
+            }
+        }
+        val shapes = job.await()
+        if (logged && !shapes.isNullOrEmpty()) lock.withLock { keep(city.id, shapes) }
+        return shapes
     }
 
-    /** Keeps on the phone every outline fetched this session for a city in [logged]. */
+    /**
+     * Keeps on the phone every outline fetched this session for a city in [logged], and lets go
+     * of the kept ones no longer logged: they stay in memory until the app closes.
+     */
     suspend fun keepLogged(logged: Set<String>) = lock.withLock {
-        for ((id, shapes) in session) if (id in logged && id !in _kept.value) keep(id, shapes)
+        val fetched = synchronized(session) { session.toMap() }
+        for ((id, shapes) in fetched) if (id in logged && id !in _kept.value) keep(id, shapes)
+        val gone = _kept.value.keys - logged
+        if (gone.isEmpty()) return@withLock
+        synchronized(session) { for (id in gone) _kept.value[id]?.let { session[id] = it } }
+        withContext(Dispatchers.IO) { for (id in gone) File(dir, "$id.json").delete() }
+        _kept.value = _kept.value - gone
     }
 
     private suspend fun keep(id: String, shapes: List<Shape>) {
@@ -82,14 +113,17 @@ class CityOutlines(private val dir: File, private val agent: String) {
         val box = listOf(city.lon - 0.6, city.lat + 0.6, city.lon + 0.6, city.lat - 0.6).joinToString(",")
         val q = "city=" + enc(city.name) + "&countrycodes=" + city.country.lowercase() + "&viewbox=$box&bounded=1" +
             "&format=geojson&polygon_geojson=1&polygon_threshold=$SIMPLIFY&limit=8"
-        get("$BASE/search?$q")?.let { pick(JSONObject(it), city.lat, city.lon) }?.let { return it }
+        pick(JSONObject(get("$BASE/search?$q")), city.lat, city.lon)?.let { return it }
         // Many towns are only a point in OpenStreetMap's search. Their outline is then the
-        // boundary that holds the centre and carries the town's name, such as "Odense Kommune".
+        // boundary that holds the centre and carries the town's name, such as "Sampleby Kommune".
         val find = "[out:json][timeout:25];is_in(${city.lat},${city.lon})->.a;" +
             "rel(pivot.a)[\"boundary\"=\"administrative\"][\"admin_level\"~\"^[5-9]$\"];out tags;"
-        val found = OVERPASS.firstNotNullOfOrNull { get(it + "?data=" + enc(find)) } ?: return null
+        // The second server only when the first could not be reached.
+        val found = OVERPASS.indices.firstNotNullOf { i ->
+            try { get(OVERPASS[i] + "?data=" + enc(find)) } catch (e: java.io.IOException) { if (i == OVERPASS.lastIndex) throw e else null }
+        }
         val rel = boundaryFor(JSONObject(found), listOf(city.name, city.ascii)) ?: return null
-        val shape = get("$BASE/lookup?osm_ids=R$rel&format=geojson&polygon_geojson=1&polygon_threshold=$SIMPLIFY") ?: return null
+        val shape = get("$BASE/lookup?osm_ids=R$rel&format=geojson&polygon_geojson=1&polygon_threshold=$SIMPLIFY")
         return pick(JSONObject(shape), city.lat, city.lon)
     }
 
@@ -103,9 +137,8 @@ class CityOutlines(private val dir: File, private val agent: String) {
         last = System.currentTimeMillis()
     }
 
-    private fun get(url: String): String? = runCatching { getOnce(url) }.getOrNull()
-
-    private fun getOnce(url: String): String? {
+    /** The body of a good answer. A failed request, offline or refused, throws, so it is tried again later. */
+    private fun get(url: String): String {
         pace()
         val c = URL(url).openConnection() as HttpURLConnection
         c.connectTimeout = 15_000
@@ -113,7 +146,8 @@ class CityOutlines(private val dir: File, private val agent: String) {
         // OpenStreetMap's search asks every app to say who it is.
         c.setRequestProperty("User-Agent", agent)
         return try {
-            if (c.responseCode !in 200..299) null else c.inputStream.bufferedReader().use { it.readText() }
+            if (c.responseCode !in 200..299) throw java.io.IOException("HTTP ${c.responseCode}")
+            c.inputStream.bufferedReader().use { it.readText() }
         } finally {
             c.disconnect()
         }
@@ -126,8 +160,8 @@ class CityOutlines(private val dir: File, private val agent: String) {
 
         /**
          * The boundary relation, of those that hold a city's centre, that is the city: its name
-         * the same as one of [names], else holding one; then the smallest unit, a municipality
-         * before a county. Null when none carries the name, so a town never gets its county.
+         * the same as one of [names], else holding one at municipal level; then the smallest unit.
+         * Null when none carries the name, so a town never gets its county.
          */
         fun boundaryFor(found: JSONObject, names: List<String>): Long? {
             fun norm(s: String?) = java.text.Normalizer.normalize(s.orEmpty(), java.text.Normalizer.Form.NFD)
@@ -140,8 +174,10 @@ class CityOutlines(private val dir: File, private val agent: String) {
                 val have = listOf("name", "name:en", "int_name", "official_name").map { norm(t.optString(it)) }.filter { it.isNotEmpty() }.toSet()
                 val exact = (want intersect have).isNotEmpty()
                 val loose = want.any { n -> have.any { h -> h.split(' ', '-').contains(n) || h.startsWith("$n ") } }
-                if (!exact && !loose) return@mapNotNull null
                 val level = t.optString("admin_level").toIntOrNull() ?: 0
+                // A name that only holds the town's is a municipality at most, never a county
+                // or a region named after its main town.
+                if (!exact && !(loose && level >= 7)) return@mapNotNull null
                 Triple(exact, level, e.optLong("id"))
             }.maxWithOrNull(compareBy({ it.first }, { it.second }))?.third
         }
@@ -154,7 +190,7 @@ class CityOutlines(private val dir: File, private val agent: String) {
             val features = found.optJSONArray("features") ?: return null
             return (0 until features.length()).mapNotNull { i ->
                 val g = features.optJSONObject(i)?.optJSONObject("geometry") ?: return@mapNotNull null
-                parseGeometry(g).takeIf { s -> s.isNotEmpty() && s.any { it.holds(lat, lon) } }
+                parseGeometry(g).takeIf { s -> s.isNotEmpty() && s.any { it.holds(lat, lon) } && townSized(s) }
             }.minByOrNull { s -> s.sumOf { area(it.outer) } }
         }
 
@@ -186,6 +222,13 @@ class CityOutlines(private val dir: File, private val agent: String) {
                 ys[i] = p.getDouble(1)
             }
             return Ring(xs, ys)
+        }
+
+        /** No town spans more than about two degrees; anything wider is a county or a region. */
+        private fun townSized(shapes: List<Shape>): Boolean {
+            val xs = shapes.flatMap { it.outer.xs.asList() }
+            val ys = shapes.flatMap { it.outer.ys.asList() }
+            return xs.max() - xs.min() <= 2.0 && ys.max() - ys.min() <= 2.0
         }
 
         private fun Shape.holds(lat: Double, lon: Double) = inside(outer, lat, lon) && holes.none { inside(it, lat, lon) }

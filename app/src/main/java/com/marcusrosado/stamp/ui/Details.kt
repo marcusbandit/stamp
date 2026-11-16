@@ -82,6 +82,7 @@ class DetailActions(
     val onRating: (id: String, rating: Int) -> Unit,
     val onAddTrip: (id: String) -> Unit,
     val onUpdateTrip: (trip: Trip) -> Unit,
+    val onRenameTrip: (tripId: String, name: String) -> Unit,
     val onRemoveTrip: (id: String, tripId: String) -> Unit,
     /** A null trip puts the city on a new visit. */
     val onAddCity: (id: String, tripId: String?, cityId: String) -> Unit,
@@ -105,9 +106,9 @@ class DetailActions(
     val onUpdateMemory: (tripId: String, memory: Memory) -> Unit,
     val onRemoveMemory: (tripId: String, memoryId: String) -> Unit,
     /** Keeps memories with a place of a country, or the country itself when the place is null. */
-    val onAddPlaceMemories: (id: String, place: String?, memories: List<Memory>) -> Unit = { _, _, _ -> },
-    val onUpdatePlaceMemory: (id: String, memory: Memory) -> Unit = { _, _ -> },
-    val onRemovePlaceMemory: (id: String, memoryId: String) -> Unit = { _, _ -> },
+    val onAddPlaceMemories: (id: String, place: String?, memories: List<Memory>) -> Unit,
+    val onUpdatePlaceMemory: (id: String, memory: Memory) -> Unit,
+    val onRemovePlaceMemory: (id: String, memoryId: String) -> Unit,
     val onAddRegion: (id: String, regionId: String) -> Unit,
     val onRemoveRegion: (id: String, regionId: String) -> Unit,
 )
@@ -205,11 +206,12 @@ fun TripsSection(
                 ) {
                     // Living somewhere is not a numbered stay: it says whether the user still does.
                     // A named trip shows its name; the rest keep their number.
-                    if (!lived || t.name.isNotBlank()) Text(
+                    val named = t.name.isNotBlank()
+                    if (!lived || named) Text(
                         t.title("Visit ${i + 1}"),
-                        modifier = if (t.name.isBlank()) Modifier.width(72.dp) else Modifier.widthIn(max = 160.dp).padding(end = 12.dp),
+                        modifier = if (named) Modifier.widthIn(max = 160.dp).padding(end = 12.dp) else Modifier.width(72.dp),
                         style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = if (t.name.isBlank()) null else androidx.compose.ui.text.font.FontWeight.Medium,
+                        fontWeight = if (named) FontWeight.Medium else null,
                         maxLines = 1,
                         overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                     )
@@ -245,6 +247,7 @@ fun TripsSection(
                     if (lived) stayLabel(t) else rangeLabel(t.date, t.until),
                     t.places.size.takeIf { it > 0 }?.let { if (it == 1) "1 city" else "$it cities" },
                     t.memories.size.takeIf { it > 0 }?.let { if (it == 1) "1 memory" else "$it memories" },
+                    t.name.takeIf { it.isNotBlank() }?.let { "its name" },
                 ).joinToString(", ").ifEmpty { "Nothing filled in yet" },
                 "Remove",
             ),
@@ -684,24 +687,36 @@ private fun DateRow(label: String, value: String?, onClick: () -> Unit) {
     }
 }
 
+/** Whether a trip's stop, or with null the trip as a whole, belongs to a place. */
+typealias InPlace = (trip: Trip, stop: String?) -> Boolean
+
+/** A city's or pin's own stops: any stop at [place], a second stop there included. */
+fun stopsAt(place: String): InPlace = { _, stop -> stop?.let(::placeIdOf) == place }
+
 /**
  * Every memory of place [place] of [visit], or of the whole country when null: those kept for
- * the place itself and those from its trips' stops there, oldest first.
+ * the place itself, and those from trips whose stop [inPlace] says is there, oldest first.
  */
-fun memoriesAt(visit: Visit, place: String?): List<ShownMemory> {
+fun memoriesAt(visit: Visit, place: String?, inPlace: InPlace): List<ShownMemory> {
     val own = visit.memories.filter { place == null || it.place == place }.map { ShownMemory(it, null) }
-    val fromTrips = visit.trips.flatMap { t ->
-        t.memories.filter { m -> place == null || m.place?.let { p -> com.marcusrosado.stamp.data.placeIdOf(p) } == place }.map { ShownMemory(it, t.id) }
-    }
+    val fromTrips = visit.trips.flatMap { t -> t.memories.filter { m -> inPlace(t, m.place) }.map { ShownMemory(it, t.id) } }
     return (own + fromTrips).distinctBy { it.memory.media ?: ("text:" + it.memory.id) }
         .sortedBy { if (it.memory.takenMs > 0) it.memory.takenMs else Long.MAX_VALUE }
 }
 
-/** The memories of a place as a section, kept with country [id]; [place] null is the country itself. */
+/**
+ * The memories of a place as a section, kept with country [id]; [place] null is the country
+ * itself. [inPlace] says which trips' memories are of the place: a stop at a city by default,
+ * every stop in a region for a region, and only those inside the country for a country, so a
+ * trip across a border shows each country its own.
+ */
 @Composable
-fun MemoriesOf(id: String, place: String?, where: String, visit: Visit, near: Pair<Double, Double>?, actions: DetailActions) {
-    val shown = remember(visit, place) { memoriesAt(visit, place) }
-    val trips = remember(visit, place) { if (place == null) visit.trips else visit.trips.filter { place in it.places } }
+fun MemoriesOf(
+    id: String, place: String?, where: String, visit: Visit, near: Pair<Double, Double>?, actions: DetailActions,
+    inPlace: InPlace = if (place == null) { _, _ -> true } else stopsAt(place),
+) {
+    val shown = remember(visit, place, inPlace) { memoriesAt(visit, place, inPlace) }
+    val trips = remember(visit, place, inPlace) { if (place == null) visit.trips else visit.trips.filter { t -> t.places.any { inPlace(t, it) } } }
     PlaceMemories(
         where = where,
         memories = shown,
