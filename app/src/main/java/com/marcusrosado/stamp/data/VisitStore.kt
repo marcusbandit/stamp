@@ -749,9 +749,9 @@ class VisitStore(private val file: File) {
         fun kept(m: Mark, k: String) = k in used || '.' in k || k in m.livedPlaces || k in m.wantCities
         marks = marks.mapValues { (_, m) -> if (m.cityNotes.keys.all { kept(m, it) }) m else m.copy(cityNotes = m.cityNotes.filterKeys { kept(m, it) }) }
         // A memory of a pin that went stays with the country.
-        marks = marks.mapValues { (_, m) ->
-            if (m.memories.none { it.place != null && isPin(it.place) && it.place !in pins }) m
-            else m.copy(memories = m.memories.map { if (it.place != null && isPin(it.place) && it.place !in pins) it.copy(place = null) else it })
+        fun gone(m: Memory) = m.place != null && isPin(m.place) && m.place !in pins
+        if (marks.values.any { mk -> mk.memories.any(::gone) }) marks = marks.mapValues { (_, m) ->
+            if (m.memories.none(::gone)) m else m.copy(memories = m.memories.map { if (gone(it)) it.copy(place = null) else it })
         }
         settled = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<Trip, Boolean>(trips.size * 2)).apply { addAll(trips) }
         settledGeo = g

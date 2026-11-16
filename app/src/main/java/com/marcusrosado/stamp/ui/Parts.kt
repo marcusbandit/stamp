@@ -137,6 +137,8 @@ fun CountryDetail(
     /** With whole countries, the visits of its parts, which clearing the country clears too. */
     partVisits: List<Visit> = emptyList(),
     onOpenPart: (String) -> Unit = {},
+    /** Whether a trip's stop, or the trip itself with null, is in this country: its memories show here. */
+    inCountry: InPlace = { _, _ -> true },
 ) {
     // A change of mark that would throw something away, waiting for the user to say yes.
     var asking by remember(country.id) { mutableStateOf<Pair<TravelState?, Loss>?>(null) }
@@ -201,7 +203,7 @@ fun CountryDetail(
                 onLoved = { actions.onLoved(country.id, it) },
                 onRating = { actions.onRating(country.id, it) },
             )
-            MemoriesOf(country.id, null, country.name, visit, near = null, actions = actions)
+            MemoriesOf(country.id, null, country.name, visit, near = null, actions = actions, inPlace = inCountry)
             TripsSection(
                 visit.trips,
                 lived = visit.state == TravelState.Lived,

@@ -847,7 +847,6 @@ private fun DatePart(d: PartialDate?, guessed: Boolean) {
     )
 }
 
-/** A stop's photos, videos and moments in a row, ending with a tile that adds another. */
 /** A memory as a place shows it, with the trip it was kept on, or null when kept for the place itself. */
 class ShownMemory(val memory: Memory, val tripId: String?)
 
@@ -861,7 +860,7 @@ fun PlaceMemories(
     memories: List<ShownMemory>,
     /** The trips that went there, whose dates find photos to suggest. */
     trips: List<Trip>,
-    /** Where the place is; null for a whole country, whose photos are only suggested for a single trip. */
+    /** Where the place is; null for a whole country, which offers the gallery and writing only. */
     near: Pair<Double, Double>?,
     onAdd: (List<Memory>) -> Unit,
     onUpdate: (ShownMemory, Memory) -> Unit,
@@ -883,7 +882,8 @@ fun PlaceMemories(
     }
     if (adding) {
         val dated = trips.filter { it.date != null || it.until != null }
-        val win = if (near == null && dated.size != 1) null else window(
+        // A whole country has no point to keep suggestions near, so it offers the gallery only.
+        val win = if (near == null) null else window(
             dated.mapNotNull { it.date ?: it.until }.minOrNull(),
             dated.mapNotNull { it.until ?: it.date }.maxOrNull(),
         )
@@ -908,6 +908,7 @@ fun PlaceMemories(
     }
 }
 
+/** A stop's photos, videos and moments in a row, ending with a tile that adds another. */
 @Composable
 private fun MemoryRow(memories: List<Memory>, onOpen: (Memory) -> Unit, onAdd: () -> Unit) {
     // With nothing kept yet, the memory button beside the dates asks instead of an empty tile.
