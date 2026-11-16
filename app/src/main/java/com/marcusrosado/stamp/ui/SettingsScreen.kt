@@ -169,13 +169,15 @@ fun SettingsScreen(state: AppState, contentPadding: PaddingValues, modifier: Mod
     val stamp = state.app
     val update by stamp.updates.state.collectAsStateWithLifecycle()
 
+    // The hourly look counts as on only while Android still lets it run.
+    val hourlyOn = state.hourly && com.marcusrosado.stamp.data.Hourly.allowed(LocalContext.current)
     fun summary(p: Page): String? = when (p) {
         Page.Appearance -> Looks.firstOrNull { it.id == state.look }?.name ?: "Match phone"
         Page.Map -> if (state.split) "Islands as separate places" else "Islands as part of their country"
         Page.Memories -> access.label
         Page.Heat -> when {
-            state.seen.isEmpty() && !state.hourly -> "Off"
-            state.hourly -> "Every hour · ${placesLabel(state.seen.size)}"
+            state.seen.isEmpty() && !hourlyOn -> "Off"
+            hourlyOn -> "Every hour · ${placesLabel(state.seen.size)}"
             else -> placesLabel(state.seen.size)
         }
         Page.Backup -> if (state.lastBackup > 0) "Last backup ${date(state.lastBackup)}" else "Not backed up yet"
