@@ -33,6 +33,10 @@ private class PlayPro(context: Context, private val flags: Flags) : ProStore, Pu
 
     @Volatile private var details: ProductDetails? = null
 
+    // When a purchase last came in, so an older list of purchases arriving after it never locks
+    // Pro again. Both callbacks run on the main thread.
+    private var boughtAt = 0L
+
     private val client = BillingClient.newBuilder(context)
         .setListener(this)
         .enablePendingPurchases(PendingPurchasesParams.newBuilder().enableOneTimeProducts().build())
@@ -49,17 +53,19 @@ private class PlayPro(context: Context, private val flags: Flags) : ProStore, Pu
                 if (result.responseCode == BillingClient.BillingResponseCode.OK) load()
             }
 
-            // Asked again on the next refresh or buy; the cached flag holds meanwhile.
+            // Asked again on the next refresh, resume or buy; the cached flag holds meanwhile.
             override fun onBillingServiceDisconnected() = Unit
         })
     }
 
     private fun load() {
+        val asked = System.nanoTime()
         client.queryPurchasesAsync(
             QueryPurchasesParams.newBuilder().setProductType(BillingClient.ProductType.INAPP).build(),
         ) { result, purchases ->
-            // Play's own list is the truth: a refund takes Pro away again.
-            if (result.responseCode == BillingClient.BillingResponseCode.OK) take(purchases, complete = true)
+            // Play's own list is the truth, so a refund takes Pro away again; unless a purchase
+            // came in after the list was asked for.
+            if (result.responseCode == BillingClient.BillingResponseCode.OK) take(purchases, complete = asked > boughtAt)
         }
         val product = QueryProductDetailsParams.Product.newBuilder()
             .setProductId(PRODUCT).setProductType(BillingClient.ProductType.INAPP).build()
@@ -86,18 +92,19 @@ private class PlayPro(context: Context, private val flags: Flags) : ProStore, Pu
 
     override fun onPurchasesUpdated(result: BillingResult, purchases: MutableList<Purchase>?) {
         when (result.responseCode) {
-            BillingClient.BillingResponseCode.OK -> take(purchases.orEmpty(), complete = false)
+            BillingClient.BillingResponseCode.OK -> { boughtAt = System.nanoTime(); take(purchases.orEmpty(), complete = false) }
             BillingClient.BillingResponseCode.ITEM_ALREADY_OWNED -> load()
             else -> Unit
         }
     }
 
-    override fun buy(activity: Activity) {
-        val d = details ?: run { connect(); return }
+    override fun buy(activity: Activity): Boolean {
+        val d = details
+        if (d == null || !client.isReady) { connect(); return false }
         val params = BillingFlowParams.newBuilder()
             .setProductDetailsParamsList(listOf(BillingFlowParams.ProductDetailsParams.newBuilder().setProductDetails(d).build()))
             .build()
-        client.launchBillingFlow(activity, params)
+        return client.launchBillingFlow(activity, params).responseCode == BillingClient.BillingResponseCode.OK
     }
 
     override fun refresh() = connect()

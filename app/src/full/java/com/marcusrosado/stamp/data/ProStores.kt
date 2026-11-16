@@ -12,6 +12,6 @@ fun proStore(context: Context, flags: Flags): ProStore = object : ProStore {
     override val sold = false
     override val unlocked: StateFlow<Boolean> = MutableStateFlow(true).asStateFlow()
     override val price: StateFlow<String?> = MutableStateFlow<String?>(null).asStateFlow()
-    override fun buy(activity: Activity) = Unit
+    override fun buy(activity: Activity) = false
     override fun refresh() = Unit
 }

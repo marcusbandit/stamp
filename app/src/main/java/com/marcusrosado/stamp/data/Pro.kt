@@ -18,8 +18,8 @@ interface ProStore {
     /** The price as Play shows it, once known. */
     val price: StateFlow<String?>
 
-    /** Opens Play's purchase sheet. */
-    fun buy(activity: Activity)
+    /** Opens Play's purchase sheet; false when Play cannot sell it right now, offline say. */
+    fun buy(activity: Activity): Boolean
 
     /** Asks Play again what the user owns, for a purchase made on another phone. */
     fun refresh()

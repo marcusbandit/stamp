@@ -151,6 +151,8 @@ class AppState(
     val onHeatMap: (Boolean) -> Unit = {},
     /** Whether Stamp notes where the phone is about once an hour. */
     val hourly: Boolean = false,
+    /** Whether the user turned the hourly look on, Pro or not, so it can always be turned off. */
+    val hourlyChosen: Boolean = false,
     val onHourly: (Boolean) -> Unit = {},
     /** Whether Stamp Pro is the user's; always in a build from source. */
     val pro: Boolean = true,
@@ -207,7 +209,8 @@ fun Root(app: StampApp) {
                 onHourly = app::setHourly,
                 seen = app.seen.points.value,
                 heatLocked = !proOwned,
-                onBuyPro = app.pro::buy,
+                onBuyPro = { a -> buyPro(app, a) },
+                proPrice = app.pro.price.collectAsStateWithLifecycle().value,
                 onTakeout = {
                     if (app.scanner.state.value !is ScanState.Running) app.scanner.cancel()
                     app.flags.set(FLAG_ONBOARDED, true)
@@ -244,7 +247,8 @@ fun Root(app: StampApp) {
                         onHourly = app::setHourly,
                         seen = app.seen.points.value,
                         heatLocked = !proOwned,
-                        onBuyPro = app.pro::buy,
+                        onBuyPro = { a -> buyPro(app, a) },
+                        proPrice = app.pro.price.collectAsStateWithLifecycle().value,
                         onTakeout = {
                             if (app.scanner.state.value !is ScanState.Running) app.scanner.cancel()
                             replaying = false
@@ -374,6 +378,12 @@ private fun App(
     val hourlyOn by app.hourly.on.collectAsStateWithLifecycle()
     val heatMap = heatMapOn && pro
     val hourly = hourlyOn && pro
+    // Pro is asked for again on every return to the app: a purchase on another phone, a pending
+    // one finished, or a refund. The hourly look runs only while Pro and the switch say so.
+    androidx.lifecycle.compose.LifecycleResumeEffect(Unit) { app.pro.refresh(); onPauseOrDispose { } }
+    LaunchedEffect(hourly) {
+        com.marcusrosado.stamp.data.Hourly.schedule(app, hourly && com.marcusrosado.stamp.data.Hourly.allowed(app))
+    }
     val keptOutlines by app.cityOutlines.kept.collectAsStateWithLifecycle()
     val logged = remember(visits) { visits.values.flatMapTo(HashSet()) { it.cities + it.wantCities + it.livedPlaces } }
     val loggedNow by rememberUpdatedState(logged)
@@ -539,10 +549,11 @@ private fun App(
             pro = pro,
             proSold = app.pro.sold,
             proPrice = proPrice,
-            onBuyPro = app.pro::buy,
+            onBuyPro = { a -> buyPro(app, a) },
             heatMap = heatMap,
             onHeatMap = app.heatMap::set,
             hourly = hourly,
+            hourlyChosen = hourlyOn,
             onHourly = app::setHourly,
             onFetchOutlines = app.fetchOutlines::set,
             onFollowLines = app.followLines::set,
@@ -573,7 +584,10 @@ private fun App(
         // from a home in another country included; a layover reached and left only by plane
         // needs none. Switched off, the kept packs go.
         LaunchedEffect(visits, places, airports, follow) {
-            if (!follow) { app.routePacks.clear(); return@LaunchedEffect }
+            // Switched off, the kept packs go. Without Pro they stay, so a Pro that comes back
+            // after a cold start with no network finds them still there.
+            if (!followOn) { app.routePacks.clear(); return@LaunchedEffect }
+            if (!follow) return@LaunchedEffect
             val plain = Journey(visits, places, airports)
             val codes = visits.values.filter { it.state == TravelState.Visited }.flatMap { v -> v.trips.map { it to v } }.distinctBy { it.first.id }
                 .flatMap { (t, v) ->
@@ -812,3 +826,10 @@ private fun UnreadableSave(app: StampApp) {
 
 /** What a set-aside file holds: its [text], the [places] this app can restore from it, if any. */
 private class SetAsideLook(val text: String?, val places: Int?, val newer: Boolean)
+
+/** Opens Play's purchase sheet for Pro, or says why it cannot right now. */
+private fun buyPro(app: StampApp, activity: android.app.Activity) {
+    if (!app.pro.buy(activity)) {
+        android.widget.Toast.makeText(activity, "Play cannot sell Stamp Pro right now. Try again in a moment.", android.widget.Toast.LENGTH_SHORT).show()
+    }
+}
