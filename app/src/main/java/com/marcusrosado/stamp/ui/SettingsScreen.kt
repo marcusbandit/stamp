@@ -504,6 +504,7 @@ private fun MapPage(state: AppState) {
     SwitchPref("Routes between cities", null, state.routes, state.onRoutes)
     if (state.routes) TravelLegend(Modifier.padding(start = 24.dp, end = 24.dp, top = 4.dp, bottom = 12.dp))
     SwitchPref("Follow railways and roads", null, state.followLines, state.onFollowLines)
+    SwitchPref("Fetch city outlines", null, state.fetchOutlines, state.onFetchOutlines)
     // Where the phone is: on asks for the rough location if the phone has not allowed it yet.
     val context = LocalContext.current
     val askHere = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->

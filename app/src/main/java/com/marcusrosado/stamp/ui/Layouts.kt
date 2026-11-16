@@ -532,7 +532,7 @@ private fun StampMap(
         value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
             val mine = state.visits.values.flatMap { it.cities + it.wantCities }.toSet()
             p.byId.values.filter { it.population >= 15_000 || it.id in mine }
-                .map { CityDot(it.id, it.lat, it.lon, it.population, it.id in mine) }
+                .map { CityDot(it.id, it.lat, it.lon, it.population, it.id in mine, it.name) }
         }
     }
     val wantCities = remember(state.visits, state.places) {
@@ -548,6 +548,7 @@ private fun StampMap(
         allCities = allCities,
         selectedRegion = (state.spot as? Spot.Region)?.regionId,
         selectedCity = (state.spot as? Spot.City)?.let { it.lat to it.lon },
+        selectedArea = state.spotArea.takeIf { state.spot is Spot.City },
         onViewport = if (selectable) state.onViewport else null,
         onCity = if (selectable) { id ->
             val c = state.places?.byId?.get(id)
@@ -578,9 +579,9 @@ private fun StampMap(
                     }
             }.distinct()
         },
-        areas = remember(state.visits, state.cityAreas) {
+        areas = remember(state.visits, state.cityAreas, state.keptOutlines) {
             state.visits.values.filter { it.state.counts }.flatMap { it.cities }.distinct()
-                .mapNotNull { state.cityAreas.of(it) }
+                .mapNotNull { state.cityAreas.of(it) ?: state.keptOutlines[it] }
         },
         cities = remember(state.visits, state.places) {
             // Only places the user has been: a Want to go country keeps its old visits but shows none.

@@ -124,6 +124,14 @@ class StampApp : Application() {
     /** Whether legs by train, car or bus follow the real rails and roads, fetched per country. */
     val followLines by lazy { Toggle(FLAG_NO_FOLLOW_LINES) }
 
+    /** Whether a tapped city's outline is fetched from OpenStreetMap when Stamp has none of its own. */
+    val fetchOutlines by lazy { Toggle(FLAG_NO_CITY_OUTLINES) }
+
+    /** Outlines fetched for cities, kept for the ones the user logged, outside the backup. */
+    val cityOutlines by lazy {
+        com.marcusrosado.stamp.data.CityOutlines(File(noBackupFilesDir, "city-outlines"), "Stamp/${BuildConfig.VERSION_NAME} (Android travel map)")
+    }
+
     /** The rail and road packs, kept outside the user's backup: map data, fetched again at will. */
     val routePacks by lazy { com.marcusrosado.stamp.data.RoutePacks(File(noBackupFilesDir, "routes"), scope) }
 
@@ -217,6 +225,7 @@ class StampApp : Application() {
             }
         }
         cityAreas.start()
+        scope.launch(Dispatchers.IO) { cityOutlines.start() }
         // Grants for photos of removed memories, visits or countries go back to Android.
         // Never while a file that could not be read is still set aside: an empty store would hand
         // every grant back, and restoring that file would then point at photos Stamp may no longer open.
@@ -241,6 +250,7 @@ class StampApp : Application() {
         private const val FLAG_NO_MAP_PHOTOS = "no_map_photos"
         private const val FLAG_NO_ROUTES = "no_routes"
         private const val FLAG_NO_FOLLOW_LINES = "no_follow_lines"
+        private const val FLAG_NO_CITY_OUTLINES = "no_city_outlines"
         private const val FLAG_NO_HERE = "no_here"
         private const val FLAG_NO_UPDATE_CHECK = "no_update_check"
         private const val MAP_VIEW_FILE = "map_view.txt"

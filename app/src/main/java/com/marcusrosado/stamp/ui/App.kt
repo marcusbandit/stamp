@@ -66,6 +66,10 @@ class AppState(
     /** Null for the moment it takes to read the city list after launch. */
     val places: Places?,
     val cityAreas: com.marcusrosado.stamp.data.CityAreas,
+    /** Outlines fetched for cities the user logged, kept on the phone, by city id. */
+    val keptOutlines: Map<String, List<com.marcusrosado.stamp.data.Shape>> = emptyMap(),
+    /** The outline of the city whose card is open, once it is known; null while it is not. */
+    val spotArea: List<com.marcusrosado.stamp.data.Shape>? = null,
     val visits: Map<String, Visit>,
     val home: String?,
     val selected: Country?,
@@ -138,6 +142,9 @@ class AppState(
     /** Whether train, car and bus legs follow the real rails and roads. */
     val followLines: Boolean = true,
     val onFollowLines: (Boolean) -> Unit = {},
+    /** Whether a tapped city's outline is fetched when Stamp has none. */
+    val fetchOutlines: Boolean = true,
+    val onFetchOutlines: (Boolean) -> Unit = {},
     /** When the last backup was saved, epoch ms, 0 for never. */
     val lastBackup: Long,
     /** Whether the country the phone is in gets marked and the map opens there. */
@@ -311,6 +318,21 @@ private fun App(
         value = runCatching { app.cityAreas.await() }.getOrNull() ?: com.marcusrosado.stamp.data.CityAreas.EMPTY
     }
 
+    // A tapped city's outline: the bundled one, one kept or fetched before, or one fetched now.
+    // One the user logged is kept on the phone; any other only until the app closes.
+    val fetchOutlines by app.fetchOutlines.on.collectAsStateWithLifecycle()
+    val keptOutlines by app.cityOutlines.kept.collectAsStateWithLifecycle()
+    val logged = remember(visits) { visits.values.flatMapTo(HashSet()) { it.cities + it.wantCities + it.livedPlaces } }
+    val citySpot = (spot as? Spot.City)?.cityId
+    val spotArea by produceState<List<com.marcusrosado.stamp.data.Shape>?>(null, citySpot, cityAreas, fetchOutlines, places) {
+        val id = citySpot ?: run { value = null; return@produceState }
+        value = cityAreas.of(id) ?: app.cityOutlines.known(id)
+        if (value != null || !fetchOutlines) return@produceState
+        val city = places?.byId?.get(id) ?: return@produceState
+        value = app.cityOutlines.fetch(city, logged = id in app.visits.visits.value.values.flatMap { it.cities + it.wantCities + it.livedPlaces })
+    }
+    LaunchedEffect(logged) { app.cityOutlines.keepLogged(logged) }
+
     // The card that holds a trip: its country's, or with islands counted as part of their
     // country, the island's own when the country's card does not hold it (a Honolulu trip with
     // the United States itself unmarked), so the trip can always open.
@@ -338,6 +360,8 @@ private fun App(
             atlas = atlas,
             places = places,
             cityAreas = cityAreas,
+            keptOutlines = keptOutlines,
+            spotArea = spotArea,
             visits = visits,
             home = home,
             selected = selectedId?.let { atlas.byId[it] },
@@ -449,6 +473,8 @@ private fun App(
             spot = spot,
             onSpot = { spot = it; if (it != null) selectedId = null },
             followLines = follow,
+            fetchOutlines = fetchOutlines,
+            onFetchOutlines = app.fetchOutlines::set,
             onFollowLines = app.followLines::set,
             lastBackup = lastBackup,
             here = here,

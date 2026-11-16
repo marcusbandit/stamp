@@ -1,8 +1,9 @@
 # CLAUDE.md
 
 Stamp is an Android travel tracker in Kotlin and Jetpack Compose. You mark countries on a
-MapLibre world map drawn from bundled Natural Earth shapes, with no tiles. The only network use is
-downloading rail and road packs for legs that follow real lines, and the update check.
+MapLibre world map drawn from bundled Natural Earth shapes, with no tiles. The only network uses are
+downloading rail and road packs for legs that follow real lines, fetching a tapped city's outline
+from OpenStreetMap, and the update check.
 README.md has the code layout and the build commands. This file holds the rules for working
 on it.
 
@@ -32,7 +33,11 @@ on it.
 - The user's data never leaves the phone. There are no accounts. With the owner's go-ahead
   (2026-11-13) the app may download public map data: per-country rail and road packs from the
   `marcusbandit/stamp-data` repository, asked for by country code only, kept outside the backup
-  and switched off in Settings. Nothing about the user goes with any request.
+  and switched off in Settings. With the owner's ask (2026-11-16) a tapped city with no bundled
+  outline has its outline fetched from OpenStreetMap (Nominatim, then Overpass), asked for by the
+  city's name, country code and centre only: kept on the phone outside the backup for a city the
+  user logged, in memory for the session otherwise, and switched off in Settings, Map. Nothing
+  about the user goes with any request.
 - **The GitHub copy updates itself (owner's ask, 2026-11-15).** On launch it asks the GitHub API
   for the latest release, prompts once per new version, and on Update downloads `stamp.apk` into
   Android's installer (`data/Updates.kt`). A switch in Settings, About Stamp turns the check off.
