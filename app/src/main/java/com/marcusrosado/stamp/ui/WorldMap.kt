@@ -1051,22 +1051,24 @@ private class Outline(
     // outline is megabytes.
     private val coarseCache = TextCache(KEEP_COARSE_CHARS)
     private val fineCache = TextCache(KEEP_FINE_CHARS)
-    private var coarseJob: kotlinx.coroutines.Job? = null
+    // Big outlines being written off the main thread. One is never stopped by the next tap: it
+    // lands in the cache, so tapping back to it does not write it out again.
+    private val writing = HashSet<String>()
     private var fineJob: kotlinx.coroutines.Job? = null
     private var shown: String? = null
+    private var style: Style? = null
 
     /** A new style starts with empty sources. */
     fun reset() {
         shown = null
-        coarseJob?.cancel()
         fineJob?.cancel()
     }
 
     fun show(style: Style, id: String?) {
         if (id == shown) return
         shown = id
+        this.style = style
         val src = style.getSourceAs<GeoJsonSource>(SOURCE_SELECTED) ?: return
-        coarseJob?.cancel()
         val shapes = id?.let { shapesOf(it) }.orEmpty()
         val keptCoarse = id?.let { coarseCache[it] }
         when {
@@ -1078,11 +1080,16 @@ private class Outline(
             pointsIn(shapes) <= OUTLINE_NOW_POINTS -> outlineJson(shapes).let { coarseCache.put(id, it); src.setGeoJson(it) }
             else -> {
                 src.setGeoJson(EMPTY_DATA)
-                coarseJob = scope.launch {
-                    val json = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { outlineJson(shapes) }
+                if (writing.add(id)) scope.launch {
+                    val json = try {
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { outlineJson(shapes) }
+                    } finally {
+                        writing.remove(id)
+                    }
                     coarseCache.put(id, json)
                     if (shown != id) return@launch
-                    runCatching { style.getSourceAs<GeoJsonSource>(SOURCE_SELECTED)?.setGeoJson(json) }
+                    // The style it was tapped on may have been replaced meanwhile: the latest one.
+                    runCatching { this@Outline.style?.getSourceAs<GeoJsonSource>(SOURCE_SELECTED)?.setGeoJson(json) }
                 }
             }
         }
@@ -1123,8 +1130,11 @@ private class Outline(
     }
 }
 
-/** About how much 1:50m and 1:10m outline text [Outline] keeps, in characters. */
-private const val KEEP_COARSE_CHARS = 1_000_000
+/**
+ * About how much 1:50m and 1:10m outline text [Outline] keeps, in characters. Canada's 1:50m
+ * outline is close to half a million, so going back and forth between the biggest few keeps them.
+ */
+private const val KEEP_COARSE_CHARS = 2_500_000
 private const val KEEP_FINE_CHARS = 2_000_000
 
 /** Up to how many points a tapped country's 1:50m outline is written on the main thread. */
