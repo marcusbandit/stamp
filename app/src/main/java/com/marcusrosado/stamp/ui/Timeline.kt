@@ -2,6 +2,14 @@ package com.marcusrosado.stamp.ui
 
 import kotlin.math.roundToInt
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateCentroid
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.ui.input.pointer.positionChanged
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.outlined.Map
@@ -148,6 +156,10 @@ class TimelineActions(
     val onAddMemories: (List<Memory>) -> Unit,
     val onUpdateMemory: (Memory) -> Unit,
     val onRemoveMemory: (String) -> Unit,
+    /** Picks the photo the trip's header shows, by memory id. */
+    val onCover: (String) -> Unit = {},
+    /** Moves a memory to a stop of the trip, or to the trip as a whole when the stop is null. */
+    val onMoveMemory: (memoryId: String, stop: String?) -> Unit = { _, _ -> },
     /** Copies the trip, route and all, with no dates; null when it cannot be. */
     val onDuplicate: (() -> Unit)? = null,
     /** Removes the trip; null when it is the only one its country keeps. */
@@ -249,8 +261,25 @@ fun VisitTimeline(
     }
     // The stop a memory is being added to; "" is the visit as a whole.
     var adding by remember { mutableStateOf<String?>(null) }
-    var viewing by remember { mutableStateOf<Memory?>(null) }
-    val hero = trip.memories.firstOrNull { it.media != null && !it.video }
+    // The memory open full size, by id, and the one whose new stop is being picked.
+    var viewing by remember { mutableStateOf<String?>(null) }
+    var moving by remember { mutableStateOf<String?>(null) }
+    val hero = trip.coverPhoto
+    val loose = trip.memories.filter { it.place == null || it.place !in trip.cities }
+    // Every memory in the order the timeline shows them, so a swipe in the viewer goes to the
+    // one beside it on screen: the trip's own first, then each stop's.
+    val inOrder = loose + stops.flatMap { s -> trip.memories.filter { it.place == s } }
+    val undoable = LocalUndo.current != null
+    var removing by remember { mutableStateOf<Memory?>(null) }
+    val memoryMenu = MemoryMenu(
+        cover = hero?.id,
+        canMove = { m -> moveTargets(m, stops).isNotEmpty() },
+        moveLabel = if (lived) "Move to another home" else "Move to another stop",
+        onCover = { actions.onCover(it.id) },
+        onMove = { moving = it.id },
+        // Removing offers Undo; without one to offer, it asks first.
+        onRemove = { if (undoable) actions.onRemoveMemory(it.id) else removing = it },
+    )
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
@@ -294,7 +323,6 @@ fun VisitTimeline(
                         onMap = { showMap = !showMap },
                     )
                 }
-                val loose = trip.memories.filter { it.place == null || it.place !in trip.cities }
                 item(key = "start") {
                     Node(
                         icon = { Icon(if (lived) Icons.Outlined.Home else Icons.Outlined.Flight, contentDescription = null, modifier = Modifier.size(18.dp)) },
@@ -323,7 +351,7 @@ fun VisitTimeline(
                                 Bubble(Icons.Outlined.AddAPhoto, "Add a memory") { adding = "" }
                             }
                         }
-                        MemoryRow(loose, onOpen = { viewing = it }, onAdd = { adding = "" })
+                        MemoryRow(loose, onOpen = { viewing = it.id }, onAdd = { adding = "" }, menu = memoryMenu)
                     }
                 }
                 if (journeyed && trip.cities.isNotEmpty()) {
@@ -400,7 +428,7 @@ fun VisitTimeline(
                                 if (kept.isEmpty()) Bubble(Icons.Outlined.AddAPhoto, "Add a memory") { adding = place }
                                 if (!lived) Bubble(Icons.Filled.SubdirectoryArrowRight, "Add a day trip") { actions.onAddDayPlace(place) }
                             }
-                            MemoryRow(kept, onOpen = { viewing = it }, onAdd = { adding = place })
+                            MemoryRow(kept, onOpen = { viewing = it.id }, onAdd = { adding = place }, menu = memoryMenu)
                         }
                     }
                     if (!lived) stops.getOrNull(i + 1)?.let { next ->
@@ -568,12 +596,32 @@ fun VisitTimeline(
                 onDismiss = { adding = null },
             )
         }
-        viewing?.let { m ->
+        viewing?.let { id ->
             MemoryViewer(
-                memory = trip.memories.firstOrNull { it.id == m.id } ?: m,
+                memories = inOrder,
+                startId = id,
                 onSave = { actions.onUpdateMemory(it) },
-                onRemove = { actions.onRemoveMemory(m.id); viewing = null },
+                onRemove = { actions.onRemoveMemory(it.id) },
                 onDismiss = { viewing = null },
+            )
+        }
+        moving?.let { id ->
+            val m = trip.memories.firstOrNull { it.id == id }
+            if (m == null) { moving = null; return@let }
+            MoveMemoryDialog(
+                targets = moveTargets(m, stops),
+                stopName = { placeOf(it, visit, places)?.name ?: journey.place(it)?.name ?: "Unknown place" },
+                stopNumber = { stops.indexOf(it) + 1 },
+                whole = if (lived) "The whole stay" else "The whole trip",
+                onPick = { stop -> actions.onMoveMemory(id, stop); moving = null },
+                onDismiss = { moving = null },
+            )
+        }
+        removing?.let { m ->
+            LossDialog(
+                memoryLoss(m),
+                onConfirm = { removing = null; actions.onRemoveMemory(m.id) },
+                onDismiss = { removing = null },
             )
         }
     }
@@ -935,26 +983,95 @@ fun PlaceMemories(
         )
     }
     viewing?.let { id ->
-        val shown = memories.firstOrNull { it.memory.id == id }
-        if (shown == null) { viewing = null; return@let }
+        if (memories.none { it.memory.id == id }) { viewing = null; return@let }
+        fun shown(m: Memory) = memories.firstOrNull { it.memory.id == m.id }
         MemoryViewer(
-            memory = shown.memory,
-            onSave = { onUpdate(shown, it) },
-            onRemove = { onRemove(shown); viewing = null },
+            memories = memories.map { it.memory },
+            startId = id,
+            onSave = { m -> shown(m)?.let { onUpdate(it, m) } },
+            onRemove = { m -> shown(m)?.let(onRemove) },
             onDismiss = { viewing = null },
         )
     }
 }
 
+/** What a long press on one of a trip's memories offers. */
+private class MemoryMenu(
+    /** The memory the trip's header shows now. */
+    val cover: String?,
+    val canMove: (Memory) -> Boolean,
+    val moveLabel: String,
+    val onCover: (Memory) -> Unit,
+    val onMove: (Memory) -> Unit,
+    val onRemove: (Memory) -> Unit,
+)
+
+/**
+ * Where a memory can move: the trip as a whole (null) unless it is there already, then every
+ * stop but its own.
+ */
+private fun moveTargets(m: Memory, stops: List<String>): List<String?> {
+    val here = m.place?.takeIf { it in stops }
+    return (if (here != null) listOf<String?>(null) else emptyList()) + stops.filter { it != here }
+}
+
+/** What removing a memory takes, asked only where no Undo can be offered. */
+private fun memoryLoss(m: Memory) = Loss(
+    "Remove this memory?",
+    when {
+        m.media == null -> "What you wrote goes with it."
+        else -> "The ${if (m.video) "video" else "photo"} stays in your gallery" +
+            if (m.text.isNotBlank()) "; its note goes." else "."
+    },
+    "Remove",
+)
+
+/** Picks the stop a memory moves to, or the trip as a whole. A tap moves it. */
+@Composable
+private fun MoveMemoryDialog(
+    targets: List<String?>,
+    stopName: (String) -> String,
+    stopNumber: (String) -> Int,
+    whole: String,
+    onPick: (String?) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    SeamAlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Move to") },
+        text = {
+            Column {
+                for (t in targets) {
+                    Row(
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { onPick(t) }.padding(horizontal = 8.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(Modifier.size(28.dp).clip(CircleShape).background(MaterialTheme.colorScheme.secondaryContainer), contentAlignment = Alignment.Center) {
+                            if (t == null) {
+                                Icon(Icons.Outlined.Flight, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSecondaryContainer)
+                            } else {
+                                Text("${stopNumber(t)}", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSecondaryContainer)
+                            }
+                        }
+                        Spacer(Modifier.width(16.dp))
+                        Text(if (t == null) whole else stopName(t), style = MaterialTheme.typography.bodyLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
 /** A stop's photos, videos and moments in a row, ending with a tile that adds another. */
 @Composable
-private fun MemoryRow(memories: List<Memory>, onOpen: (Memory) -> Unit, onAdd: () -> Unit) {
+private fun MemoryRow(memories: List<Memory>, onOpen: (Memory) -> Unit, onAdd: () -> Unit, menu: MemoryMenu? = null) {
     // With nothing kept yet, the memory button beside the dates asks instead of an empty tile.
     if (memories.isEmpty()) return
     Spacer(Modifier.height(10.dp))
     // A plain scrolling row, not a lazy one: the timeline row around it measures its height.
     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        for (m in memories) androidx.compose.runtime.key(m.id) { MemoryTile(m, onClick = { onOpen(m) }) }
+        for (m in memories) androidx.compose.runtime.key(m.id) { MemoryTile(m, onClick = { onOpen(m) }, menu = menu) }
         run {
             Box(
                 Modifier
@@ -977,8 +1094,39 @@ private fun MemoryRow(memories: List<Memory>, onOpen: (Memory) -> Unit, onAdd: (
 private val TILE: Dp = 96.dp
 
 @Composable
-private fun MemoryTile(m: Memory, onClick: () -> Unit) {
+private fun MemoryTile(m: Memory, onClick: () -> Unit, menu: MemoryMenu? = null) {
     val shape = RoundedCornerShape(16.dp)
+    val haptics = LocalHapticFeedback.current
+    var open by remember { mutableStateOf(false) }
+    // Pressed and held, a trip's memory opens what can be done with it, beside the tile.
+    val press = Modifier.combinedClickable(
+        onClick = onClick,
+        onLongClickLabel = if (menu != null) "Memory options" else null,
+        onLongClick = if (menu != null) ({ haptics.performHapticFeedback(HapticFeedbackType.LongPress); open = true }) else null,
+    )
+    // One box holds the tile and its menu, so the menu opens over the tile and the row's spacing
+    // stays the same.
+    Box {
+        MemoryFace(m, shape, press)
+        if (menu != null) {
+            androidx.compose.material3.DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+                if (m.isPhoto && menu.cover != m.id) {
+                    androidx.compose.material3.DropdownMenuItem(text = { Text("Set as cover") }, onClick = { open = false; menu.onCover(m) })
+                }
+                if (menu.canMove(m)) {
+                    androidx.compose.material3.DropdownMenuItem(text = { Text(menu.moveLabel) }, onClick = { open = false; menu.onMove(m) })
+                }
+                androidx.compose.material3.DropdownMenuItem(
+                    text = { Text("Remove", color = MaterialTheme.colorScheme.error) },
+                    onClick = { open = false; menu.onRemove(m) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun MemoryFace(m: Memory, shape: RoundedCornerShape, press: Modifier) {
     if (m.media == null) {
         Box(
             Modifier
@@ -986,7 +1134,7 @@ private fun MemoryTile(m: Memory, onClick: () -> Unit) {
                 .height(TILE)
                 .clip(shape)
                 .background(MaterialTheme.colorScheme.secondaryContainer)
-                .clickable(onClick = onClick)
+                .then(press)
                 .padding(12.dp),
         ) {
             Text(
@@ -1000,7 +1148,7 @@ private fun MemoryTile(m: Memory, onClick: () -> Unit) {
         }
         return
     }
-    Box(Modifier.size(TILE).clip(shape).clickable(onClick = onClick)) {
+    Box(Modifier.size(TILE).clip(shape).then(press)) {
         MediaImage(Uri.parse(m.media), m.video, px = 288, modifier = Modifier.fillMaxSize())
         if (m.video) {
             Box(
@@ -1191,70 +1339,202 @@ private fun BigChoice(icon: androidx.compose.ui.graphics.vector.ImageVector, lab
     }
 }
 
-/** A memory full size: the photo, a video's frame with a play button, and its note. */
+/**
+ * Memories full size, one at a time, swiped through in the order the timeline shows them: a
+ * photo pinches to zoom, a video's frame has a play button that opens the phone's own player,
+ * and each has its note. Notes are kept as they are typed and saved when the viewer closes.
+ */
 @Composable
-private fun MemoryViewer(memory: Memory, onSave: (Memory) -> Unit, onRemove: () -> Unit, onDismiss: () -> Unit) {
+private fun MemoryViewer(
+    memories: List<Memory>,
+    startId: String,
+    onSave: (Memory) -> Unit,
+    onRemove: (Memory) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    if (memories.isEmpty()) {
+        androidx.compose.runtime.LaunchedEffect(Unit) { onDismiss() }
+        return
+    }
     val undoable = LocalUndo.current != null
     val context = LocalContext.current
-    var text by remember(memory.id) { mutableStateOf(memory.text) }
-    var removing by remember(memory.id) { mutableStateOf(false) }
-    if (removing) {
-        LossDialog(
-            Loss(
-                "Remove this memory?",
-                when {
-                    memory.media == null -> "What you wrote goes with it."
-                    else -> "The ${if (memory.video) "video" else "photo"} stays in your gallery" +
-                        if (memory.text.isNotBlank()) "; its note goes." else "."
-                },
-                "Remove",
-            ),
-            onConfirm = { removing = false; onRemove() },
-            onDismiss = { removing = false },
-        )
-    }
-    val screen = 1600
-    // A written moment emptied of its words is gone, not an empty tile.
-    fun finish() {
-        when {
-            memory.media == null && text.isBlank() -> onRemove()
-            text != memory.text -> { onSave(memory.copy(text = text.trim())); onDismiss() }
-            else -> onDismiss()
+    val pager = androidx.compose.foundation.pager.rememberPagerState(
+        initialPage = memories.indexOfFirst { it.id == startId }.coerceAtLeast(0),
+    ) { memories.size }
+    // What has been typed into each note, by memory id; untouched notes are not in here.
+    val notes = remember { androidx.compose.runtime.mutableStateMapOf<String, String>() }
+    var removing by remember { mutableStateOf<Memory?>(null) }
+    val current = memories[pager.currentPage.coerceIn(0, memories.lastIndex)]
+    // Saves every note that changed, then takes [gone] away, if any, and closes. A written
+    // moment emptied of its words is gone too, not an empty tile.
+    fun finish(gone: Memory? = null) {
+        for ((id, typed) in notes) {
+            val m = memories.firstOrNull { it.id == id } ?: continue
+            if (m.id == gone?.id) continue
+            when {
+                m.media == null && typed.isBlank() -> onRemove(m)
+                typed.trim() != m.text -> onSave(m.copy(text = typed.trim()))
+            }
         }
+        gone?.let(onRemove)
+        onDismiss()
     }
-    SeamDialog(onDismissRequest = ::finish) {
+    removing?.let { m ->
+        LossDialog(memoryLoss(m), onConfirm = { removing = null; finish(gone = m) }, onDismiss = { removing = null })
+    }
+    SeamDialog(onDismissRequest = { finish() }) {
         Surface(Modifier.fillMaxWidth(0.94f).widthIn(max = 640.dp), shape = RoundedCornerShape(28.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh) {
             Column {
-                memory.media?.let { u ->
-                    Box(Modifier.fillMaxWidth().aspectRatio(1f).clickable(enabled = memory.video) { Memories.play(context, Uri.parse(u)) }) {
-                        MediaImage(Uri.parse(u), memory.video, px = screen, modifier = Modifier.fillMaxSize(), crop = memory.video)
-                        if (memory.video) {
-                            Box(
-                                Modifier.align(Alignment.Center).size(64.dp).clip(CircleShape).background(Color.Black.copy(alpha = 0.55f)),
-                                contentAlignment = Alignment.Center,
-                            ) { Icon(Icons.Filled.PlayArrow, contentDescription = "Play", tint = Color.White, modifier = Modifier.size(36.dp)) }
+                androidx.compose.foundation.pager.HorizontalPager(
+                    state = pager,
+                    key = { memories[it].id },
+                    verticalAlignment = Alignment.Top,
+                ) { page ->
+                    val m = memories[page]
+                    val text = notes[m.id] ?: m.text
+                    Column {
+                        // Every page is the same height, a square and the lines under it, so the
+                        // dialog keeps its size while it is swiped.
+                        Box(Modifier.fillMaxWidth().aspectRatio(1f)) {
+                            when {
+                                m.media == null -> WrittenMoment(text, onText = { notes[m.id] = it })
+                                m.video -> Box(Modifier.fillMaxSize().clickable { Memories.play(context, Uri.parse(m.media)) }) {
+                                    MediaImage(Uri.parse(m.media), video = true, px = VIEWER_PX, modifier = Modifier.fillMaxSize())
+                                    Box(
+                                        Modifier.align(Alignment.Center).size(64.dp).clip(CircleShape).background(Color.Black.copy(alpha = 0.55f)),
+                                        contentAlignment = Alignment.Center,
+                                    ) { Icon(Icons.Filled.PlayArrow, contentDescription = "Play", tint = Color.White, modifier = Modifier.size(36.dp)) }
+                                }
+                                else -> ZoomablePhoto(Uri.parse(m.media), shown = pager.settledPage == page)
+                            }
+                        }
+                        Column(Modifier.fillMaxWidth().heightIn(min = 104.dp).padding(start = 20.dp, end = 20.dp, top = 20.dp)) {
+                            if (m.takenMs > 0) {
+                                Text(date(m.takenMs), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Spacer(Modifier.height(8.dp))
+                            }
+                            // A written moment is edited in its square; a photo or video's note here.
+                            if (m.media != null) {
+                                OutlinedTextField(
+                                    value = text,
+                                    onValueChange = { notes[m.id] = it },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    placeholder = { Text("Add a note") },
+                                )
+                            }
                         }
                     }
                 }
-                Column(Modifier.padding(20.dp)) {
-                    if (memory.takenMs > 0) {
-                        Text(date(memory.takenMs), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Spacer(Modifier.height(8.dp))
+                Row(Modifier.padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = { if (undoable) finish(gone = current) else removing = current }) {
+                        Icon(Icons.Filled.Delete, contentDescription = "Remove memory")
                     }
-                    OutlinedTextField(
-                        value = text,
-                        onValueChange = { text = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        placeholder = { Text(if (memory.media == null) "What happened here?" else "Add a note") },
-                    )
-                    Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(onClick = { if (undoable) onRemove() else removing = true }) { Icon(Icons.Filled.Delete, contentDescription = "Remove memory") }
-                        Spacer(Modifier.weight(1f))
-                        TextButton(onClick = ::finish) { Text("Done") }
+                    Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                        if (memories.size in 2..MAX_DOTS) PageDots(memories.size, pager.currentPage)
                     }
+                    TextButton(onClick = { finish() }) { Text("Done") }
                 }
             }
         }
+    }
+}
+
+/**
+ * How large a photo is decoded for the viewer, on its longer side, as before it could zoom: a
+ * larger one would decode many photos at full size, tens of megabytes for each page swiped past.
+ */
+private const val VIEWER_PX = 1600
+
+/** Past this many memories a row of dots says nothing; the swipe still works. */
+private const val MAX_DOTS = 12
+
+/** As close as a photo zooms in. */
+private const val MAX_ZOOM = 5f
+
+/** Which page of the viewer shows, as a row of dots. */
+@Composable
+private fun PageDots(count: Int, at: Int) {
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+        repeat(count) { i ->
+            Box(
+                Modifier.size(if (i == at) 8.dp else 6.dp).clip(CircleShape)
+                    .background(if (i == at) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant),
+            )
+        }
+    }
+}
+
+/** A written moment, large in its square, edited where it is read. */
+@Composable
+private fun WrittenMoment(text: String, onText: (String) -> Unit) {
+    val style = MaterialTheme.typography.headlineSmall.copy(fontStyle = FontStyle.Italic, color = MaterialTheme.colorScheme.onSecondaryContainer)
+    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.secondaryContainer).padding(24.dp)) {
+        androidx.compose.foundation.text.BasicTextField(
+            value = text,
+            onValueChange = onText,
+            textStyle = style,
+            cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary),
+            modifier = Modifier.fillMaxSize(),
+            decorationBox = { inner ->
+                if (text.isEmpty()) Text("What happened here?", style = style.copy(color = style.color.copy(alpha = 0.5f)))
+                inner()
+            },
+        )
+    }
+}
+
+/**
+ * A photo that pinches to zoom and, zoomed in, pans with one finger. At its normal size a
+ * one-finger swipe is left to the pager, so the next memory is a swipe away; once zoomed, the
+ * photo keeps the finger until it is pinched back out. Off screen it goes back to its normal size.
+ */
+@Composable
+private fun ZoomablePhoto(uri: Uri, shown: Boolean) {
+    var scale by remember { androidx.compose.runtime.mutableFloatStateOf(1f) }
+    var offset by remember { mutableStateOf(Offset.Zero) }
+    androidx.compose.runtime.LaunchedEffect(shown) { if (!shown) { scale = 1f; offset = Offset.Zero } }
+    Box(
+        Modifier
+            .fillMaxSize()
+            .clipToBounds()
+            .pointerInput(Unit) {
+                val center = Offset(size.width / 2f, size.height / 2f)
+                // The photo may not be pulled past its edges: at most half of what zoom added.
+                fun bounded(o: Offset, s: Float): Offset {
+                    val x = size.width * (s - 1) / 2
+                    val y = size.height * (s - 1) / 2
+                    return Offset(o.x.coerceIn(-x, x), o.y.coerceIn(-y, y))
+                }
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    do {
+                        val event = awaitPointerEvent()
+                        val fingers = event.changes.count { it.pressed }
+                        if (fingers > 1 || scale > 1f) {
+                            val zoom = event.calculateZoom()
+                            val pan = event.calculatePan()
+                            val centroid = event.calculateCentroid(useCurrent = true)
+                            val next = (scale * zoom).coerceIn(1f, MAX_ZOOM)
+                            val z = next / scale
+                            // The point between the fingers stays under them as the photo grows.
+                            val at = if (centroid == Offset.Unspecified) center else centroid
+                            offset = bounded((at - center) * (1 - z) + offset * z + pan, next)
+                            scale = next
+                            event.changes.forEach { if (it.positionChanged()) it.consume() }
+                        }
+                    } while (event.changes.any { it.pressed })
+                    // Pinched almost all the way out is all the way out.
+                    if (scale < 1.05f) { scale = 1f; offset = Offset.Zero }
+                }
+            }
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+                translationX = offset.x
+                translationY = offset.y
+            },
+    ) {
+        MediaImage(uri, video = false, px = VIEWER_PX, modifier = Modifier.fillMaxSize(), crop = false)
     }
 }
 

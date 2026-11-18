@@ -552,6 +552,8 @@ private fun App(
                 onAddMemories = app.visits::addMemories,
                 onUpdateMemory = app.visits::updateMemory,
                 onRemoveMemory = { a, b -> undo.run("Memory removed") { app.visits.removeMemory(a, b) } },
+                onCover = app.visits::setCover,
+                onMoveMemory = app.visits::moveMemory,
                 onAddPlaceMemories = app.visits::addPlaceMemories,
                 onUpdatePlaceMemory = app.visits::updatePlaceMemory,
                 onRemovePlaceMemory = { a, b -> undo.run("Memory removed") { app.visits.removePlaceMemory(a, b) } },

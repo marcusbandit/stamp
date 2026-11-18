@@ -111,6 +111,10 @@ class DetailActions(
     val onAddMemories: (tripId: String, memories: List<Memory>) -> Unit,
     val onUpdateMemory: (tripId: String, memory: Memory) -> Unit,
     val onRemoveMemory: (tripId: String, memoryId: String) -> Unit,
+    /** Picks the photo a trip's header shows. */
+    val onCover: (tripId: String, memoryId: String) -> Unit = { _, _ -> },
+    /** Moves a trip's memory to one of its stops, or to the trip as a whole when null. */
+    val onMoveMemory: (tripId: String, memoryId: String, stop: String?) -> Unit = { _, _, _ -> },
     /** Keeps memories with a place of a country, or the country itself when the place is null. */
     val onAddPlaceMemories: (id: String, place: String?, memories: List<Memory>) -> Unit,
     val onUpdatePlaceMemory: (id: String, memory: Memory) -> Unit,
@@ -280,7 +284,8 @@ fun TripsSection(
  */
 @Composable
 private fun VisitSummary(t: Trip, lived: Boolean, cityName: (String) -> String, onOpen: () -> Unit, onPickCity: () -> Unit) {
-    val media = t.memories.filter { it.media != null }
+    // The trip's cover leads, as it heads the timeline.
+    val media = t.memories.filter { it.media != null }.let { all -> t.coverPhoto?.let { c -> listOf(c) + (all - c) } ?: all }
     Column(Modifier.padding(end = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (media.isNotEmpty()) {
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.clip(RoundedCornerShape(14.dp)).clickable(onClick = onOpen)) {
