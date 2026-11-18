@@ -27,6 +27,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -60,6 +61,8 @@ fun PassportScreen(
     trips: List<com.marcusrosado.stamp.data.Trip> = emptyList(),
     places: com.marcusrosado.stamp.data.Places? = null,
     onOpenTrip: (String) -> Unit = {},
+    /** Changes when the Passport tab is tapped while open: the page scrolls back to its top. */
+    toTop: Long = 0L,
 ) {
     val palette = LocalMapPalette.current
     // Countries, each once: Hawaii counts for the United States.
@@ -78,9 +81,12 @@ fun PassportScreen(
     val thisYear = java.time.Year.now().value
     val years = remember(trips, thisYear) { tripYears(trips, thisYear) }
 
+    val list = androidx.compose.foundation.lazy.rememberLazyListState()
+    LaunchedEffect(toTop) { if (toTop != 0L) list.animateScrollToItem(0) }
     Box(modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         LazyColumn(
             Modifier.widthIn(max = 680.dp).fillMaxSize(),
+            state = list,
             contentPadding = PaddingValues(
                 start = 16.dp, end = 16.dp,
                 top = contentPadding.calculateTopPadding() + 8.dp,

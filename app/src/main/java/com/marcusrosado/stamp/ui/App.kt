@@ -79,6 +79,10 @@ class AppState(
     val camera: CameraSpot,
     val focus: Focus?,
     val onDestination: (Destination) -> Unit,
+    /** A long press on the map, with the country under the finger. */
+    val onLongPressMap: (String?) -> Unit = {},
+    /** Changes when the open tab is tapped again: the page it shows goes back to its top. */
+    val toTop: Long = 0L,
     val onSelect: (String?) -> Unit,
     /** Sets the selection without moving the map. */
     val onRestoreSelection: (String?) -> Unit,
@@ -419,6 +423,41 @@ private fun App(
     }
 
     androidx.compose.runtime.CompositionLocalProvider(LocalUndo provides undo) {
+    // Islands counted as part of their country: clearing the country clears its islands too.
+    val setMark: (String, TravelState?) -> Unit = { id, s ->
+        val name = atlas.byId[id]?.name ?: id
+        val was = app.visits.visits.value[id]?.state
+        when {
+            s == null -> undo.run("$name cleared") {
+                if (!split) app.visits.clearAll(listOf(id) + atlas.partsOf(id).map { it.id }) else app.visits.set(id, null)
+            }
+            // Want to go can take stops off trips; anything else only changes the colour.
+            s == TravelState.Want && was != null && was != TravelState.Want -> undo.run("$name marked want to go") { app.visits.set(id, s) }
+            else -> app.visits.set(id, s)
+        }
+    }
+    // A long press marks the country under the finger, or clears it when it is marked, with undo.
+    val longPressMap: (String?) -> Unit = { id ->
+        if (id != null) {
+            val was = app.visits.visits.value[id]?.state
+            if (was == null || was == TravelState.Want) {
+                undo.run("${atlas.byId[id]?.name ?: id} marked visited") { app.visits.set(id, TravelState.Visited) }
+            } else setMark(id, null)
+        }
+    }
+    // Tapping the tab that is open: the map fits every place marked, the passport goes to its top.
+    var toTop by remember { androidx.compose.runtime.mutableLongStateOf(0L) }
+    fun retap(d: Destination) {
+        when (d) {
+            Destination.Map -> {
+                selectedId = null
+                spot = null
+                focus = markedBox(atlas, app.visits.visits.value)?.let { b -> Focus((b[0] + b[2]) / 2, (b[1] + b[3]) / 2, 5.0, box = b) }
+                    ?: Focus(20.0, 0.0, 0.0)
+            }
+            else -> toTop = System.nanoTime()
+        }
+    }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val postureNow by rememberUpdatedState(postureFor(maxWidth.value.toInt(), maxHeight.value.toInt()))
         val state = AppState(
@@ -436,7 +475,9 @@ private fun App(
             hasScanned = app.flags.get(FLAG_SCANNED),
             camera = camera,
             focus = focus,
-            onDestination = { destination = it; cameFrom = null },
+            onDestination = { if (it == destination) retap(it) else { destination = it; cameFrom = null } },
+            onLongPressMap = longPressMap,
+            toTop = toTop,
             onRestoreSelection = { selectedId = it },
             onSelect = { id ->
                 selectedId = id
@@ -446,19 +487,7 @@ private fun App(
                 // A picked country moves into the map left showing beside or above its card.
                 id?.let { atlas.byId[it] }?.let { focus = focusOn(it) }
             },
-            // Islands counted as part of their country: clearing the country clears its islands too.
-            onSet = { id, s ->
-                val name = atlas.byId[id]?.name ?: id
-                val was = app.visits.visits.value[id]?.state
-                when {
-                    s == null -> undo.run("$name cleared") {
-                        if (!split) app.visits.clearAll(listOf(id) + atlas.partsOf(id).map { it.id }) else app.visits.set(id, null)
-                    }
-                    // Want to go can take stops off trips; anything else only changes the colour.
-                    s == TravelState.Want && was != null && was != TravelState.Want -> undo.run("$name marked want to go") { app.visits.set(id, s) }
-                    else -> app.visits.set(id, s)
-                }
-            },
+            onSet = setMark,
             details = remember(app) { DetailActions(
                 onLoved = app.visits::setLoved,
                 onRating = app.visits::setRating,

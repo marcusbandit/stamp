@@ -423,6 +423,7 @@ private fun Passport(state: AppState, padding: PaddingValues, modifier: Modifier
     onScan = state.onOpenScan, onOpenCountry = state.onOpenCountry, contentPadding = padding,
     modifier = modifier, split = state.split,
     trips = state.trips, places = state.places, onOpenTrip = state.onOpenTrip,
+    toTop = state.toTop,
 )
 
 /** A country's card, with everything it needs from the app's state. */
@@ -568,6 +569,7 @@ private fun StampMap(
         selectedArea = state.spotArea.takeIf { state.spot is Spot.City },
         heat = heat,
         onViewport = if (selectable) state.onViewport else null,
+        onLongPress = if (selectable) { id -> state.onLongPressMap(id) } else null,
         onCity = if (selectable) { id ->
             val c = state.places?.byId?.get(id)
             val land = c?.let { state.atlas.landOf(it.lat, it.lon, it.country) }

@@ -123,6 +123,8 @@ fun WorldMap(
     selectedArea: List<Shape>? = null,
     /** Where the map rests after each move: zoom, then south, west, north and east. */
     onViewport: ((DoubleArray) -> Unit)? = null,
+    /** A long press on a country, with its id. */
+    onLongPress: ((String) -> Unit)? = null,
     /** False while a page covers the whole map: its icons stop gliding until it shows again. */
     animate: Boolean = true,
 ) {
@@ -144,6 +146,7 @@ fun WorldMap(
     val regionTap by rememberUpdatedState(onRegion.takeIf { regionLayer != null })
     val cityTap by rememberUpdatedState(onCity.takeIf { allCities.isNotEmpty() })
     val viewport by rememberUpdatedState(onViewport)
+    val longPress by rememberUpdatedState(onLongPress.takeIf { selectable })
 
     val mapView = remember {
         MapView(context).apply {
@@ -202,6 +205,16 @@ fun WorldMap(
                 override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
                     tappedTrips?.let { trips -> tappedTrips = null; routeTap?.invoke(trips) }
                     return false
+                }
+
+                override fun onLongPress(e: MotionEvent) {
+                    val onLong = longPress ?: return
+                    if (stoppedMotion) return
+                    val m = map ?: return
+                    val id = m.queryRenderedFeatures(PointF(e.x, e.y), LAYER_FILL_FINE, LAYER_FILL).firstOrNull()?.getStringProperty(tapKey)
+                        ?: return
+                    performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
+                    onLong(id)
                 }
 
                 override fun onDoubleTap(e: MotionEvent): Boolean {

@@ -306,3 +306,24 @@ fun PlaceCard(
         if (state?.counts == true) memories?.invoke()
     }
 }
+
+/**
+ * The area holding every place been to or lived in, as south, west, north and east, for the map
+ * to fit; null with none marked. A country that spans the date line counts by its label point,
+ * and marks spread over more than half the world fit the whole world.
+ */
+fun markedBox(atlas: Atlas, visits: Map<String, Visit>): List<Double>? {
+    val ids = visits.filter { it.value.state.counts }.keys.ifEmpty { visits.keys }
+    val cs = ids.mapNotNull { atlas.byId[it] }
+    if (cs.isEmpty()) return null
+    var s = 90.0; var w = 180.0; var n = -90.0; var e = -180.0
+    for (c in cs) {
+        val wide = c.maxLon - c.minLon > 180
+        s = minOf(s, if (wide) c.labelLat - 8 else c.minLat)
+        n = maxOf(n, if (wide) c.labelLat + 8 else c.maxLat)
+        w = minOf(w, if (wide) c.labelLon - 12 else c.minLon)
+        e = maxOf(e, if (wide) c.labelLon + 12 else c.maxLon)
+    }
+    if (e - w > 200) return listOf(-60.0, -180.0, 75.0, 180.0)
+    return listOf(s.coerceAtLeast(-85.0), w.coerceAtLeast(-180.0), n.coerceAtMost(85.0), e.coerceAtMost(180.0))
+}
