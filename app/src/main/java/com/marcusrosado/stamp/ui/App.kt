@@ -21,6 +21,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.marcusrosado.stamp.Posture
 import com.marcusrosado.stamp.StampApp
@@ -76,14 +81,21 @@ class AppState(
     val scan: ScanState,
     val hasScanned: Boolean,
     val camera: CameraSpot,
-    val focus: Focus?,
+    /** Read through [focus] by the map alone, so a tap that moves it recomposes only the map. */
+    private val focusState: androidx.compose.runtime.State<Focus?>,
     val onDestination: (Destination) -> Unit,
+    /** A long press on the map, with the country under the finger. */
+    val onLongPressMap: (String?) -> Unit = {},
+    /** Changes when the open tab is tapped again: the page it shows goes back to its top. */
+    val toTop: Long = 0L,
     val onSelect: (String?) -> Unit,
     /** Sets the selection without moving the map. */
     val onRestoreSelection: (String?) -> Unit,
     val onSet: (String, TravelState?) -> Unit,
     val details: DetailActions,
     val onOpenList: () -> Unit,
+    /** Opens the country list on what a tapped count counted. */
+    val onOpenListOf: (ListFilter) -> Unit = {},
     /** Search every country's cities and fly to the one picked. */
     val onFindCity: () -> Unit,
     /** Start a trip at a city anywhere, then open it. */
@@ -175,6 +187,8 @@ class AppState(
     val onShowHome: (Double, Double) -> Unit = { _, _ -> },
     val app: com.marcusrosado.stamp.StampApp,
 ) {
+    /** Where the map should fly next, if anywhere. */
+    val focus: Focus? get() = focusState.value
     /** "🇦🇹 Austria" for a country code. */
     val countryLabel: (String) -> String = { a2 ->
         atlas.mains.firstOrNull { it.alpha2 == a2 }?.let { "${it.flag} ${it.name}".trim() } ?: a2
@@ -295,15 +309,20 @@ private fun App(
     }
     var selectedId by rememberSaveable { mutableStateOf<String?>(null) }
     var showList by rememberSaveable { mutableStateOf(false) }
+    // What the country list opens on: everything, or what a tapped count counted.
+    var listFilter by rememberSaveable(stateSaver = ListFilter.Saver) { mutableStateOf(ListFilter()) }
+    var listOpened by rememberSaveable { mutableStateOf(0L) }
     // A city search across every country: to fly to a city, or to start a trip there.
     var cityHunt by rememberSaveable { mutableStateOf<String?>(null) }
     var spot by rememberSaveable(stateSaver = SpotSaver) { mutableStateOf<Spot?>(null) }
     var pendingTrip by rememberSaveable { mutableStateOf<String?>(null) }
     var tripFromTab by rememberSaveable { mutableStateOf(false) }
     val allTrips by app.visits.allTrips.collectAsStateWithLifecycle()
-    var focus by remember { mutableStateOf<Focus?>(null) }
+    val focusState = remember { mutableStateOf<Focus?>(null) }
+    var focus by focusState
     var me by remember { mutableStateOf<Pair<Double, Double>?>(null) }
     val locating = androidx.compose.runtime.rememberCoroutineScope()
+    val undo = remember(app) { Undo(app.visits, locating) }
     val camera = remember { CameraSpot() }
     val visits by app.visits.visits.collectAsStateWithLifecycle()
     val home by app.visits.home.collectAsStateWithLifecycle()
@@ -357,11 +376,20 @@ private fun App(
     val places by produceState<Places?>(null) { value = runCatching { app.places.await() }.getOrNull() }
     // Regions are read and placed off the main thread, again whenever the marks change.
     // Where the map rests, and the countries in sight there once it is close enough.
-    var viewport by remember { mutableStateOf<DoubleArray?>(null) }
-    val inView = remember(viewport, atlas) { countriesInView(atlas, viewport) }
-    val regionView by androidx.compose.runtime.produceState(RegionView.EMPTY, mapView, visits, places, atlas, inView) {
-        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
-            runCatching { buildRegionView(mapView, atlas, visits, places, app.regionShapes, inView) }.getOrDefault(RegionView.EMPTY)
+    // Read only inside the regions view's flow below, never while composing, so a pan or a zoom
+    // recomposes nothing; in the other views where the map rests does not matter at all.
+    val viewport = remember { mutableStateOf<DoubleArray?>(null) }
+    val regionView by androidx.compose.runtime.produceState(RegionView.EMPTY, mapView, visits, places, atlas) {
+        val inView = if (mapView == com.marcusrosado.stamp.data.MapView.Regions) {
+            androidx.compose.runtime.snapshotFlow { viewport.value }
+                .map { countriesInView(atlas, it) }
+                .distinctUntilChanged()
+                .flowOn(kotlinx.coroutines.Dispatchers.Default)
+        } else kotlinx.coroutines.flow.flowOf(emptyList())
+        inView.collectLatest { countries ->
+            value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                runCatching { buildRegionView(mapView, atlas, visits, places, app.regionShapes, countries) }.getOrDefault(RegionView.EMPTY)
+            }
         }
     }
     val airports by produceState<com.marcusrosado.stamp.data.Airports?>(null) { value = runCatching { app.airports.await() }.getOrNull() }
@@ -382,6 +410,9 @@ private fun App(
     // one finished, or a refund. The hourly look runs only while Pro and the switch say so.
     androidx.lifecycle.compose.LifecycleResumeEffect(Unit) { app.pro.refresh(); onPauseOrDispose { } }
     LaunchedEffect(hourly) {
+        // With the switch off there is nothing to stop: turning it off already cancelled the
+        // schedule, and WorkManager need not start for it.
+        if (!hourlyOn) return@LaunchedEffect
         com.marcusrosado.stamp.data.Hourly.schedule(app, hourly && com.marcusrosado.stamp.data.Hourly.allowed(app))
     }
     val keptOutlines by app.cityOutlines.kept.collectAsStateWithLifecycle()
@@ -416,6 +447,50 @@ private fun App(
         }
     }
 
+    androidx.compose.runtime.CompositionLocalProvider(LocalUndo provides undo) {
+    // Islands counted as part of their country: clearing the country clears its islands too.
+    val setMark: (String, TravelState?) -> Unit = { id, s ->
+        val name = atlas.byId[id]?.name ?: id
+        val was = app.visits.visits.value[id]?.state
+        when {
+            s == null -> undo.run("$name cleared") {
+                if (!split) app.visits.clearAll(listOf(id) + atlas.partsOf(id).map { it.id }) else app.visits.set(id, null)
+            }
+            // Want to go can take stops off trips; anything else only changes the colour.
+            s == TravelState.Want && was != null && was != TravelState.Want -> undo.run("$name marked want to go") { app.visits.set(id, s) }
+            else -> app.visits.set(id, s)
+        }
+    }
+    // A long press marks the country under the finger visited, with undo; on one already been to
+    // it opens the card, so a still finger can never clear a country and all it holds. It reads the
+    // mark the map shows: with islands counted as part of their country, their strongest.
+    val longPressMap: (String?) -> Unit = { id ->
+        if (id != null) {
+            val was = atlas.markOf(id, app.visits.visits.value, split)
+            if (was == null || was == TravelState.Want) {
+                undo.run("${atlas.byId[id]?.name ?: id} marked visited") { app.visits.set(id, TravelState.Visited) }
+            } else {
+                selectedId = id
+                spot = null
+            }
+        }
+    }
+    // Tapping the tab that is open: the map fits every place marked, the passport goes to its top.
+    var toTop by remember { androidx.compose.runtime.mutableLongStateOf(0L) }
+    fun retap(d: Destination) {
+        when (d) {
+            Destination.Map -> {
+                selectedId = null
+                spot = null
+                pendingTrip = null
+                showList = false
+                cameFrom = null
+                focus = markedBox(atlas, app.visits.visits.value)?.let { b -> Focus((b[0] + b[2]) / 2, (b[1] + b[3]) / 2, 5.0, box = b) }
+                    ?: Focus(20.0, 0.0, 0.0)
+            }
+            else -> toTop = System.nanoTime()
+        }
+    }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val postureNow by rememberUpdatedState(postureFor(maxWidth.value.toInt(), maxHeight.value.toInt()))
         val state = AppState(
@@ -430,10 +505,12 @@ private fun App(
             home = home,
             selected = selectedId?.let { atlas.byId[it] },
             scan = scan,
-            hasScanned = app.flags.get(FLAG_SCANNED),
+            hasScanned = remember(scan) { app.flags.get(FLAG_SCANNED) },
             camera = camera,
-            focus = focus,
-            onDestination = { destination = it; cameFrom = null },
+            focusState = focusState,
+            onDestination = { if (it == destination) retap(it) else { destination = it; cameFrom = null } },
+            onLongPressMap = longPressMap,
+            toTop = toTop,
             onRestoreSelection = { selectedId = it },
             onSelect = { id ->
                 selectedId = id
@@ -443,18 +520,16 @@ private fun App(
                 // A picked country moves into the map left showing beside or above its card.
                 id?.let { atlas.byId[it] }?.let { focus = focusOn(it) }
             },
-            // Islands counted as part of their country: clearing the country clears its islands too.
-            onSet = { id, s ->
-                if (s == null && !split) app.visits.clearAll(listOf(id) + atlas.partsOf(id).map { it.id })
-                else app.visits.set(id, s)
-            },
+            onSet = setMark,
             details = remember(app) { DetailActions(
                 onLoved = app.visits::setLoved,
                 onRating = app.visits::setRating,
                 onAddTrip = app.visits::addTrip,
                 onUpdateTrip = app.visits::updateTrip,
                 onRenameTrip = app.visits::renameTrip,
-                onRemoveTrip = app.visits::removeTrip,
+                onRemoveTrip = { a, b -> undo.run("Visit removed") { app.visits.removeTrip(a, b) } },
+                onSetHome = { id -> undo.run("${atlas.byId[id]?.name ?: id} is home now") { app.visits.setHome(id) } },
+                onDuplicateTrip = { t -> var id: String? = null; undo.run("Visit copied") { id = app.visits.duplicateTrip(t) }; id },
                 onAddCity = app.visits::addCity,
                 onAddPin = app.visits::addPin,
                 onRenamePin = app.visits::renamePin,
@@ -471,22 +546,23 @@ private fun App(
                 onTripStart = app.visits::setTripStart,
                 onAddDayPlace = app.visits::addDayPlace,
                 onAddDayPin = app.visits::addDayPin,
-                onRemoveDayPlace = app.visits::removeDayPlace,
+                onRemoveDayPlace = { a, b, c -> undo.run("Stop removed") { app.visits.removeDayPlace(a, b, c) } },
                 onSlept = app.visits::setSlept,
                 onTripEnd = app.visits::setTripEnd,
                 onAddMemories = app.visits::addMemories,
                 onUpdateMemory = app.visits::updateMemory,
-                onRemoveMemory = app.visits::removeMemory,
+                onRemoveMemory = { a, b -> undo.run("Memory removed") { app.visits.removeMemory(a, b) } },
                 onAddPlaceMemories = app.visits::addPlaceMemories,
                 onUpdatePlaceMemory = app.visits::updatePlaceMemory,
-                onRemovePlaceMemory = app.visits::removePlaceMemory,
-                onRemoveCity = app.visits::removeCity,
+                onRemovePlaceMemory = { a, b -> undo.run("Memory removed") { app.visits.removePlaceMemory(a, b) } },
+                onRemoveCity = { a, b -> undo.run("Place removed") { app.visits.removeCity(a, b) } },
                 onSplitRegions = app.visits::setSplitRegions,
                 onCityNote = app.visits::setCityNote,
                 onAddRegion = app.visits::addRegion,
-                onRemoveRegion = app.visits::removeRegion,
+                onRemoveRegion = { a, b -> undo.run("Region removed") { app.visits.removeRegion(a, b) } },
             ) },
-            onOpenList = { showList = true },
+            onOpenList = { listFilter = ListFilter(); showList = true },
+            onOpenListOf = { listFilter = it; listOpened = System.nanoTime(); showList = true },
             onFindCity = { cityHunt = "find" },
             onNewTrip = { cityHunt = "trip" },
             pendingTrip = pendingTrip,
@@ -538,7 +614,7 @@ private fun App(
             onCityWant = app.visits::setCityWant,
             onCity = app.visits::setCity,
             regionView = regionView,
-            onViewport = { viewport = it },
+            onViewport = { viewport.value = it },
             onForgetCity = app.visits::forgetCityVisit,
             onBeenToCity = { c -> app.visits.newTripAt(c) },
             spot = spot,
@@ -565,7 +641,7 @@ private fun App(
                 locating.launch {
                     val at = com.marcusrosado.stamp.data.Here.find(context, com.marcusrosado.stamp.data.Here.TWO_MINUTES)
                     if (at == null) {
-                        android.widget.Toast.makeText(context, "Can't tell where you are right now", android.widget.Toast.LENGTH_SHORT).show()
+                        undo.say("Can't tell where you are right now")
                         return@launch
                     }
                     me = at
@@ -670,6 +746,8 @@ private fun App(
                     onShowOnMap = openCountry,
                     onClose = { showList = false },
                     split = split,
+                    start = listFilter,
+                    opened = listOpened,
                 )
             }
         }
@@ -681,7 +759,8 @@ private fun App(
                     home = home,
                     onStartDevice = { app.flags.set(FLAG_SCANNED, true); app.scanner.start() },
                     onAdd = { found, mark ->
-                        app.visits.addFromPhotos(found, mark)
+                        if (mark.isEmpty()) app.visits.addFromPhotos(found, mark)
+                        else undo.run(if (mark.size == 1) "1 country added" else "${mark.size} countries added") { app.visits.addFromPhotos(found, mark) }
                         app.scanner.cancel()
                         onScanOpen(false)
                         destination = Destination.Passport
@@ -694,6 +773,8 @@ private fun App(
                 )
             }
         }
+        UndoHost(undo, aboveBar = if (state.posture == Posture.Portrait) 80.dp else 0.dp)
+    }
     }
 }
 

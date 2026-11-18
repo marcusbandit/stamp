@@ -27,6 +27,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -60,6 +61,11 @@ fun PassportScreen(
     trips: List<com.marcusrosado.stamp.data.Trip> = emptyList(),
     places: com.marcusrosado.stamp.data.Places? = null,
     onOpenTrip: (String) -> Unit = {},
+    /** Changes when the Passport tab is tapped while open: the page scrolls back to its top. */
+    toTop: Long = 0L,
+    /** Opens the country list on what a tapped number counts. */
+    onOpenList: (ListFilter) -> Unit = {},
+    onShowMap: () -> Unit = {},
 ) {
     val palette = LocalMapPalette.current
     // Countries, each once: Hawaii counts for the United States.
@@ -72,15 +78,27 @@ fun PassportScreen(
         else atlas.mains.mapNotNull { c -> atlas.wholeVisit(c.id, visits)?.let { c to it } })
             .sortedWith(compareBy({ it.first.id != home }, { it.first.name }))
     }
+    // Each mark counted the way the map's legend and the country list count it: a country takes
+    // the strongest mark of it and its islands, so a tapped count and the list it opens agree.
+    val markCounts = remember(atlas, visits, split) {
+        val marks = if (split) visits.values.map { it.state } else atlas.mains.mapNotNull { atlas.markOf(it.id, visits, false) }
+        marks.groupingBy { it }.eachCount()
+    }
     // Newest first by year, undated last. The countries come before them, so however many
     // trips pile up, the countries stay a short scroll away.
     // Read on every pass, so an app left open over New Year moves the current stay along.
     val thisYear = java.time.Year.now().value
     val years = remember(trips, thisYear) { tripYears(trips, thisYear) }
 
+    val list = androidx.compose.foundation.lazy.rememberLazyListState()
+    // Only a tap that came after this page was shown scrolls it: coming back to the page with an
+    // older tap still in the state must not.
+    val handled = androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableLongStateOf(toTop) }
+    LaunchedEffect(toTop) { if (toTop != handled.longValue) { handled.longValue = toTop; list.animateScrollToItem(0) } }
     Box(modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         LazyColumn(
             Modifier.widthIn(max = 680.dp).fillMaxSize(),
+            state = list,
             contentPadding = PaddingValues(
                 start = 16.dp, end = 16.dp,
                 top = contentPadding.calculateTopPadding() + 8.dp,
@@ -92,11 +110,16 @@ fun PassportScreen(
                 Text("Passport", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(vertical = 8.dp))
             }
             item {
-                MiniMap(atlas, { id -> atlas.markOf(id, visits, split)?.let { palette.of(it) } })
+                Box(Modifier.clip(RoundedCornerShape(16.dp)).clickable(onClickLabel = "Show the map", onClick = onShowMap)) {
+                    MiniMap(atlas, { id -> atlas.markOf(id, visits, split)?.let { palette.of(it) } })
+                }
             }
             item {
                 Panel {
-                    Row(verticalAlignment = Alignment.Bottom) {
+                    Row(
+                        Modifier.clip(RoundedCornerShape(12.dp)).clickable(onClickLabel = "Show the countries you have been to") { onOpenList(ListFilter(ListFilter.BEEN, unOnly = true)) },
+                        verticalAlignment = Alignment.Bottom,
+                    ) {
                         Column(Modifier.weight(1f)) {
                             Text(
                                 "$been / ${atlas.unCount}",
@@ -119,11 +142,15 @@ fun PassportScreen(
                     Spacer(Modifier.height(12.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                         TravelState.entries.forEach { s ->
-                            Row(verticalAlignment = Alignment.CenterVertically) {
+                            Row(
+                                Modifier.clip(RoundedCornerShape(8.dp)).clickable(onClickLabel = "Show ${s.label.lowercase()} countries") { onOpenList(ListFilter.of(s)) }
+                                    .padding(vertical = 6.dp, horizontal = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
                                 Swatch(palette.of(s))
                                 Spacer(Modifier.width(6.dp))
                                 Text(
-                                    "${s.label} ${mine.count { it.second.state == s }}",
+                                    "${s.label} ${markCounts[s] ?: 0}",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
@@ -141,16 +168,22 @@ fun PassportScreen(
                     (ContinentOrder + extra).forEachIndexed { i, name ->
                         val total = atlas.unPerContinent[name] ?: 0
                         val n = counted.count { atlas.byId[it]?.continent == name }
-                        if (i > 0) Spacer(Modifier.height(14.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(name, Modifier.weight(1f))
-                            Text(
-                                if (total > 0) "$n / $total" else "$n",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+                        if (i > 0) Spacer(Modifier.height(4.dp))
+                        // A continent opens the list of every country in it, the ones still to go included.
+                        Column(
+                            Modifier.clip(RoundedCornerShape(8.dp)).clickable(onClickLabel = "Show the countries of $name") { onOpenList(ListFilter(continent = name)) }
+                                .padding(vertical = 5.dp),
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(name, Modifier.weight(1f))
+                                Text(
+                                    if (total > 0) "$n / $total" else "$n",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Spacer(Modifier.height(6.dp))
+                            Bar(if (total > 0) n.toFloat() / total else 1f)
                         }
-                        Spacer(Modifier.height(6.dp))
-                        Bar(if (total > 0) n.toFloat() / total else 1f)
                     }
                 }
             }

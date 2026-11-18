@@ -86,6 +86,10 @@ class DetailActions(
     val onUpdateTrip: (trip: Trip) -> Unit,
     val onRenameTrip: (tripId: String, name: String) -> Unit,
     val onRemoveTrip: (id: String, tripId: String) -> Unit,
+    /** Makes a country where the user lives now. */
+    val onSetHome: (id: String) -> Unit = {},
+    /** Copies a trip with its route and no dates; the copy's id. */
+    val onDuplicateTrip: (tripId: String) -> String? = { null },
     /** A null trip puts the city on a new visit. */
     val onAddCity: (id: String, tripId: String?, cityId: String) -> Unit,
     val onRemoveCity: (tripId: String, cityId: String) -> Unit,
@@ -179,6 +183,7 @@ fun TripsSection(
     /** Opens the visit as a timeline, with its stops, dates and memories. */
     onOpenTimeline: (Trip) -> Unit,
 ) {
+    val undoable = LocalUndo.current != null
     var removing by remember { mutableStateOf<Trip?>(null) }
     // Minus only takes away a visit with nothing on it; one with a date or cities goes
     // through its own remove button, which asks first.
@@ -230,7 +235,7 @@ fun TripsSection(
                     )
                     // The only visit of a visited country stays; there is nothing to remove.
                     if (trips.size > 1) {
-                        IconButton(onClick = { if (t.isBlank) onRemove(t) else removing = t }) {
+                        IconButton(onClick = { if (t.isBlank || undoable) onRemove(t) else removing = t }) {
                             Icon(Icons.Filled.Close, contentDescription = if (lived) "Remove this time living here" else "Remove ${t.title("visit ${i + 1}")}", modifier = Modifier.size(18.dp))
                         }
                     }
@@ -376,6 +381,7 @@ fun CityDialog(
     /** The place's memories, drawn under its stars. */
     memories: (@Composable () -> Unit)? = null,
 ) {
+    val undoable = LocalUndo.current != null
     var renaming by remember { mutableStateOf(false) }
     var removing by remember { mutableStateOf(false) }
     if (removing && removeAsk != null) {
@@ -444,7 +450,7 @@ fun CityDialog(
                 onDismiss()
             }) { Text("Done") }
         },
-        dismissButton = removeLabel?.let { { TextButton(onClick = { removing = true }) { Text(it, color = MaterialTheme.colorScheme.error) } } },
+        dismissButton = removeLabel?.let { { TextButton(onClick = { if (undoable) { onRemove(); onDismiss() } else removing = true }) { Text(it, color = MaterialTheme.colorScheme.error) } } },
     )
 }
 

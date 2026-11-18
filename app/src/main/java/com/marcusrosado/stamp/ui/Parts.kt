@@ -18,6 +18,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.Home
@@ -144,6 +145,7 @@ fun CountryDetail(
     /** Whether a trip's stop, or the trip itself with null, is in this country: its memories show here. */
     inCountry: InPlace = { _, _ -> true },
 ) {
+    val undoable = LocalUndo.current != null
     // A change of mark that would throw something away, waiting for the user to say yes.
     var asking by remember(country.id) { mutableStateOf<Pair<TravelState?, Loss>?>(null) }
     // The visit a city is being picked for.
@@ -162,6 +164,12 @@ fun CountryDetail(
     var dayPinning by remember(country.id) { mutableStateOf<Triple<String, String, String>?>(null) }
     // The visit open as a timeline.
     var timelineFor by remember(country.id) { mutableStateOf<String?>(null) }
+    // A copy just made, opened once it shows on the card: the store has it before this frame does.
+    var copyFor by remember(country.id) { mutableStateOf<String?>(null) }
+    LaunchedEffect(copyFor, visit) {
+        val id = copyFor ?: return@LaunchedEffect
+        if (visit?.trips?.any { it.id == id } == true) { timelineFor = id; copyFor = null }
+    }
     LaunchedEffect(openTrip, visit) {
         if (openTrip != null && visit?.trips?.any { it.id == openTrip } == true) {
             timelineFor = openTrip
@@ -186,6 +194,31 @@ fun CountryDetail(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            // What else can be done with the country: few things, so they wait behind one button.
+            if ((!isHome && partOf == null) || visit != null) {
+                var menu by remember { mutableStateOf(false) }
+                Box {
+                    IconButton(onClick = { menu = true }) { Icon(Icons.Filled.MoreVert, contentDescription = "More for ${country.name}") }
+                    androidx.compose.material3.DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                        if (!isHome && partOf == null) {
+                            androidx.compose.material3.DropdownMenuItem(
+                                text = { Text("I live here now") },
+                                onClick = { menu = false; actions.onSetHome(country.id) },
+                            )
+                        }
+                        if (visit != null) {
+                            androidx.compose.material3.DropdownMenuItem(
+                                text = { Text("Clear ${country.name}", color = MaterialTheme.colorScheme.error) },
+                                onClick = {
+                                    menu = false
+                                    val loss = if (undoable) null else lossOf(country.id, country.name, visit, null, partVisits)
+                                    if (loss != null) asking = null to loss else onSet(null)
+                                },
+                            )
+                        }
+                    }
+                }
+            }
             IconButton(onClick = onClose) { Icon(Icons.Filled.Close, contentDescription = "Close") }
         }
         if (markedParts.isNotEmpty()) {
@@ -197,8 +230,8 @@ fun CountryDetail(
             }
         }
         StateButtons(visit?.state, { s ->
-            // A change that drops visits, stars or other trips' stops asks first.
-            val loss = lossOf(country.id, country.name, visit, s, partVisits)
+            // A change that drops visits, stars or other trips' stops asks first, unless it can be undone.
+            val loss = if (undoable) null else lossOf(country.id, country.name, visit, s, partVisits)
             if (loss != null) asking = s to loss else onSet(s)
         })
         if (visit != null && visit.state.counts) {
@@ -294,6 +327,13 @@ fun CountryDetail(
                 onAddMemories = { actions.onAddMemories(tripId, it) },
                 onUpdateMemory = { actions.onUpdateMemory(tripId, it) },
                 onRemoveMemory = { actions.onRemoveMemory(tripId, it) },
+                onDuplicate = if (v.state == TravelState.Lived) null else {
+                    { actions.onDuplicateTrip(tripId)?.let { copyFor = it } }
+                },
+                // A visited or lived country always keeps one trip.
+                onDelete = if (v.trips.size > 1 || !v.state.counts) {
+                    { timelineFor = null; onTripClosed(); actions.onRemoveTrip(country.id, tripId) }
+                } else null,
             ),
             onDismiss = { timelineFor = null; onTripClosed() },
             map = tripMap,

@@ -1,0 +1,2 @@
+HSPLcom/marcusrosado/stamp/**;->**(**)**
+Lcom/marcusrosado/stamp/**;

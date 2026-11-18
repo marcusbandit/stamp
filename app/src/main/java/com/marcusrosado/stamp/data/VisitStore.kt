@@ -84,7 +84,7 @@ interface Geo {
  * What the user marked about one country or land mass, apart from its trips: the mark itself,
  * photo dates, heart, stars, regions and notes per city.
  */
-private data class Mark(
+internal data class Mark(
     val state: TravelState,
     val evidence: PhotoEvidence? = null,
     val loved: Boolean = false,
@@ -382,6 +382,20 @@ class VisitStore(private val file: File) {
         else trips.map { if (it.id == t.id) it.copy(cities = emptyList(), dayPlaces = emptyMap(), slept = emptyMap(), legs = emptyList()) else it }
         save()
         return true
+    }
+
+    /**
+     * A copy of a trip to take again: the same stops, ways and day trips, with no dates, no name
+     * and no memories, since those belong to the time it was taken. Returns the copy's id.
+     */
+    @Synchronized
+    fun duplicateTrip(tripId: String): String? {
+        val t = trips.firstOrNull { it.id == tripId } ?: return null
+        val copy = t.copy(id = newTripId(), name = "", date = null, until = null, now = false, arrived = emptyMap(), left = emptyMap(), memories = emptyList())
+        val at = trips.indexOf(t)
+        trips = trips.take(at + 1) + copy + trips.drop(at + 1)
+        save()
+        return copy.id
     }
 
     /** One more visit to [id], starting there, with nothing filled in yet. */
@@ -1037,6 +1051,34 @@ class VisitStore(private val file: File) {
             pins += parsePins(root.optJSONObject("pins"))
         }
         return Read(marks, trips, pins, old = !v3)
+    }
+
+    /** What the store holds at one moment, to put back with [revert]. Cheap: the lists are never changed in place. */
+    class Snapshot internal constructor(
+        internal val marks: Map<String, Mark>,
+        internal val trips: List<Trip>,
+        internal val pins: Map<String, Pin>,
+        internal val pendingDrops: Map<String, Set<String>>,
+    )
+
+    @Synchronized
+    fun snapshot(): Snapshot = Snapshot(marks, trips, pins, pendingDrops)
+
+    /**
+     * True when nothing has changed since [s] was taken. Equal, not only the same objects: every
+     * save settles the trips again, which can rebuild them unchanged.
+     */
+    @Synchronized
+    fun unchangedSince(s: Snapshot): Boolean = s.marks == marks && s.trips == trips && s.pins == pins
+
+    /** Puts everything back the way it was when [s] was taken: what Undo does. */
+    @Synchronized
+    fun revert(s: Snapshot) {
+        marks = s.marks
+        trips = s.trips
+        pins = s.pins
+        pendingDrops = s.pendingDrops
+        save()
     }
 
     /** Everything the store holds, as the text of a backup file. */

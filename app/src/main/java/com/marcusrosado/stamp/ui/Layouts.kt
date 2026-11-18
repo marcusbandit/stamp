@@ -68,6 +68,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.layout
 import androidx.compose.runtime.remember
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.ui.unit.dp
@@ -326,8 +327,16 @@ private fun MapPane(state: AppState, sidePanel: Boolean, bottomInset: Dp) {
                     androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(220)),
             ) {
                 val shown = lastSelected ?: return@AnimatedVisibility
+                // The height is read while laying out, not while composing, so a drag measures the
+                // card again on each frame but never recomposes it or the map pane around it.
+                val expanded by remember(h) { androidx.compose.runtime.derivedStateOf { sheetH > h * 0.7f } }
                 Surface(
-                    modifier = Modifier.fillMaxWidth().height(sheetH)
+                    modifier = Modifier.fillMaxWidth()
+                        .layout { m, c ->
+                            val px = sheetH.roundToPx().coerceIn(c.minHeight, c.maxHeight)
+                            val p = m.measure(c.copy(minHeight = px, maxHeight = px))
+                            layout(p.width, px) { p.place(0, 0) }
+                        }
                         .nestedScroll(sheetScroll)
                         .draggable(
                             orientation = androidx.compose.foundation.gestures.Orientation.Vertical,
@@ -340,13 +349,13 @@ private fun MapPane(state: AppState, sidePanel: Boolean, bottomInset: Dp) {
                 ) {
                     Column {
                         SheetHandle(
-                            expanded = sheetH > h * 0.7f,
+                            expanded = expanded,
                             // A tap jumps between the opening height and the tallest.
                             onToggle = {
                                 settling[0]?.cancel()
                                 settling[0] = scope.launch {
                                     androidx.compose.animation.core.animate(
-                                        sheetH.value, (if (sheetH > h * 0.7f) opened else tallest - SHEET_TOP_GAP).value,
+                                        sheetH.value, (if (expanded) opened else tallest - SHEET_TOP_GAP).value,
                                         animationSpec = androidx.compose.animation.core.spring(dampingRatio = 0.85f, stiffness = 380f),
                                     ) { v, _ -> sheetH = v.dp }
                                     restedAt = sheetH
@@ -413,7 +422,7 @@ private fun TripMap(state: AppState, modifier: Modifier, at: Pair<Double, Double
     val camera = remember { CameraSpot(at?.first ?: 30.0, at?.second ?: 10.0, if (at != null) 6.0 else 0.6) }
     var focus by remember { mutableStateOf<Focus?>(null) }
     LaunchedEffect(at) { at?.let { focus = Focus(it.first, it.second, 5.0) } }
-    StampMap(state, modifier, camera = camera, focus = focus, onFocused = { focus = null }, onTap = {}, selectable = false)
+    StampMap(state, modifier, camera = camera, focus = focus, onFocused = { focus = null }, onTap = {}, selectable = false, light = true)
 }
 
 /** The passport, with everything it needs from the app's state. */
@@ -423,6 +432,9 @@ private fun Passport(state: AppState, padding: PaddingValues, modifier: Modifier
     onScan = state.onOpenScan, onOpenCountry = state.onOpenCountry, contentPadding = padding,
     modifier = modifier, split = state.split,
     trips = state.trips, places = state.places, onOpenTrip = state.onOpenTrip,
+    toTop = state.toTop,
+    onOpenList = state.onOpenListOf,
+    onShowMap = { state.onDestination(Destination.Map) },
 )
 
 /** A country's card, with everything it needs from the app's state. */
@@ -474,6 +486,13 @@ private fun StampMap(
     onRestore: (String?) -> Unit = state.onRestoreSelection,
     selectable: Boolean = true,
     animate: Boolean = true,
+    /**
+     * A second map beside a page, such as a trip's: countries, its lines and its stops, without
+     * the regions, every city of the cities view, the heat map, photos or city outlines. Each of
+     * those is built again for every map that draws it, and a second full map was enough to run
+     * a phone out of memory.
+     */
+    light: Boolean = false,
 ) {
     val selected = state.selected
     // A tapped line opens the picker for the leg it draws, right over the map: no country
@@ -538,7 +557,7 @@ private fun StampMap(
     }
     val rv = state.regionView
     // The cities view's dots: every city of some size, and every one on a visit or wanted.
-    val cityView = state.mapView == com.marcusrosado.stamp.data.MapView.Cities
+    val cityView = !light && state.mapView == com.marcusrosado.stamp.data.MapView.Cities
     val allCities by androidx.compose.runtime.produceState(emptyList<CityDot>(), cityView, state.places, state.visits) {
         val p = state.places
         if (!cityView || p == null) { value = emptyList(); return@produceState }
@@ -549,7 +568,7 @@ private fun StampMap(
         }
     }
     val heat by androidx.compose.runtime.produceState(emptyList<com.marcusrosado.stamp.data.HeatCell>(), state.seen, state.heatMap) {
-        value = if (!state.heatMap) emptyList()
+        value = if (!state.heatMap || light) emptyList()
         else kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { com.marcusrosado.stamp.data.Seen.cells(state.seen) }
     }
     val wantCities = remember(state.visits, state.places) {
@@ -557,17 +576,20 @@ private fun StampMap(
     }
     WorldMap(
         animate = animate,
-        regionLayer = if (rv.countries.isEmpty()) null else RegionLayer(rv.shapes, rv.marks, rv.countryMarks),
-        complete = rv.complete,
-        plain = state.mapView == com.marcusrosado.stamp.data.MapView.Cities,
+        regionLayer = if (light || rv.countries.isEmpty()) null else RegionLayer(rv.shapes, rv.marks, rv.countryMarks),
+        complete = if (light) emptySet() else rv.complete,
+        plain = !light && state.mapView == com.marcusrosado.stamp.data.MapView.Cities,
         wantCities = wantCities,
         onRegion = if (selectable) { cid, rid -> state.onSpot(Spot.Region(cid, rid)) } else null,
         allCities = allCities,
-        selectedRegion = (state.spot as? Spot.Region)?.regionId,
-        selectedCity = (state.spot as? Spot.City)?.let { it.lat to it.lon },
-        selectedArea = state.spotArea.takeIf { state.spot is Spot.City },
+        selectedRegion = (state.spot as? Spot.Region)?.regionId.takeIf { !light },
+        selectedCity = (state.spot as? Spot.City)?.let { it.lat to it.lon }.takeIf { !light },
+        selectedArea = state.spotArea.takeIf { state.spot is Spot.City && !light },
         heat = heat,
         onViewport = if (selectable) state.onViewport else null,
+        // Only where countries carry their marks: in the cities and regions views a long press
+        // would mark a whole country the finger was not on.
+        onLongPress = if (selectable && state.mapView == com.marcusrosado.stamp.data.MapView.Countries) { id -> state.onLongPressMap(id) } else null,
         onCity = if (selectable) { id ->
             val c = state.places?.byId?.get(id)
             val land = c?.let { state.atlas.landOf(it.lat, it.lon, it.country) }
@@ -585,7 +607,7 @@ private fun StampMap(
         split = state.split,
         routes = LocalMapRoutes.current,
         photos = remember(state.visits, state.places, state.mapPhotos) {
-            if (!state.mapPhotos) return@remember emptyList()
+            if (!state.mapPhotos || light) return@remember emptyList()
             // The first photo kept at each place; places only, not the visit as a whole.
             state.visits.values.filter { it.state.counts }.flatMap { v ->
                 (v.trips.flatMap { t -> t.memories } + v.memories).filter { it.media != null && it.place != null }
@@ -597,7 +619,8 @@ private fun StampMap(
                     }
             }.distinct()
         },
-        areas = remember(state.visits, state.cityAreas, state.keptOutlines) {
+        areas = remember(state.visits, state.cityAreas, state.keptOutlines, light) {
+            if (light) return@remember emptyList()
             state.visits.values.filter { it.state.counts }.flatMap { it.cities }.distinct()
                 .mapNotNull { state.cityAreas.of(it) ?: state.keptOutlines[it] }
         },
@@ -798,12 +821,17 @@ private fun Legend(state: AppState, modifier: Modifier) {
         shadowElevation = 2.dp,
     ) {
         Row(
-            Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             TravelState.entries.forEach { s ->
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                // Each count opens the list of what it counts.
+                Row(
+                    Modifier.clip(RoundedCornerShape(50)).clickable(onClickLabel = "Show ${s.label.lowercase()} countries") { state.onOpenListOf(ListFilter.of(s)) }
+                        .padding(horizontal = 4.dp, vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     Swatch(palette.of(s))
                     Spacer(Modifier.width(6.dp))
                     Text(
@@ -928,21 +956,25 @@ fun Split(
             flatFirst.coerceAtMost(full) to (if (flatFirst > 0.dp) 1.dp else 0.dp)
         }
         val spring = androidx.compose.animation.core.spring<Dp>(dampingRatio = 0.9f, stiffness = 320f)
-        val e by androidx.compose.animation.core.animateDpAsState(extent, spring, label = "split")
-        val g by androidx.compose.animation.core.animateDpAsState(gap, spring, label = "seam")
-        val rest = (full - e - g).coerceAtLeast(0.dp)
-        Box(if (vertical) Modifier.size(e, maxHeight) else Modifier.size(maxWidth, e)) { first() }
+        val e = androidx.compose.animation.core.animateDpAsState(extent, spring, label = "split")
+        val g = androidx.compose.animation.core.animateDpAsState(gap, spring, label = "seam")
+        // Both panes keep the size they end at and only slide and open, so a bend never
+        // measures them again on every frame.
+        Box(Modifier.revealed(vertical, { 0.dp }, { e.value }, extent)) { first() }
         if (hinge == null) {
             Box(
-                Modifier.offset(x = e).size(g, maxHeight)
+                Modifier.offset { androidx.compose.ui.unit.IntOffset(e.value.roundToPx(), 0) }.size(gap, maxHeight)
                     .background(MaterialTheme.colorScheme.outlineVariant),
             )
         }
         Box(
-            Modifier
-                .offset(x = if (vertical) e + g else 0.dp, y = if (vertical) 0.dp else e + g)
-                .size(if (vertical) rest else maxWidth, if (vertical) maxHeight else rest)
-                .clipToBounds(),
+            Modifier.revealed(
+                vertical,
+                { e.value + g.value },
+                { (full - e.value - g.value).coerceAtLeast(0.dp) },
+                (full - extent - gap).coerceAtLeast(0.dp),
+                fromEnd = true,
+            ),
         ) { second() }
     }
 }

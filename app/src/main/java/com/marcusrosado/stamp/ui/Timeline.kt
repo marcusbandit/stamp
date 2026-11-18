@@ -8,7 +8,6 @@ import androidx.compose.material.icons.outlined.Map
 import androidx.compose.foundation.layout.BoxWithConstraints
 import android.Manifest
 import android.content.pm.PackageManager
-import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -56,6 +55,7 @@ import androidx.compose.material.icons.filled.SubdirectoryArrowRight
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.outlined.AddAPhoto
 import androidx.compose.material.icons.outlined.EditNote
 import androidx.compose.material.icons.outlined.Edit
@@ -148,6 +148,10 @@ class TimelineActions(
     val onAddMemories: (List<Memory>) -> Unit,
     val onUpdateMemory: (Memory) -> Unit,
     val onRemoveMemory: (String) -> Unit,
+    /** Copies the trip, route and all, with no dates; null when it cannot be. */
+    val onDuplicate: (() -> Unit)? = null,
+    /** Removes the trip; null when it is the only one its country keeps. */
+    val onDelete: (() -> Unit)? = null,
 )
 
 /**
@@ -251,6 +255,9 @@ fun VisitTimeline(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
     ) {
+        // The timeline is a window of its own, over the app's snackbar: it shows the same one.
+        val undo = LocalUndo.current
+        Box(Modifier.fillMaxSize()) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
           BoxWithConstraints(Modifier.fillMaxSize()) {
             val wide = maxWidth >= 600.dp
@@ -283,6 +290,7 @@ fun VisitTimeline(
                         mapShown = if (map != null && LocalHinge.current == null) showMap else null,
                         // With the map shown it is the picture: the header shrinks to a title row.
                         compact = map != null && (showMap || LocalHinge.current != null),
+                        menu = { tint -> TripMenu(actions, onRename = { naming = true }, onDates = { editingDates = true }, tint = tint) },
                         onMap = { showMap = !showMap },
                     )
                 }
@@ -486,6 +494,8 @@ fun VisitTimeline(
             }
           }
         }
+        undo?.let { UndoHost(it, aboveBar = 0.dp) }
+        }
         if (naming) {
             NameDialog(
                 trip.name,
@@ -583,13 +593,16 @@ private fun Hero(
     mapShown: Boolean? = null,
     onMap: () -> Unit = {},
     compact: Boolean = false,
+    /** The trip's menu button, in the colour it should take over the header. */
+    menu: @Composable (tint: Color) -> Unit = {},
 ) {
     val accent = MaterialTheme.colorScheme.primary
     if (compact) {
-        Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 12.dp, top = 8.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 4.dp, top = 8.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
             HeroTitles(where, title, dates, onDates, onName, big = false, modifier = Modifier.weight(1f).padding(start = 4.dp))
             if (mapShown != null) MapButton(mapShown, onMap)
+            menu(MaterialTheme.colorScheme.onSurface)
         }
         return
     }
@@ -617,7 +630,10 @@ private fun Hero(
         IconButton(onClick = onBack, modifier = Modifier.statusBarsPadding().padding(8.dp)) {
             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
         }
-        if (mapShown != null) MapButton(mapShown, onMap, Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(12.dp))
+        Row(Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(top = 8.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (mapShown != null) MapButton(mapShown, onMap)
+            menu(Color.White)
+        }
         HeroTitles(where, title, dates, onDates, onName, big = true, modifier = Modifier.align(Alignment.BottomStart).padding(horizontal = 24.dp, vertical = 12.dp))
     }
 }
@@ -648,6 +664,28 @@ private fun HeroTitles(where: String, title: String, dates: String?, onDates: ()
             color = if (dates == null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable(onClick = onDates).padding(vertical = if (big) 4.dp else 0.dp),
         )
+    }
+}
+
+/** What can be done with a whole trip, behind one button in its header. */
+@Composable
+private fun TripMenu(actions: TimelineActions, onRename: () -> Unit, onDates: () -> Unit, tint: Color) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { open = true }) { Icon(Icons.Filled.MoreVert, contentDescription = "Trip options", tint = tint) }
+        androidx.compose.material3.DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            androidx.compose.material3.DropdownMenuItem(text = { Text("Rename") }, onClick = { open = false; onRename() })
+            androidx.compose.material3.DropdownMenuItem(text = { Text("Change dates") }, onClick = { open = false; onDates() })
+            actions.onDuplicate?.let { dup ->
+                androidx.compose.material3.DropdownMenuItem(text = { Text("Duplicate") }, onClick = { open = false; dup() })
+            }
+            actions.onDelete?.let { del ->
+                androidx.compose.material3.DropdownMenuItem(
+                    text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
+                    onClick = { open = false; del() },
+                )
+            }
+        }
     }
 }
 
@@ -982,13 +1020,19 @@ private fun MemoryTile(m: Memory, onClick: () -> Unit) {
 @Composable
 fun MediaImage(uri: Uri, video: Boolean, px: Int, modifier: Modifier = Modifier, crop: Boolean = true) {
     val context = LocalContext.current
-    val bmp by produceState<Bitmap?>(null, uri, px) {
-        value = if (crop) Memories.thumbnail(context, uri, video, px) else Memories.picture(context, uri, px)
+    val key = Thumbs.key(uri.toString(), video, px, crop)
+    // A picture decoded before shows on this very frame, so scrolling back never flashes grey.
+    // A new picture starts grey rather than showing the last one until it decodes.
+    var bmp by remember(key) { mutableStateOf(Thumbs[key]) }
+    androidx.compose.runtime.LaunchedEffect(key) {
+        if (bmp != null) return@LaunchedEffect
+        val decoded = if (crop) Memories.thumbnail(context, uri, video, px) else Memories.picture(context, uri, px)
+        bmp = decoded?.asImageBitmap()?.also { Thumbs.put(key, it) }
     }
     Box(modifier.background(MaterialTheme.colorScheme.surfaceContainerHighest)) {
         bmp?.let {
             Image(
-                it.asImageBitmap(),
+                it,
                 contentDescription = null,
                 contentScale = if (crop) ContentScale.Crop else ContentScale.Fit,
                 modifier = Modifier.fillMaxSize(),
@@ -1150,6 +1194,7 @@ private fun BigChoice(icon: androidx.compose.ui.graphics.vector.ImageVector, lab
 /** A memory full size: the photo, a video's frame with a play button, and its note. */
 @Composable
 private fun MemoryViewer(memory: Memory, onSave: (Memory) -> Unit, onRemove: () -> Unit, onDismiss: () -> Unit) {
+    val undoable = LocalUndo.current != null
     val context = LocalContext.current
     var text by remember(memory.id) { mutableStateOf(memory.text) }
     var removing by remember(memory.id) { mutableStateOf(false) }
@@ -1203,7 +1248,7 @@ private fun MemoryViewer(memory: Memory, onSave: (Memory) -> Unit, onRemove: () 
                         placeholder = { Text(if (memory.media == null) "What happened here?" else "Add a note") },
                     )
                     Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(onClick = { removing = true }) { Icon(Icons.Filled.Delete, contentDescription = "Remove memory") }
+                        IconButton(onClick = { if (undoable) onRemove() else removing = true }) { Icon(Icons.Filled.Delete, contentDescription = "Remove memory") }
                         Spacer(Modifier.weight(1f))
                         TextButton(onClick = ::finish) { Text("Done") }
                     }

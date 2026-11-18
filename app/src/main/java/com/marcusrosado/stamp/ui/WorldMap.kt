@@ -2,6 +2,7 @@ package com.marcusrosado.stamp.ui
 
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import android.annotation.SuppressLint
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -12,6 +13,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
@@ -123,6 +127,8 @@ fun WorldMap(
     selectedArea: List<Shape>? = null,
     /** Where the map rests after each move: zoom, then south, west, north and east. */
     onViewport: ((DoubleArray) -> Unit)? = null,
+    /** A long press on a country, with its id. */
+    onLongPress: ((String) -> Unit)? = null,
     /** False while a page covers the whole map: its icons stop gliding until it shows again. */
     animate: Boolean = true,
 ) {
@@ -137,13 +143,18 @@ fun WorldMap(
     var fine by remember { mutableStateOf<FineShapes?>(null) }
     LaunchedEffect(Unit) { fine = (context.applicationContext as StampApp).fineShapes.await() }
     // The map view below is built once; it reads these through the updated state.
-    val outline by rememberUpdatedState(remember(atlas, split, fine) { Outline(atlas, split, fine) })
+    val outlineScope = androidx.compose.runtime.rememberCoroutineScope()
+    val outlineNow = remember(atlas, split, fine) { Outline(atlas, split, fine, outlineScope) }
+    // An outline replaced mid-read must not write its country over the new one's.
+    DisposableEffect(outlineNow) { onDispose { outlineNow.reset() } }
+    val outline by rememberUpdatedState(outlineNow)
     val selected by rememberUpdatedState(selectedId)
     val tapKey by rememberUpdatedState(if (split) "id" else "country")
     val routeTap by rememberUpdatedState(onRoute.takeIf { showRoutes })
     val regionTap by rememberUpdatedState(onRegion.takeIf { regionLayer != null })
     val cityTap by rememberUpdatedState(onCity.takeIf { allCities.isNotEmpty() })
     val viewport by rememberUpdatedState(onViewport)
+    val longPress by rememberUpdatedState(onLongPress.takeIf { selectable })
 
     val mapView = remember {
         MapView(context).apply {
@@ -204,6 +215,16 @@ fun WorldMap(
                     return false
                 }
 
+                override fun onLongPress(e: MotionEvent) {
+                    val onLong = longPress ?: return
+                    if (stoppedMotion) return
+                    val m = map ?: return
+                    val id = m.queryRenderedFeatures(PointF(e.x, e.y), LAYER_FILL_FINE, LAYER_FILL).firstOrNull()?.getStringProperty(tapKey)
+                        ?: return
+                    performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
+                    onLong(id)
+                }
+
                 override fun onDoubleTap(e: MotionEvent): Boolean {
                     tappedTrips = null
                     if (!selectable) return false
@@ -259,10 +280,15 @@ fun WorldMap(
     LaunchedEffect(map, palette) {
         val m = map ?: return@LaunchedEffect
         style = null
-        m.setStyle(Style.Builder().fromJson(styleJson(palette))) {
-            it.addImage(IMAGE_HOME, homeMarker(context, palette.lived.toArgb()))
+        // The 1:10m countries only draw from zoom 3.5, and MapLibre takes a while over their
+        // 7.8 MB. Further out than that, the map draws first with the source empty and reads
+        // the file once the first frames are up, or as soon as the camera heads that way.
+        val fineLater = m.cameraPosition.zoom < FINE_SOON
+        m.setStyle(Style.Builder().fromJson(styleJson(palette, fineLater))) { s ->
+            s.addImage(IMAGE_HOME, homeMarker(context, palette.lived.toArgb()))
             outline.reset()
-            style = it
+            style = s
+            if (fineLater) loadFineLater(mapView, m, s)
         }
     }
 
@@ -326,41 +352,52 @@ fun WorldMap(
     val drawDensity = androidx.compose.ui.platform.LocalDensity.current
     LaunchedEffect(style) {
         val s = style ?: return@LaunchedEffect
-        addRouteImages(s, palette, wayPainters, drawDensity)
+        addRouteImages(s, palette, drawDensity)
+    }
+    val badges = remember(palette, drawDensity) {
+        wayPainters.mapValues { (way, painter) -> badge(way, painter, palette, drawDensity).asImageBitmap() }
     }
 
-    // Each leg's icon glides along it, start to end, then starts over. Only the legs on screen
-    // move; with none in view nothing is drawn, and the loop only checks back now and then.
-    // One clock for the map's life, so an edit that redraws the routes leaves every icon where
-    // it was; each leg's place in its loop comes from the leg itself, not from its order.
+    // Each leg's icon glides along it, start to end, then starts over. The icons are drawn over
+    // the map, not in it: moving one never makes the map draw again, which a symbol layer fed
+    // new data 30 times a second did, whole world and all, through every pan.
     val clock = remember { System.nanoTime() }
-    val moving by rememberUpdatedState(animate)
-    LaunchedEffect(style, routes, showRoutes) {
-        val s = style ?: return@LaunchedEffect
-        val m = map ?: return@LaunchedEffect
-        val src = s.getSourceAs<GeoJsonSource>(SOURCE_ROUTE_ICONS) ?: return@LaunchedEffect
-        val none = FeatureCollection.fromFeatures(emptyList())
-        val glides = if (showRoutes) routes.filter { it.way != null && it.points.size >= 2 }.distinctBy { it.points to it.way }
+    val glides = remember(routes, showRoutes) {
+        if (showRoutes) routes.filter { it.way != null && it.points.size >= 2 }.distinctBy { it.points to it.way }
             .map { r -> Glide(r, phase = ((r.points to r.way).hashCode() and 0xFFFF) / 65536.0) } else emptyList()
-        if (glides.isEmpty()) { src.setGeoJson(none); return@LaunchedEffect }
-        var last = 0L
-        var shown = false
+    }
+    val glideFrame = remember { androidx.compose.runtime.mutableLongStateOf(0L) }
+    // Plain fields, not state: the loop below reads them, and nothing should recompose for them.
+    val cameraMoving = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
+    DisposableEffect(map) {
+        val m = map ?: return@DisposableEffect onDispose { }
+        val started = MapLibreMap.OnCameraMoveStartedListener { cameraMoving.set(true) }
+        val idle = MapLibreMap.OnCameraIdleListener { cameraMoving.set(false) }
+        m.addOnCameraMoveStartedListener(started)
+        m.addOnCameraIdleListener(idle)
+        onDispose {
+            m.removeOnCameraMoveStartedListener(started)
+            m.removeOnCameraIdleListener(idle)
+        }
+    }
+    val glideOn by rememberUpdatedState(animate)
+    LaunchedEffect(glides, map) {
+        val m = map ?: return@LaunchedEffect
+        if (glides.isEmpty()) return@LaunchedEffect
         while (true) {
-            val now = androidx.compose.runtime.withFrameNanos { it }
-            // About 30 times a second is smooth enough for something this slow.
-            if (now - last < 32_000_000L) continue
-            last = now
-            // Under a page, behind a dialog or off screen nobody sees it move.
+            // Under a page, behind a dialog, off screen, or with no leg in view, nobody sees one
+            // move: hide them and check back now and then. While the map moves they hide too,
+            // since the map draws on its own thread and icons drawn over it would trail behind.
             val bounds = m.projection.visibleRegion.latLngBounds
-            val seen = if (moving && mapView.isShown && mapView.hasWindowFocus()) glides.filter { it.onScreen(bounds) } else emptyList()
-            if (seen.isEmpty()) {
-                if (shown) { src.setGeoJson(none); shown = false }
-                kotlinx.coroutines.delay(400)
+            if (!glideOn || cameraMoving.get() || !mapView.isShown || !mapView.hasWindowFocus() || glides.none { it.onScreen(bounds) }) {
+                if (glideFrame.longValue != 0L) glideFrame.longValue = 0L
+                kotlinx.coroutines.delay(if (cameraMoving.get()) 100 else 400)
                 continue
             }
-            val t = (now - clock) / 1e9
-            src.setGeoJson(FeatureCollection.fromFeatures(seen.map { it.at(t, bounds) }))
-            shown = true
+            // One step about every other frame, some 30 a second: smooth enough for something
+            // this slow, and the rest of the time no frame is asked for at all.
+            glideFrame.longValue = androidx.compose.runtime.withFrameNanos { it }
+            kotlinx.coroutines.delay(16)
         }
     }
 
@@ -376,7 +413,9 @@ fun WorldMap(
         val missing = photos.filter { it.uri !in thumbs }.distinctBy { it.uri }
         kotlinx.coroutines.coroutineScope {
             missing.map { p ->
-                async {
+                // The decode moves to IO on its own, but async would bring it back to the main
+                // thread for the rounding, which drew every map photo there.
+                async(kotlinx.coroutines.Dispatchers.Default) {
                     com.marcusrosado.stamp.scan.Memories.thumbnail(context, android.net.Uri.parse(p.uri), p.video, px)?.let { p.uri to roundPhoto(it, px, ring) }
                 }
             }.awaitAll().filterNotNull().forEach { (u, b) -> thumbs[u] = b }
@@ -587,7 +626,55 @@ fun WorldMap(
         }
     }
 
-    AndroidView(factory = { mapView }, modifier = modifier)
+    androidx.compose.foundation.layout.Box(modifier) {
+        AndroidView(factory = { mapView }, modifier = Modifier.fillMaxSize())
+        GlideIcons(map, glides, badges, clock) { glideFrame.longValue }
+    }
+}
+
+/**
+ * The legs' icons over the map, placed through its projection. Only [frame] changes from one
+ * frame to the next, and it is read while drawing, so the icons move without any recomposition.
+ */
+@Composable
+private fun GlideIcons(
+    map: MapLibreMap?,
+    glides: List<Glide>,
+    badges: Map<com.marcusrosado.stamp.data.Travel, androidx.compose.ui.graphics.ImageBitmap>,
+    clock: Long,
+    frame: () -> Long,
+) {
+    if (map == null || glides.isEmpty()) return
+    androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
+        val now = frame()
+        if (now == 0L) return@Canvas
+        val proj = map.projection
+        val bounds = proj.visibleRegion.latLngBounds
+        val t = (now - clock) / 1e9
+        val cam = map.cameraPosition
+        // As the layer did: 0.7 of full size zoomed out, full size from zoom 6.
+        val scale = (0.7 + 0.3 * ((cam.zoom - 1) / 5)).coerceIn(0.7, 1.0).toFloat()
+        for (g in glides) {
+            if (!g.onScreen(bounds)) continue
+            val img = badges[g.way] ?: continue
+            val pose = g.pose(t, bounds)
+            if (pose.alpha <= 0f) continue
+            val at = proj.toScreenLocation(org.maplibre.android.geometry.LatLng(pose.lat, pose.lon))
+            val w = img.width * scale
+            val h = img.height * scale
+            withTransform({
+                translate(at.x, at.y)
+                rotate((pose.heading - cam.bearing).toFloat(), pivot = androidx.compose.ui.geometry.Offset.Zero)
+            }) {
+                drawImage(
+                    img,
+                    dstOffset = androidx.compose.ui.unit.IntOffset((-w / 2).toInt(), (-h / 2).toInt()),
+                    dstSize = androidx.compose.ui.unit.IntSize(w.toInt(), h.toInt()),
+                    alpha = pose.alpha,
+                )
+            }
+        }
+    }
 }
 
 private const val LAYER_FILL = "countries-fill"
@@ -735,22 +822,62 @@ private const val GOLD = "#F2C14E"
 
 internal fun hex(c: Color) = String.format("#%06X", c.toArgb() and 0xFFFFFF)
 
-private fun styleJson(p: MapPalette) = """
+/**
+ * Fills the style's 1:10m source once the map has drawn and gone idle, or sooner if the camera
+ * nears the zoom it shows from. Once only; a style already replaced is left alone.
+ */
+private fun loadFineLater(view: MapView, m: MapLibreMap, s: Style) {
+    var done = false
+    lateinit var idle: MapView.OnDidBecomeIdleListener
+    lateinit var move: MapLibreMap.OnCameraMoveListener
+    fun load() {
+        if (done) return
+        done = true
+        // Taken off after this callback returns, not from inside it.
+        view.post {
+            view.removeOnDidBecomeIdleListener(idle)
+            m.removeOnCameraMoveListener(move)
+        }
+        runCatching { s.getSourceAs<GeoJsonSource>(SOURCE_COUNTRIES_FINE)?.setUri("asset://${StampApp.FINE_COUNTRIES_ASSET}") }
+    }
+    idle = MapView.OnDidBecomeIdleListener { load() }
+    move = MapLibreMap.OnCameraMoveListener { if (m.cameraPosition.zoom >= FINE_SOON) load() }
+    view.addOnDidBecomeIdleListener(idle)
+    m.addOnCameraMoveListener(move)
+}
+
+/** Closer than this, the 1:10m source is read with the style instead of after it. */
+private const val FINE_SOON = FINE_FROM - 1.0
+
+private const val SOURCE_COUNTRIES_FINE = "countries-fine"
+
+/**
+ * The country sources stop cutting tiles past the zoom they show to and scale the last ones up,
+ * which MapLibre does with the full detail of the data at that zoom. The 1:50m shapes show to
+ * zoom 4. At zoom 8 a tile of the 1:10m ones already holds its 1e-4 degree points to within a
+ * pixel at the deepest zoom, 12. The selected outlines match their fills so the lines sit on
+ * the same edges. Tolerance is how far, in pixels, a line may be simplified on a tile.
+ */
+private const val COARSE_SOURCE = "\"maxzoom\": 5, \"tolerance\": 0.5"
+private const val FINE_SOURCE = "\"maxzoom\": 8, \"tolerance\": 0.5"
+
+private const val EMPTY_DATA = "{ \"type\": \"FeatureCollection\", \"features\": [] }"
+
+private fun styleJson(p: MapPalette, fineLater: Boolean) = """
 {
   "version": 8,
   "name": "stamp",
   "glyphs": "asset://glyphs/{fontstack}/{range}.pbf",
   "sources": {
-    "countries": { "type": "geojson", "data": "asset://${StampApp.COUNTRIES_ASSET}" },
-    "countries-fine": { "type": "geojson", "data": "asset://${StampApp.FINE_COUNTRIES_ASSET}" },
-    "$SOURCE_SELECTED": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
-    "$SOURCE_SELECTED_FINE": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
+    "countries": { "type": "geojson", "data": "asset://${StampApp.COUNTRIES_ASSET}", $COARSE_SOURCE },
+    "$SOURCE_COUNTRIES_FINE": { "type": "geojson", "data": ${if (fineLater) EMPTY_DATA else "\"asset://${StampApp.FINE_COUNTRIES_ASSET}\""}, $FINE_SOURCE },
+    "$SOURCE_SELECTED": { "type": "geojson", "data": $EMPTY_DATA, $COARSE_SOURCE },
+    "$SOURCE_SELECTED_FINE": { "type": "geojson", "data": $EMPTY_DATA, $FINE_SOURCE },
     "$SOURCE_CITIES": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
     "$SOURCE_HOMES": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
     "$SOURCE_ME": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
     "$SOURCE_AREAS": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
     "$SOURCE_ROUTES": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
-    "$SOURCE_ROUTE_ICONS": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
     "$SOURCE_PHOTOS": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
     "$SOURCE_REGIONS": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
     "$SOURCE_WANT_CITIES": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
@@ -767,10 +894,10 @@ private fun styleJson(p: MapPalette) = """
     { "id": "countries-border", "type": "line", "source": "countries", "maxzoom": $FINE_FULL,
       "paint": { "line-color": "${hex(p.border)}", "line-width": 0.7,
                  "line-opacity": ["interpolate", ["linear"], ["zoom"], $FINE_FROM, 1, $FINE_FULL, 0] } },
-    { "id": "$LAYER_FILL_FINE", "type": "fill", "source": "countries-fine", "minzoom": $FINE_FROM,
+    { "id": "$LAYER_FILL_FINE", "type": "fill", "source": "$SOURCE_COUNTRIES_FINE", "minzoom": $FINE_FROM,
       "paint": { "fill-color": "${hex(p.land)}", "fill-antialias": true,
                  "fill-opacity": ["interpolate", ["linear"], ["zoom"], $FINE_FROM, 0, $FINE_FULL, 1] } },
-    { "id": "countries-border-fine", "type": "line", "source": "countries-fine", "minzoom": $FINE_FROM,
+    { "id": "countries-border-fine", "type": "line", "source": "$SOURCE_COUNTRIES_FINE", "minzoom": $FINE_FROM,
       "paint": { "line-color": "${hex(p.border)}", "line-width": 0.7,
                  "line-opacity": ["interpolate", ["linear"], ["zoom"], $FINE_FROM, 0, $FINE_FULL, 1] } },
     { "id": "$LAYER_REGIONS", "type": "fill", "source": "$SOURCE_REGIONS",
@@ -785,9 +912,9 @@ private fun styleJson(p: MapPalette) = """
       "paint": { "line-color": "$GOLD", "line-width": 7, "line-blur": 5, "line-opacity": 0.55 } },
     { "id": "complete-line", "type": "line", "source": "countries", "maxzoom": $FINE_FULL, "filter": ["in", ["get", "country"], ["literal", []]],
       "paint": { "line-color": "$GOLD", "line-width": 2.0 } },
-    { "id": "complete-glow-fine", "type": "line", "source": "countries-fine", "minzoom": $FINE_FULL, "filter": ["in", ["get", "country"], ["literal", []]],
+    { "id": "complete-glow-fine", "type": "line", "source": "$SOURCE_COUNTRIES_FINE", "minzoom": $FINE_FULL, "filter": ["in", ["get", "country"], ["literal", []]],
       "paint": { "line-color": "$GOLD", "line-width": 7, "line-blur": 5, "line-opacity": 0.55 } },
-    { "id": "complete-line-fine", "type": "line", "source": "countries-fine", "minzoom": $FINE_FULL, "filter": ["in", ["get", "country"], ["literal", []]],
+    { "id": "complete-line-fine", "type": "line", "source": "$SOURCE_COUNTRIES_FINE", "minzoom": $FINE_FULL, "filter": ["in", ["get", "country"], ["literal", []]],
       "paint": { "line-color": "$GOLD", "line-width": 2.0 } },
     { "id": "city-areas-fill", "type": "fill", "source": "$SOURCE_AREAS",
       "paint": { "fill-color": "${hex(p.ocean)}",
@@ -829,7 +956,6 @@ ${allCityLayersJson(p)},
       "paint": { "circle-radius": 9, "circle-color": "rgba(0,0,0,0)",
                  "circle-stroke-color": "${hex(p.selected)}", "circle-stroke-width": 2.5 } },
 ${cityLabelLayersJson(p)},
-$ROUTE_ICONS_JSON,
     { "id": "photos", "type": "symbol", "source": "$SOURCE_PHOTOS", "minzoom": 4.5,
       "layout": { "icon-image": ["get", "img"], "icon-allow-overlap": false,
                   "icon-size": ["interpolate", ["linear"], ["zoom"], 4.5, 0.6, 7, 1.0],
@@ -852,23 +978,66 @@ $ROUTE_ICONS_JSON,
  * MapLibre lay out every country's border again. A second source holds the same country in
  * the 1:10m shapes, for mid zoom and closer.
  */
-private class Outline(private val atlas: Atlas, private val split: Boolean, private val fine: FineShapes?) {
-    private val cache = HashMap<String, Feature>()
+private class Outline(
+    private val atlas: Atlas,
+    private val split: Boolean,
+    private val fine: FineShapes?,
+    private val scope: kotlinx.coroutines.CoroutineScope,
+) {
+    // The last few countries' outlines, so tapping between them builds nothing again. A
+    // session can tap hundreds, and these never shrank before.
+    private val cache = object : LinkedHashMap<String, Feature>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Feature>?) = size > KEEP_OUTLINES
+    }
+
+    // The 1:10m text of the last few, bounded by size: a big country is megabytes, and a
+    // double tap puts the one before straight back.
+    private val fineCache = LinkedHashMap<String, String>(8, 0.75f, true)
+    private var fineChars = 0
+    private var fineJob: kotlinx.coroutines.Job? = null
     private var shown: String? = null
 
     /** A new style starts with empty sources. */
-    fun reset() { shown = null }
+    fun reset() {
+        shown = null
+        fineJob?.cancel()
+    }
 
     fun show(style: Style, id: String?) {
         if (id == shown) return
         shown = id
         val src = style.getSourceAs<GeoJsonSource>(SOURCE_SELECTED) ?: return
-        val f = id?.let { cache.getOrPut(it) { feature(it) ?: return@let null } }
+        val f = id?.let { cache[it] ?: feature(it)?.also { built -> cache[it] = built } }
         if (f == null) src.setGeoJson(FeatureCollection.fromFeatures(emptyList())) else src.setGeoJson(f)
         val fineSrc = style.getSourceAs<GeoJsonSource>(SOURCE_SELECTED_FINE) ?: return
-        // Not cached: cutting one country out of the file is cheap, and a big one is megabytes.
-        val json = id?.let { fineJson(it) }
-        if (json == null) fineSrc.setGeoJson(FeatureCollection.fromFeatures(emptyList())) else fineSrc.setGeoJson(json)
+        fineJob?.cancel()
+        val kept = id?.let { fineCache[it] }
+        if (kept != null) { fineSrc.setGeoJson(kept); return }
+        // Nothing of the country before until the new one is read: it must not linger.
+        fineSrc.setGeoJson(FeatureCollection.fromFeatures(emptyList()))
+        if (id == null) return
+        // Read off the main thread: the country's text comes out of the asset, which means
+        // reading the file up to it.
+        fineJob = scope.launch {
+            val json = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { fineJson(id) } ?: return@launch
+            keep(id, json)
+            if (shown != id) return@launch
+            // The style may have been replaced while the file was read.
+            runCatching { style.getSourceAs<GeoJsonSource>(SOURCE_SELECTED_FINE)?.setGeoJson(json) }
+        }
+    }
+
+    private fun keep(id: String, json: String) {
+        fineCache.remove(id)?.let { fineChars -= it.length }
+        fineCache[id] = json
+        fineChars += json.length
+        val it = fineCache.entries.iterator()
+        while (fineChars > KEEP_FINE_CHARS && fineCache.size > 1) {
+            val e = it.next()
+            if (e.key == id) continue
+            fineChars -= e.value.length
+            it.remove()
+        }
     }
 
     /** The ids an outline of [id] covers: whole countries outline every land mass they have. */
@@ -878,7 +1047,7 @@ private class Outline(private val atlas: Atlas, private val split: Boolean, priv
     private fun fineJson(id: String): String? {
         val shapes = fine ?: return null
         val c = atlas.byId[id] ?: return null
-        val features = idsOf(c).mapNotNull { shapes.feature(it) }
+        val features = shapes.features(idsOf(c))
         if (features.isEmpty()) return null
         return features.joinToString(",", "{\"type\":\"FeatureCollection\",\"features\":[", "]}")
     }
@@ -893,6 +1062,12 @@ private class Outline(private val atlas: Atlas, private val split: Boolean, priv
     }
 }
 
+/** How many countries' outlines [Outline] keeps built. */
+private const val KEEP_OUTLINES = 16
+
+/** About how much 1:10m outline text [Outline] keeps, in characters. */
+private const val KEEP_FINE_CHARS = 2_000_000
+
 /**
  * The trips on the line nearest a tap at [x], [y] within 10 dp, and on any line just as near,
  * such as the way out and the way back drawn over the same rails: what the tap means. Where two
@@ -900,7 +1075,7 @@ private class Outline(private val atlas: Atlas, private val split: Boolean, priv
  */
 private fun nearestRoutes(m: MapLibreMap, x: Float, y: Float, density: Float): List<RouteTap> {
     val slack = 10f * density
-    val layers = ROUTE_LAYERS.filter { it != "route-icons" }.toTypedArray()
+    val layers = ROUTE_LAYERS.toTypedArray()
     val hits = m.queryRenderedFeatures(android.graphics.RectF(x - slack, y - slack, x + slack, y + slack), *layers)
     if (hits.isEmpty()) return emptyList()
     val proj = m.projection

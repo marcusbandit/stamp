@@ -18,7 +18,15 @@ import org.maplibre.android.MapLibre
 import java.io.File
 
 /** Holds the things that outlive any one screen: the country data, the marks, the scanner. */
-class StampApp : Application() {
+class StampApp : Application(), androidx.work.Configuration.Provider {
+    /**
+     * WorkManager starts when the hourly look first needs it, not with every process: the
+     * manifest takes out its startup initializer, which ran on the main thread before anything
+     * else, for a schedule most users never turn on.
+     */
+    override val workManagerConfiguration: androidx.work.Configuration
+        get() = androidx.work.Configuration.Builder().build()
+
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     /** Parsed once, off the main thread, as soon as the process starts. */
@@ -28,11 +36,15 @@ class StampApp : Application() {
         }
     }
 
-    /** The 1:10m shapes, for the selected outline at mid zoom and closer. Empty if the asset is missing. */
+    /**
+     * Where each country sits in the 1:10m file, for the selected outline at mid zoom and closer.
+     * Only the places are kept; a country's text is read from the asset when it is selected.
+     * Empty if the asset is missing.
+     */
     val fineShapes by lazy {
         scope.async(Dispatchers.IO) {
             atlas.await()
-            runCatching { assets.open(FINE_COUNTRIES_ASSET).use { FineShapes.read(it.readBytes()) } }.getOrDefault(FineShapes.EMPTY)
+            runCatching { FineShapes.index { runCatching { assets.open(FINE_COUNTRIES_ASSET) }.getOrNull() } }.getOrDefault(FineShapes.EMPTY)
         }
     }
 
@@ -267,10 +279,24 @@ class StampApp : Application() {
      */
     fun warmUp() {
         if (!warm.compareAndSet(false, true)) return
-        // The schedule outlives the app, but a permission taken back in Android's settings ends it.
-        com.marcusrosado.stamp.data.Hourly.schedule(this, hourly.on.value && com.marcusrosado.stamp.data.Hourly.allowed(this))
         // Starts reading the marks now, on the IO thread; the first screen waits for them.
         visitsLoading.start()
+        // The switches the first screen reads, each a small file, read here off the main thread
+        // so composing it does not wait on the disk. The look is read on the main thread on
+        // purpose, before the first frame.
+        scope.launch(Dispatchers.IO) {
+            // Each of these is lazy and reads its file on first touch: touching them here is what
+            // moves those reads off the main thread. Do not remove as unused.
+            listOf(split, mapPhotos, routes, followLines, fetchOutlines, here, heatMap, updateCheck)
+            mapView.value
+            lastBackup.value
+            // The schedule outlives the app, but a permission taken back in Android's settings
+            // ends it. Turning the switch off cancels it then, so with the switch off there is
+            // nothing to cancel, and WorkManager need not start at all.
+            if (hourly.on.value) {
+                com.marcusrosado.stamp.data.Hourly.schedule(this@StampApp, com.marcusrosado.stamp.data.Hourly.allowed(this@StampApp))
+            }
+        }
         // Leaving the app, every change is on disk before Android may end the process. Usually
         // the save thread has already written it and this returns at once.
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
