@@ -68,6 +68,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.layout
 import androidx.compose.runtime.remember
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.ui.unit.dp
@@ -326,8 +327,16 @@ private fun MapPane(state: AppState, sidePanel: Boolean, bottomInset: Dp) {
                     androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(220)),
             ) {
                 val shown = lastSelected ?: return@AnimatedVisibility
+                // The height is read while laying out, not while composing, so a drag measures the
+                // card again on each frame but never recomposes it or the map pane around it.
+                val expanded by remember(h) { androidx.compose.runtime.derivedStateOf { sheetH > h * 0.7f } }
                 Surface(
-                    modifier = Modifier.fillMaxWidth().height(sheetH)
+                    modifier = Modifier.fillMaxWidth()
+                        .layout { m, c ->
+                            val px = sheetH.roundToPx().coerceIn(c.minHeight, c.maxHeight)
+                            val p = m.measure(c.copy(minHeight = px, maxHeight = px))
+                            layout(p.width, px) { p.place(0, 0) }
+                        }
                         .nestedScroll(sheetScroll)
                         .draggable(
                             orientation = androidx.compose.foundation.gestures.Orientation.Vertical,
@@ -340,13 +349,13 @@ private fun MapPane(state: AppState, sidePanel: Boolean, bottomInset: Dp) {
                 ) {
                     Column {
                         SheetHandle(
-                            expanded = sheetH > h * 0.7f,
+                            expanded = expanded,
                             // A tap jumps between the opening height and the tallest.
                             onToggle = {
                                 settling[0]?.cancel()
                                 settling[0] = scope.launch {
                                     androidx.compose.animation.core.animate(
-                                        sheetH.value, (if (sheetH > h * 0.7f) opened else tallest - SHEET_TOP_GAP).value,
+                                        sheetH.value, (if (expanded) opened else tallest - SHEET_TOP_GAP).value,
                                         animationSpec = androidx.compose.animation.core.spring(dampingRatio = 0.85f, stiffness = 380f),
                                     ) { v, _ -> sheetH = v.dp }
                                     restedAt = sheetH
@@ -947,21 +956,25 @@ fun Split(
             flatFirst.coerceAtMost(full) to (if (flatFirst > 0.dp) 1.dp else 0.dp)
         }
         val spring = androidx.compose.animation.core.spring<Dp>(dampingRatio = 0.9f, stiffness = 320f)
-        val e by androidx.compose.animation.core.animateDpAsState(extent, spring, label = "split")
-        val g by androidx.compose.animation.core.animateDpAsState(gap, spring, label = "seam")
-        val rest = (full - e - g).coerceAtLeast(0.dp)
-        Box(if (vertical) Modifier.size(e, maxHeight) else Modifier.size(maxWidth, e)) { first() }
+        val e = androidx.compose.animation.core.animateDpAsState(extent, spring, label = "split")
+        val g = androidx.compose.animation.core.animateDpAsState(gap, spring, label = "seam")
+        // Both panes keep the size they end at and only slide and open, so a bend never
+        // measures them again on every frame.
+        Box(Modifier.revealed(vertical, { 0.dp }, { e.value }, extent)) { first() }
         if (hinge == null) {
             Box(
-                Modifier.offset(x = e).size(g, maxHeight)
+                Modifier.offset { androidx.compose.ui.unit.IntOffset(e.value.roundToPx(), 0) }.size(gap, maxHeight)
                     .background(MaterialTheme.colorScheme.outlineVariant),
             )
         }
         Box(
-            Modifier
-                .offset(x = if (vertical) e + g else 0.dp, y = if (vertical) 0.dp else e + g)
-                .size(if (vertical) rest else maxWidth, if (vertical) maxHeight else rest)
-                .clipToBounds(),
+            Modifier.revealed(
+                vertical,
+                { e.value + g.value },
+                { (full - e.value - g.value).coerceAtLeast(0.dp) },
+                (full - extent - gap).coerceAtLeast(0.dp),
+                fromEnd = true,
+            ),
         ) { second() }
     }
 }

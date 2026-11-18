@@ -22,6 +22,10 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.marcusrosado.stamp.Posture
 import com.marcusrosado.stamp.StampApp
@@ -77,7 +81,8 @@ class AppState(
     val scan: ScanState,
     val hasScanned: Boolean,
     val camera: CameraSpot,
-    val focus: Focus?,
+    /** Read through [focus] by the map alone, so a tap that moves it recomposes only the map. */
+    private val focusState: androidx.compose.runtime.State<Focus?>,
     val onDestination: (Destination) -> Unit,
     /** A long press on the map, with the country under the finger. */
     val onLongPressMap: (String?) -> Unit = {},
@@ -182,6 +187,8 @@ class AppState(
     val onShowHome: (Double, Double) -> Unit = { _, _ -> },
     val app: com.marcusrosado.stamp.StampApp,
 ) {
+    /** Where the map should fly next, if anywhere. */
+    val focus: Focus? get() = focusState.value
     /** "🇦🇹 Austria" for a country code. */
     val countryLabel: (String) -> String = { a2 ->
         atlas.mains.firstOrNull { it.alpha2 == a2 }?.let { "${it.flag} ${it.name}".trim() } ?: a2
@@ -311,7 +318,8 @@ private fun App(
     var pendingTrip by rememberSaveable { mutableStateOf<String?>(null) }
     var tripFromTab by rememberSaveable { mutableStateOf(false) }
     val allTrips by app.visits.allTrips.collectAsStateWithLifecycle()
-    var focus by remember { mutableStateOf<Focus?>(null) }
+    val focusState = remember { mutableStateOf<Focus?>(null) }
+    var focus by focusState
     var me by remember { mutableStateOf<Pair<Double, Double>?>(null) }
     val locating = androidx.compose.runtime.rememberCoroutineScope()
     val undo = remember(app) { Undo(app.visits, locating) }
@@ -368,11 +376,20 @@ private fun App(
     val places by produceState<Places?>(null) { value = runCatching { app.places.await() }.getOrNull() }
     // Regions are read and placed off the main thread, again whenever the marks change.
     // Where the map rests, and the countries in sight there once it is close enough.
-    var viewport by remember { mutableStateOf<DoubleArray?>(null) }
-    val inView = remember(viewport, atlas) { countriesInView(atlas, viewport) }
-    val regionView by androidx.compose.runtime.produceState(RegionView.EMPTY, mapView, visits, places, atlas, inView) {
-        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
-            runCatching { buildRegionView(mapView, atlas, visits, places, app.regionShapes, inView) }.getOrDefault(RegionView.EMPTY)
+    // Read only inside the regions view's flow below, never while composing, so a pan or a zoom
+    // recomposes nothing; in the other views where the map rests does not matter at all.
+    val viewport = remember { mutableStateOf<DoubleArray?>(null) }
+    val regionView by androidx.compose.runtime.produceState(RegionView.EMPTY, mapView, visits, places, atlas) {
+        val inView = if (mapView == com.marcusrosado.stamp.data.MapView.Regions) {
+            androidx.compose.runtime.snapshotFlow { viewport.value }
+                .map { countriesInView(atlas, it) }
+                .distinctUntilChanged()
+                .flowOn(kotlinx.coroutines.Dispatchers.Default)
+        } else kotlinx.coroutines.flow.flowOf(emptyList())
+        inView.collectLatest { countries ->
+            value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                runCatching { buildRegionView(mapView, atlas, visits, places, app.regionShapes, countries) }.getOrDefault(RegionView.EMPTY)
+            }
         }
     }
     val airports by produceState<com.marcusrosado.stamp.data.Airports?>(null) { value = runCatching { app.airports.await() }.getOrNull() }
@@ -488,9 +505,9 @@ private fun App(
             home = home,
             selected = selectedId?.let { atlas.byId[it] },
             scan = scan,
-            hasScanned = app.flags.get(FLAG_SCANNED),
+            hasScanned = remember(scan) { app.flags.get(FLAG_SCANNED) },
             camera = camera,
-            focus = focus,
+            focusState = focusState,
             onDestination = { if (it == destination) retap(it) else { destination = it; cameFrom = null } },
             onLongPressMap = longPressMap,
             toTop = toTop,
@@ -597,7 +614,7 @@ private fun App(
             onCityWant = app.visits::setCityWant,
             onCity = app.visits::setCity,
             regionView = regionView,
-            onViewport = { viewport = it },
+            onViewport = { viewport.value = it },
             onForgetCity = app.visits::forgetCityVisit,
             onBeenToCity = { c -> app.visits.newTripAt(c) },
             spot = spot,
