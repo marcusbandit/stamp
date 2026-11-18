@@ -90,8 +90,12 @@ fun StateButtons(current: TravelState?, onSet: (TravelState?) -> Unit, modifier:
 @Composable
 private fun StateButton(s: TravelState, on: Boolean, onSet: (TravelState?) -> Unit, modifier: Modifier, label: String) {
     val tint = LocalMapPalette.current.of(s)
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
     FilledTonalButton(
-        onClick = { onSet(if (on) null else s) },
+        onClick = {
+            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+            onSet(if (on) null else s)
+        },
         modifier = modifier,
         contentPadding = ButtonDefaults.ButtonWithIconContentPadding,
         colors = if (on) {

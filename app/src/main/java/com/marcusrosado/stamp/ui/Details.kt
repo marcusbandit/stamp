@@ -58,6 +58,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -134,8 +136,10 @@ fun stayLabel(t: Trip): String? = when {
 /** A heart and five stars. Tapping the current star again clears the rating. */
 @Composable
 fun LoveAndRating(loved: Boolean, rating: Int, onLoved: (Boolean) -> Unit, onRating: (Int) -> Unit) {
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+    fun tick() = haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
     Row(verticalAlignment = Alignment.CenterVertically) {
-        IconButton(onClick = { onLoved(!loved) }) {
+        IconButton(onClick = { tick(); onLoved(!loved) }) {
             Icon(
                 if (loved) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
                 contentDescription = if (loved) "Loved" else "Love it",
@@ -143,13 +147,16 @@ fun LoveAndRating(loved: Boolean, rating: Int, onLoved: (Boolean) -> Unit, onRat
             )
         }
         Spacer(Modifier.width(8.dp))
-        for (n in 1..MAX_RATING) {
-            IconButton(onClick = { onRating(if (rating == n) 0 else n) }, modifier = Modifier.size(40.dp)) {
-                Icon(
-                    if (n <= rating) Icons.Filled.Star else Icons.Filled.StarBorder,
-                    contentDescription = "$n of $MAX_RATING",
-                    tint = if (n <= rating) StarGold else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+        // TalkBack reads the stars as one rating, "3 of 5 stars", and each star as what it sets.
+        Row(Modifier.semantics { stateDescription = if (rating == 0) "Not rated" else "$rating of $MAX_RATING stars" }) {
+            for (n in 1..MAX_RATING) {
+                IconButton(onClick = { tick(); onRating(if (rating == n) 0 else n) }, modifier = Modifier.size(40.dp)) {
+                    Icon(
+                        if (n <= rating) Icons.Filled.Star else Icons.Filled.StarBorder,
+                        contentDescription = if (rating == n) "Clear rating" else "Rate $n",
+                        tint = if (n <= rating) StarGold else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
     }
@@ -209,7 +216,7 @@ fun TripsSection(
                     val named = t.name.isNotBlank()
                     if (!lived || named) Text(
                         t.title("Visit ${i + 1}"),
-                        modifier = if (named) Modifier.widthIn(max = 160.dp).padding(end = 12.dp) else Modifier.width(72.dp),
+                        modifier = if (named) Modifier.widthIn(max = 160.dp).padding(end = 12.dp) else Modifier.widthIn(min = 72.dp).padding(end = 4.dp),
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = if (named) FontWeight.Medium else null,
                         maxLines = 1,
