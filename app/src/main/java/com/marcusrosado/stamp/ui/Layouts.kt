@@ -326,8 +326,12 @@ private fun MapPane(state: AppState, sidePanel: Boolean, bottomInset: Dp) {
                     androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(220)),
             ) {
                 val shown = lastSelected ?: return@AnimatedVisibility
+                // Laid out once at its tallest and slid down to the height it shows: a drag then
+                // only moves it, where changing its height measured the whole card on every frame.
+                val expanded by remember(h) { androidx.compose.runtime.derivedStateOf { sheetH > h * 0.7f } }
                 Surface(
-                    modifier = Modifier.fillMaxWidth().height(sheetH)
+                    modifier = Modifier.fillMaxWidth().height(tallest)
+                        .offset { androidx.compose.ui.unit.IntOffset(0, (tallest - sheetH).coerceAtLeast(0.dp).roundToPx()) }
                         .nestedScroll(sheetScroll)
                         .draggable(
                             orientation = androidx.compose.foundation.gestures.Orientation.Vertical,
@@ -340,7 +344,7 @@ private fun MapPane(state: AppState, sidePanel: Boolean, bottomInset: Dp) {
                 ) {
                     Column {
                         SheetHandle(
-                            expanded = sheetH > h * 0.7f,
+                            expanded = expanded,
                             // A tap jumps between the opening height and the tallest.
                             onToggle = {
                                 settling[0]?.cancel()
@@ -928,21 +932,24 @@ fun Split(
             flatFirst.coerceAtMost(full) to (if (flatFirst > 0.dp) 1.dp else 0.dp)
         }
         val spring = androidx.compose.animation.core.spring<Dp>(dampingRatio = 0.9f, stiffness = 320f)
-        val e by androidx.compose.animation.core.animateDpAsState(extent, spring, label = "split")
-        val g by androidx.compose.animation.core.animateDpAsState(gap, spring, label = "seam")
-        val rest = (full - e - g).coerceAtLeast(0.dp)
-        Box(if (vertical) Modifier.size(e, maxHeight) else Modifier.size(maxWidth, e)) { first() }
+        val e = androidx.compose.animation.core.animateDpAsState(extent, spring, label = "split")
+        val g = androidx.compose.animation.core.animateDpAsState(gap, spring, label = "seam")
+        // Both panes keep the size they end at and only slide and open, so a bend never
+        // measures them again on every frame.
+        Box(Modifier.revealed(vertical, { 0.dp }, { e.value }, extent)) { first() }
         if (hinge == null) {
             Box(
-                Modifier.offset(x = e).size(g, maxHeight)
+                Modifier.offset { androidx.compose.ui.unit.IntOffset(e.value.roundToPx(), 0) }.size(gap, maxHeight)
                     .background(MaterialTheme.colorScheme.outlineVariant),
             )
         }
         Box(
-            Modifier
-                .offset(x = if (vertical) e + g else 0.dp, y = if (vertical) 0.dp else e + g)
-                .size(if (vertical) rest else maxWidth, if (vertical) maxHeight else rest)
-                .clipToBounds(),
+            Modifier.revealed(
+                vertical,
+                { e.value + g.value },
+                { (full - e.value - g.value).coerceAtLeast(0.dp) },
+                (full - extent - gap).coerceAtLeast(0.dp),
+            ),
         ) { second() }
     }
 }

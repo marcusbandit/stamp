@@ -32,6 +32,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -61,16 +65,27 @@ fun InHalf(
             else -> hinge.end.coerceIn(0.dp, full) to (full - hinge.end).coerceAtLeast(0.dp)
         }
         val motion = spring<Dp>(dampingRatio = 0.9f, stiffness = 320f)
-        val s by animateDpAsState(start, motion, label = "halfStart")
-        val e by animateDpAsState(extent, motion, label = "halfExtent")
-        Box(
-            Modifier
-                .offset(x = if (vertical) s else 0.dp, y = if (vertical) 0.dp else s)
-                .size(if (vertical) e else maxWidth, if (vertical) maxHeight else e),
-            contentAlignment = contentAlignment,
-        ) { content() }
+        val s = animateDpAsState(start, motion, label = "halfStart")
+        val e = animateDpAsState(extent, motion, label = "halfExtent")
+        Box(Modifier.revealed(vertical, { s.value }, { e.value }, extent), contentAlignment = contentAlignment) { content() }
     }
 }
+
+/**
+ * A box that slides and opens along one axis while what is inside keeps the size it ends at:
+ * [start] and [shown] move every frame of a bend, but only in placement, so the page inside is
+ * measured once at [final] and its text never reflows mid-slide. The part past [shown] is cut off.
+ */
+internal fun Modifier.revealed(vertical: Boolean, start: () -> Dp, shown: () -> Dp, final: Dp): Modifier =
+    this
+        .offset { start().roundToPx().let { if (vertical) IntOffset(it, 0) else IntOffset(0, it) } }
+        .clipToBounds()
+        .layout { m, c ->
+            val fin = final.roundToPx().coerceAtLeast(0)
+            val show = shown().roundToPx().coerceAtLeast(0)
+            val p = if (vertical) m.measure(Constraints.fixed(fin, c.maxHeight)) else m.measure(Constraints.fixed(c.maxWidth, fin))
+            layout(if (vertical) show else c.maxWidth, if (vertical) c.maxHeight else show) { p.place(0, 0) }
+        }
 
 /**
  * The half a dialog goes on when the screen is bent: the right one like a book, where the
