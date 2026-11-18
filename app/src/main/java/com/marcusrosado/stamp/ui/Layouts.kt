@@ -432,6 +432,7 @@ private fun Passport(state: AppState, padding: PaddingValues, modifier: Modifier
     onScan = state.onOpenScan, onOpenCountry = state.onOpenCountry, contentPadding = padding,
     modifier = modifier, split = state.split,
     trips = state.trips, places = state.places, onOpenTrip = state.onOpenTrip,
+    toTop = state.toTop,
     onOpenList = state.onOpenListOf,
     onShowMap = { state.onDestination(Destination.Map) },
 )
@@ -586,6 +587,9 @@ private fun StampMap(
         selectedArea = state.spotArea.takeIf { state.spot is Spot.City && !light },
         heat = heat,
         onViewport = if (selectable) state.onViewport else null,
+        // Only where countries carry their marks: in the cities and regions views a long press
+        // would mark a whole country the finger was not on.
+        onLongPress = if (selectable && state.mapView == com.marcusrosado.stamp.data.MapView.Countries) { id -> state.onLongPressMap(id) } else null,
         onCity = if (selectable) { id ->
             val c = state.places?.byId?.get(id)
             val land = c?.let { state.atlas.landOf(it.lat, it.lon, it.country) }

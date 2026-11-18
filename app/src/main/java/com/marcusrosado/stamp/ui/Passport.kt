@@ -27,6 +27,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -60,6 +61,8 @@ fun PassportScreen(
     trips: List<com.marcusrosado.stamp.data.Trip> = emptyList(),
     places: com.marcusrosado.stamp.data.Places? = null,
     onOpenTrip: (String) -> Unit = {},
+    /** Changes when the Passport tab is tapped while open: the page scrolls back to its top. */
+    toTop: Long = 0L,
     /** Opens the country list on what a tapped number counts. */
     onOpenList: (ListFilter) -> Unit = {},
     onShowMap: () -> Unit = {},
@@ -87,9 +90,15 @@ fun PassportScreen(
     val thisYear = java.time.Year.now().value
     val years = remember(trips, thisYear) { tripYears(trips, thisYear) }
 
+    val list = androidx.compose.foundation.lazy.rememberLazyListState()
+    // Only a tap that came after this page was shown scrolls it: coming back to the page with an
+    // older tap still in the state must not.
+    val handled = androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableLongStateOf(toTop) }
+    LaunchedEffect(toTop) { if (toTop != handled.longValue) { handled.longValue = toTop; list.animateScrollToItem(0) } }
     Box(modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         LazyColumn(
             Modifier.widthIn(max = 680.dp).fillMaxSize(),
+            state = list,
             contentPadding = PaddingValues(
                 start = 16.dp, end = 16.dp,
                 top = contentPadding.calculateTopPadding() + 8.dp,
