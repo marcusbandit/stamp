@@ -62,12 +62,11 @@ data class RouteTap(val trip: String, val leg: Pair<String, String>?) {
 }
 
 internal const val SOURCE_ROUTES = "routes"
-internal const val SOURCE_ROUTE_ICONS = "route-icons"
 
 /** Every layer the routes draw with, for the switch in Settings that hides them. */
 internal val ROUTE_LAYERS: List<String> =
     listOf("routes-casing", "routes") + Travel.entries.map { "route-${it.key}" } +
-        listOf("route-train-ties", "route-car-centre", "route-ghosts", "route-icons")
+        listOf("route-train-ties", "route-car-centre", "route-ghosts")
 
 private fun width(lo: Double, hi: Double) = """["interpolate", ["linear"], ["zoom"], 1, $lo, 7, $hi]"""
 
@@ -112,17 +111,7 @@ internal fun routeLayersJson(p: MapPalette): String {
     ).joinToString(",")
 }
 
-/** The icon layer, above the cities so a gliding plane is never hidden by a dot. */
-internal val ROUTE_ICONS_JSON = """
-    { "id": "route-icons", "type": "symbol", "source": "$SOURCE_ROUTE_ICONS",
-      "layout": { "icon-image": ["get", "img"], "icon-rotate": ["get", "rot"],
-                  "icon-rotation-alignment": "map", "icon-allow-overlap": true, "icon-ignore-placement": true,
-                  "icon-size": ["interpolate", ["linear"], ["zoom"], 1, 0.7, 6, 1.0] },
-      "paint": { "icon-opacity": ["get", "a"] } }"""
-
 private const val FERRY_WAVE = "route-ferry-wave"
-
-private fun imageName(way: Travel) = "route-way-${way.key}"
 
 /** The routes' lines, each tagged with its way so the layers can pick their own. */
 internal fun routeFeatures(routes: List<MapRoute>): FeatureCollection = FeatureCollection.fromFeatures(
@@ -142,16 +131,12 @@ internal fun routeFeatures(routes: List<MapRoute>): FeatureCollection = FeatureC
     },
 )
 
-/**
- * The pictures the routes draw with: a badge per way in its colour, a plane on its own, and
- * the ferry's wave. Drawn from the app's own icons, so they follow the look.
- */
-internal fun addRouteImages(style: Style, p: MapPalette, painters: Map<Travel, VectorPainter>, density: Density) {
-    for ((way, painter) in painters) style.addImage(imageName(way), badge(way, painter, p, density))
+/** The ferry's wave, which its line repeats. The gliding badges are drawn over the map instead ([GlideIcons]). */
+internal fun addRouteImages(style: Style, p: MapPalette, density: Density) {
     style.addImage(FERRY_WAVE, wave(p, density))
 }
 
-private fun badge(way: Travel, painter: VectorPainter, p: MapPalette, density: Density): Bitmap {
+internal fun badge(way: Travel, painter: VectorPainter, p: MapPalette, density: Density): Bitmap {
     val plane = way == Travel.Plane
     val px = ((if (plane) 24 else 20) * density.density).roundToInt()
     val img = ImageBitmap(px, px)
@@ -293,8 +278,11 @@ internal class Glide(route: MapRoute, private val phase: Double) {
     private var loop = Long.MIN_VALUE
     private var range = 0.0 to 0.0
 
+    /** Where the icon is at a moment: its spot, the way it heads in degrees from north, and how faded it is. */
+    class Pose(val lat: Double, val lon: Double, val heading: Double, val alpha: Float)
+
     /** The icon at [t] seconds: where it is, which way it heads, and how faded it is. */
-    fun at(t: Double, b: LatLngBounds): Feature {
+    fun pose(t: Double, b: LatLngBounds): Pose {
         val cycles = t / seconds + phase
         val f = cycles % 1.0
         val n = kotlin.math.floor(cycles).toLong()
@@ -305,11 +293,7 @@ internal class Glide(route: MapRoute, private val phase: Double) {
         val (x, y, i) = pointAt(from + e * (to - from))
         val heading = Math.toDegrees(atan2(xs[i] - xs[i - 1], Math.toDegrees(ys[i] - ys[i - 1])))
         val fade = (minOf(f, 1 - f) / 0.08).coerceIn(0.0, 1.0)
-        return Feature.fromGeometry(Point.fromLngLat(x, latOf(y))).apply {
-            addStringProperty("img", imageName(way))
-            addNumberProperty("rot", if (way == Travel.Plane) heading else 0.0)
-            addNumberProperty("a", fade)
-        }
+        return Pose(latOf(y), x, if (way == Travel.Plane) heading else 0.0, fade.toFloat())
     }
 
     private companion object {

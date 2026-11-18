@@ -12,6 +12,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
@@ -326,41 +329,52 @@ fun WorldMap(
     val drawDensity = androidx.compose.ui.platform.LocalDensity.current
     LaunchedEffect(style) {
         val s = style ?: return@LaunchedEffect
-        addRouteImages(s, palette, wayPainters, drawDensity)
+        addRouteImages(s, palette, drawDensity)
+    }
+    val badges = remember(palette, drawDensity) {
+        wayPainters.mapValues { (way, painter) -> badge(way, painter, palette, drawDensity).asImageBitmap() }
     }
 
-    // Each leg's icon glides along it, start to end, then starts over. Only the legs on screen
-    // move; with none in view nothing is drawn, and the loop only checks back now and then.
-    // One clock for the map's life, so an edit that redraws the routes leaves every icon where
-    // it was; each leg's place in its loop comes from the leg itself, not from its order.
+    // Each leg's icon glides along it, start to end, then starts over. The icons are drawn over
+    // the map, not in it: moving one never makes the map draw again, which a symbol layer fed
+    // new data 30 times a second did, whole world and all, through every pan.
     val clock = remember { System.nanoTime() }
-    val moving by rememberUpdatedState(animate)
-    LaunchedEffect(style, routes, showRoutes) {
-        val s = style ?: return@LaunchedEffect
-        val m = map ?: return@LaunchedEffect
-        val src = s.getSourceAs<GeoJsonSource>(SOURCE_ROUTE_ICONS) ?: return@LaunchedEffect
-        val none = FeatureCollection.fromFeatures(emptyList())
-        val glides = if (showRoutes) routes.filter { it.way != null && it.points.size >= 2 }.distinctBy { it.points to it.way }
+    val glides = remember(routes, showRoutes) {
+        if (showRoutes) routes.filter { it.way != null && it.points.size >= 2 }.distinctBy { it.points to it.way }
             .map { r -> Glide(r, phase = ((r.points to r.way).hashCode() and 0xFFFF) / 65536.0) } else emptyList()
-        if (glides.isEmpty()) { src.setGeoJson(none); return@LaunchedEffect }
-        var last = 0L
-        var shown = false
+    }
+    val glideFrame = remember { androidx.compose.runtime.mutableLongStateOf(0L) }
+    // Plain fields, not state: the loop below reads them, and nothing should recompose for them.
+    val cameraMoving = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
+    DisposableEffect(map) {
+        val m = map ?: return@DisposableEffect onDispose { }
+        val started = MapLibreMap.OnCameraMoveStartedListener { cameraMoving.set(true) }
+        val idle = MapLibreMap.OnCameraIdleListener { cameraMoving.set(false) }
+        m.addOnCameraMoveStartedListener(started)
+        m.addOnCameraIdleListener(idle)
+        onDispose {
+            m.removeOnCameraMoveStartedListener(started)
+            m.removeOnCameraIdleListener(idle)
+        }
+    }
+    val glideOn by rememberUpdatedState(animate)
+    LaunchedEffect(glides, map) {
+        val m = map ?: return@LaunchedEffect
+        if (glides.isEmpty()) return@LaunchedEffect
         while (true) {
-            val now = androidx.compose.runtime.withFrameNanos { it }
-            // About 30 times a second is smooth enough for something this slow.
-            if (now - last < 32_000_000L) continue
-            last = now
-            // Under a page, behind a dialog or off screen nobody sees it move.
+            // Under a page, behind a dialog, off screen, or with no leg in view, nobody sees one
+            // move: hide them and check back now and then. While the map moves they hide too,
+            // since the map draws on its own thread and icons drawn over it would trail behind.
             val bounds = m.projection.visibleRegion.latLngBounds
-            val seen = if (moving && mapView.isShown && mapView.hasWindowFocus()) glides.filter { it.onScreen(bounds) } else emptyList()
-            if (seen.isEmpty()) {
-                if (shown) { src.setGeoJson(none); shown = false }
-                kotlinx.coroutines.delay(400)
+            if (!glideOn || cameraMoving.get() || !mapView.isShown || !mapView.hasWindowFocus() || glides.none { it.onScreen(bounds) }) {
+                if (glideFrame.longValue != 0L) glideFrame.longValue = 0L
+                kotlinx.coroutines.delay(if (cameraMoving.get()) 100 else 400)
                 continue
             }
-            val t = (now - clock) / 1e9
-            src.setGeoJson(FeatureCollection.fromFeatures(seen.map { it.at(t, bounds) }))
-            shown = true
+            // One step about every other frame, some 30 a second: smooth enough for something
+            // this slow, and the rest of the time no frame is asked for at all.
+            glideFrame.longValue = androidx.compose.runtime.withFrameNanos { it }
+            kotlinx.coroutines.delay(16)
         }
     }
 
@@ -587,7 +601,55 @@ fun WorldMap(
         }
     }
 
-    AndroidView(factory = { mapView }, modifier = modifier)
+    androidx.compose.foundation.layout.Box(modifier) {
+        AndroidView(factory = { mapView }, modifier = Modifier.fillMaxSize())
+        GlideIcons(map, glides, badges, clock) { glideFrame.longValue }
+    }
+}
+
+/**
+ * The legs' icons over the map, placed through its projection. Only [frame] changes from one
+ * frame to the next, and it is read while drawing, so the icons move without any recomposition.
+ */
+@Composable
+private fun GlideIcons(
+    map: MapLibreMap?,
+    glides: List<Glide>,
+    badges: Map<com.marcusrosado.stamp.data.Travel, androidx.compose.ui.graphics.ImageBitmap>,
+    clock: Long,
+    frame: () -> Long,
+) {
+    if (map == null || glides.isEmpty()) return
+    androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
+        val now = frame()
+        if (now == 0L) return@Canvas
+        val proj = map.projection
+        val bounds = proj.visibleRegion.latLngBounds
+        val t = (now - clock) / 1e9
+        val cam = map.cameraPosition
+        // As the layer did: 0.7 of full size zoomed out, full size from zoom 6.
+        val scale = (0.7 + 0.3 * ((cam.zoom - 1) / 5)).coerceIn(0.7, 1.0).toFloat()
+        for (g in glides) {
+            if (!g.onScreen(bounds)) continue
+            val img = badges[g.way] ?: continue
+            val pose = g.pose(t, bounds)
+            if (pose.alpha <= 0f) continue
+            val at = proj.toScreenLocation(org.maplibre.android.geometry.LatLng(pose.lat, pose.lon))
+            val w = img.width * scale
+            val h = img.height * scale
+            withTransform({
+                translate(at.x, at.y)
+                rotate((pose.heading - cam.bearing).toFloat(), pivot = androidx.compose.ui.geometry.Offset.Zero)
+            }) {
+                drawImage(
+                    img,
+                    dstOffset = androidx.compose.ui.unit.IntOffset((-w / 2).toInt(), (-h / 2).toInt()),
+                    dstSize = androidx.compose.ui.unit.IntSize(w.toInt(), h.toInt()),
+                    alpha = pose.alpha,
+                )
+            }
+        }
+    }
 }
 
 private const val LAYER_FILL = "countries-fill"
@@ -750,7 +812,6 @@ private fun styleJson(p: MapPalette) = """
     "$SOURCE_ME": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
     "$SOURCE_AREAS": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
     "$SOURCE_ROUTES": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
-    "$SOURCE_ROUTE_ICONS": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
     "$SOURCE_PHOTOS": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
     "$SOURCE_REGIONS": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
     "$SOURCE_WANT_CITIES": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
@@ -829,7 +890,6 @@ ${allCityLayersJson(p)},
       "paint": { "circle-radius": 9, "circle-color": "rgba(0,0,0,0)",
                  "circle-stroke-color": "${hex(p.selected)}", "circle-stroke-width": 2.5 } },
 ${cityLabelLayersJson(p)},
-$ROUTE_ICONS_JSON,
     { "id": "photos", "type": "symbol", "source": "$SOURCE_PHOTOS", "minzoom": 4.5,
       "layout": { "icon-image": ["get", "img"], "icon-allow-overlap": false,
                   "icon-size": ["interpolate", ["linear"], ["zoom"], 4.5, 0.6, 7, 1.0],
@@ -900,7 +960,7 @@ private class Outline(private val atlas: Atlas, private val split: Boolean, priv
  */
 private fun nearestRoutes(m: MapLibreMap, x: Float, y: Float, density: Float): List<RouteTap> {
     val slack = 10f * density
-    val layers = ROUTE_LAYERS.filter { it != "route-icons" }.toTypedArray()
+    val layers = ROUTE_LAYERS.toTypedArray()
     val hits = m.queryRenderedFeatures(android.graphics.RectF(x - slack, y - slack, x + slack, y + slack), *layers)
     if (hits.isEmpty()) return emptyList()
     val proj = m.projection
