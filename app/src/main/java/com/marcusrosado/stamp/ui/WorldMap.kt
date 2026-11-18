@@ -157,8 +157,10 @@ fun WorldMap(
     val outline by rememberUpdatedState(outlineNow)
     val selected by rememberUpdatedState(selectedId)
     val tapKey by rememberUpdatedState(if (split) "id" else "country")
-    val routeTap by rememberUpdatedState(onRoute.takeIf { showRoutes })
-    val regionTap by rememberUpdatedState(onRegion.takeIf { regionLayer != null })
+    // Each tap asks the map what lies under the finger, on the main thread: only ask a layer
+    // that is drawn and has something in it.
+    val routeTap by rememberUpdatedState(onRoute.takeIf { showRoutes && routes.isNotEmpty() })
+    val regionTap by rememberUpdatedState(onRegion.takeIf { regionLayer?.shapes?.isNotEmpty() == true })
     val cityTap by rememberUpdatedState(onCity.takeIf { showAllCities && (allCities.isNotEmpty() || myCities.isNotEmpty()) })
     val viewport by rememberUpdatedState(onViewport)
     val longPress by rememberUpdatedState(onLongPress.takeIf { selectable })
@@ -1025,22 +1027,19 @@ private class Outline(
     private val fine: FineShapes?,
     private val scope: kotlinx.coroutines.CoroutineScope,
 ) {
-    // The last few countries' outlines, so tapping between them builds nothing again. A
-    // session can tap hundreds, and these never shrank before.
-    private val cache = object : LinkedHashMap<String, Feature>(16, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Feature>?) = size > KEEP_OUTLINES
-    }
-
-    // The 1:10m text of the last few, bounded by size: a big country is megabytes, and a
-    // double tap puts the one before straight back.
-    private val fineCache = LinkedHashMap<String, String>(8, 0.75f, true)
-    private var fineChars = 0
+    // The last few countries' outlines as text, so tapping between them builds nothing again,
+    // and a double tap puts the one before straight back. Bounded by size: a big country's 1:10m
+    // outline is megabytes.
+    private val coarseCache = TextCache(KEEP_COARSE_CHARS)
+    private val fineCache = TextCache(KEEP_FINE_CHARS)
+    private var coarseJob: kotlinx.coroutines.Job? = null
     private var fineJob: kotlinx.coroutines.Job? = null
     private var shown: String? = null
 
     /** A new style starts with empty sources. */
     fun reset() {
         shown = null
+        coarseJob?.cancel()
         fineJob?.cancel()
     }
 
@@ -1048,8 +1047,26 @@ private class Outline(
         if (id == shown) return
         shown = id
         val src = style.getSourceAs<GeoJsonSource>(SOURCE_SELECTED) ?: return
-        val f = id?.let { cache[it] ?: feature(it)?.also { built -> cache[it] = built } }
-        if (f == null) src.setGeoJson(FeatureCollection.fromFeatures(emptyList())) else src.setGeoJson(f)
+        coarseJob?.cancel()
+        val shapes = id?.let { shapesOf(it) }.orEmpty()
+        val keptCoarse = id?.let { coarseCache[it] }
+        when {
+            id == null || shapes.isEmpty() -> src.setGeoJson(EMPTY_DATA)
+            keptCoarse != null -> src.setGeoJson(keptCoarse)
+            // A small country is written out on the spot and shows on the next frame. Canada or
+            // Russia is tens of thousands of points: written off the main thread, the tap never
+            // waits on it, and nothing of the country before lingers meanwhile.
+            pointsIn(shapes) <= OUTLINE_NOW_POINTS -> outlineJson(shapes).let { coarseCache.put(id, it); src.setGeoJson(it) }
+            else -> {
+                src.setGeoJson(EMPTY_DATA)
+                coarseJob = scope.launch {
+                    val json = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { outlineJson(shapes) }
+                    coarseCache.put(id, json)
+                    if (shown != id) return@launch
+                    runCatching { style.getSourceAs<GeoJsonSource>(SOURCE_SELECTED)?.setGeoJson(json) }
+                }
+            }
+        }
         val fineSrc = style.getSourceAs<GeoJsonSource>(SOURCE_SELECTED_FINE) ?: return
         fineJob?.cancel()
         val kept = id?.let { fineCache[it] }
@@ -1061,23 +1078,10 @@ private class Outline(
         // reading the file up to it.
         fineJob = scope.launch {
             val json = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { fineJson(id) } ?: return@launch
-            keep(id, json)
+            fineCache.put(id, json)
             if (shown != id) return@launch
             // The style may have been replaced while the file was read.
             runCatching { style.getSourceAs<GeoJsonSource>(SOURCE_SELECTED_FINE)?.setGeoJson(json) }
-        }
-    }
-
-    private fun keep(id: String, json: String) {
-        fineCache.remove(id)?.let { fineChars -= it.length }
-        fineCache[id] = json
-        fineChars += json.length
-        val it = fineCache.entries.iterator()
-        while (fineChars > KEEP_FINE_CHARS && fineCache.size > 1) {
-            val e = it.next()
-            if (e.key == id) continue
-            fineChars -= e.value.length
-            it.remove()
         }
     }
 
@@ -1093,21 +1097,75 @@ private class Outline(
         return features.joinToString(",", "{\"type\":\"FeatureCollection\",\"features\":[", "]}")
     }
 
-    private fun feature(id: String): Feature? {
-        val c = atlas.byId[id] ?: return null
-        val shapes = idsOf(c).flatMap { atlas.byId[it]?.shapes.orEmpty() }
-        val polygons = shapes.map { s ->
-            (listOf(s.outer) + s.holes).map { r -> r.xs.indices.map { i -> Point.fromLngLat(r.xs[i], r.ys[i]) } }
-        }
-        return Feature.fromGeometry(MultiPolygon.fromLngLats(polygons))
+    /** The 1:50m shapes an outline of [id] draws: a lookup, nothing built. */
+    private fun shapesOf(id: String): List<Shape> {
+        val c = atlas.byId[id] ?: return emptyList()
+        return idsOf(c).flatMap { atlas.byId[it]?.shapes.orEmpty() }
     }
 }
 
-/** How many countries' outlines [Outline] keeps built. */
-private const val KEEP_OUTLINES = 16
-
-/** About how much 1:10m outline text [Outline] keeps, in characters. */
+/** About how much 1:50m and 1:10m outline text [Outline] keeps, in characters. */
+private const val KEEP_COARSE_CHARS = 1_000_000
 private const val KEEP_FINE_CHARS = 2_000_000
+
+/** Up to how many points a tapped country's 1:50m outline is written on the main thread. */
+private const val OUTLINE_NOW_POINTS = 5_000
+
+internal fun pointsIn(shapes: List<Shape>): Int = shapes.sumOf { s -> s.outer.xs.size + s.holes.sumOf { it.xs.size } }
+
+/**
+ * [shapes] as one GeoJSON MultiPolygon feature, written straight to text. MapLibre reads text
+ * on a thread of its own, where a Feature built from boxed points cost an object per number
+ * on the main thread first.
+ */
+internal fun outlineJson(shapes: List<Shape>): String {
+    val b = StringBuilder(32 + pointsIn(shapes) * 40)
+    b.append("{\"type\":\"Feature\",\"properties\":{},\"geometry\":{\"type\":\"MultiPolygon\",\"coordinates\":[")
+    shapes.forEachIndexed { k, s ->
+        if (k > 0) b.append(',')
+        b.append('[')
+        (listOf(s.outer) + s.holes).forEachIndexed { j, r ->
+            if (j > 0) b.append(',')
+            b.append('[')
+            for (i in r.xs.indices) {
+                if (i > 0) b.append(',')
+                b.append('[').append(r.xs[i]).append(',').append(r.ys[i]).append(']')
+            }
+            b.append(']')
+        }
+        b.append(']')
+    }
+    return b.append("]}}").toString()
+}
+
+/**
+ * Text kept by key, dropping the least recently used once the total passes [most] characters.
+ * The one put last always stays, however long it is.
+ */
+internal class TextCache(private val most: Int) {
+    private val map = LinkedHashMap<String, String>(16, 0.75f, true)
+
+    /** The characters held. */
+    var chars = 0
+        private set
+
+    val keys: Set<String> get() = map.keys
+
+    operator fun get(key: String): String? = map[key]
+
+    fun put(key: String, text: String) {
+        map.remove(key)?.let { chars -= it.length }
+        map[key] = text
+        chars += text.length
+        val it = map.entries.iterator()
+        while (chars > most && map.size > 1 && it.hasNext()) {
+            val e = it.next()
+            if (e.key == key) continue
+            chars -= e.value.length
+            it.remove()
+        }
+    }
+}
 
 /**
  * The trips on the line nearest a tap at [x], [y] within 10 dp, and on any line just as near,
