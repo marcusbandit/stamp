@@ -1050,9 +1050,12 @@ class VisitStore(private val file: File) {
     @Synchronized
     fun snapshot(): Snapshot = Snapshot(marks, trips, pins, pendingDrops)
 
-    /** True when nothing has changed since [s] was taken. */
+    /**
+     * True when nothing has changed since [s] was taken. Equal, not only the same objects: every
+     * save settles the trips again, which can rebuild them unchanged.
+     */
     @Synchronized
-    fun unchangedSince(s: Snapshot): Boolean = s.marks === marks && s.trips === trips && s.pins === pins
+    fun unchangedSince(s: Snapshot): Boolean = s.marks == marks && s.trips == trips && s.pins == pins
 
     /** Puts everything back the way it was when [s] was taken: what Undo does. */
     @Synchronized

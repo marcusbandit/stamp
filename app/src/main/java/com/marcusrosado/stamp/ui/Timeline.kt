@@ -251,6 +251,9 @@ fun VisitTimeline(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
     ) {
+        // The timeline is a window of its own, over the app's snackbar: it shows the same one.
+        val undo = LocalUndo.current
+        Box(Modifier.fillMaxSize()) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
           BoxWithConstraints(Modifier.fillMaxSize()) {
             val wide = maxWidth >= 600.dp
@@ -485,6 +488,8 @@ fun VisitTimeline(
                 timeline(Modifier.fillMaxSize())
             }
           }
+        }
+        undo?.let { UndoHost(it, aboveBar = 0.dp) }
         }
         if (naming) {
             NameDialog(

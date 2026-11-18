@@ -33,6 +33,8 @@ class Undo(private val store: VisitStore, private val scope: CoroutineScope) {
 
     /** Runs [change] and, when it changed anything, offers to undo it under [message]. */
     fun run(message: String, change: () -> Unit) {
+        // Watched from the moment of the change: a change that lands before the snackbar has
+        // shown still takes the offer away.
         val before = store.snapshot()
         change()
         if (store.unchangedSince(before)) return
@@ -45,10 +47,10 @@ class Undo(private val store: VisitStore, private val scope: CoroutineScope) {
      * the offer away, since undoing then would throw that change away too.
      */
     fun offer(message: String, changedLater: () -> Boolean = { false }, back: () -> Unit) {
-        scope.launch {
+        scope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
             // A newer change replaces the older offer; the older one can no longer be undone.
             host.currentSnackbarData?.dismiss()
-            val watch = launch {
+            val watch = launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
                 merge(store.visits.drop(1), store.allTrips.drop(1)).first { changedLater() }
                 host.currentSnackbarData?.dismiss()
             }
@@ -58,12 +60,9 @@ class Undo(private val store: VisitStore, private val scope: CoroutineScope) {
         }
     }
 
-    /** A short note with nothing to undo, in place of a toast. */
+    /** A short note with nothing to undo, in place of a toast. It waits for an Undo showing, never replaces it. */
     fun say(message: String) {
-        scope.launch {
-            host.currentSnackbarData?.dismiss()
-            host.showSnackbar(message, withDismissAction = true)
-        }
+        scope.launch { host.showSnackbar(message, withDismissAction = true) }
     }
 }
 

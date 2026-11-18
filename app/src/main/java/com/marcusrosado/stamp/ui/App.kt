@@ -491,7 +491,7 @@ private fun App(
                 onAddPlaceMemories = app.visits::addPlaceMemories,
                 onUpdatePlaceMemory = app.visits::updatePlaceMemory,
                 onRemovePlaceMemory = { a, b -> undo.run("Memory removed") { app.visits.removePlaceMemory(a, b) } },
-                onRemoveCity = { a, b -> undo.run("City removed") { app.visits.removeCity(a, b) } },
+                onRemoveCity = { a, b -> undo.run("Place removed") { app.visits.removeCity(a, b) } },
                 onSplitRegions = app.visits::setSplitRegions,
                 onCityNote = app.visits::setCityNote,
                 onAddRegion = app.visits::addRegion,
@@ -691,7 +691,8 @@ private fun App(
                     home = home,
                     onStartDevice = { app.flags.set(FLAG_SCANNED, true); app.scanner.start() },
                     onAdd = { found, mark ->
-                        undo.run(if (mark.size == 1) "1 country added" else "${mark.size} countries added") { app.visits.addFromPhotos(found, mark) }
+                        if (mark.isEmpty()) app.visits.addFromPhotos(found, mark)
+                        else undo.run(if (mark.size == 1) "1 country added" else "${mark.size} countries added") { app.visits.addFromPhotos(found, mark) }
                         app.scanner.cancel()
                         onScanOpen(false)
                         destination = Destination.Passport

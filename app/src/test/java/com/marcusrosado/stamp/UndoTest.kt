@@ -43,4 +43,14 @@ class UndoTest {
         s.set("FRA", TravelState.Visited)
         assertFalse(s.unchangedSince(before))
     }
+
+    @Test fun aSaveThatChangesNothingIsNoChange() {
+        val s = store()
+        s.set("FRA", TravelState.Visited)
+        val before = s.snapshot()
+        // Marked the same again, and an unmarked place cleared: both save, neither changes anything.
+        s.set("FRA", TravelState.Visited)
+        s.set("ITA", null)
+        assertTrue(s.unchangedSince(before))
+    }
 }
