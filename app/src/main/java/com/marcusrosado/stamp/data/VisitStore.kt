@@ -84,7 +84,7 @@ interface Geo {
  * What the user marked about one country or land mass, apart from its trips: the mark itself,
  * photo dates, heart, stars, regions and notes per city.
  */
-private data class Mark(
+internal data class Mark(
     val state: TravelState,
     val evidence: PhotoEvidence? = null,
     val loved: Boolean = false,
@@ -1037,6 +1037,31 @@ class VisitStore(private val file: File) {
             pins += parsePins(root.optJSONObject("pins"))
         }
         return Read(marks, trips, pins, old = !v3)
+    }
+
+    /** What the store holds at one moment, to put back with [revert]. Cheap: the lists are never changed in place. */
+    class Snapshot internal constructor(
+        internal val marks: Map<String, Mark>,
+        internal val trips: List<Trip>,
+        internal val pins: Map<String, Pin>,
+        internal val pendingDrops: Map<String, Set<String>>,
+    )
+
+    @Synchronized
+    fun snapshot(): Snapshot = Snapshot(marks, trips, pins, pendingDrops)
+
+    /** True when nothing has changed since [s] was taken. */
+    @Synchronized
+    fun unchangedSince(s: Snapshot): Boolean = s.marks === marks && s.trips === trips && s.pins === pins
+
+    /** Puts everything back the way it was when [s] was taken: what Undo does. */
+    @Synchronized
+    fun revert(s: Snapshot) {
+        marks = s.marks
+        trips = s.trips
+        pins = s.pins
+        pendingDrops = s.pendingDrops
+        save()
     }
 
     /** Everything the store holds, as the text of a backup file. */
