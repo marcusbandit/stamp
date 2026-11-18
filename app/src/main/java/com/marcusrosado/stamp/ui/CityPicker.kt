@@ -43,7 +43,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -70,6 +70,7 @@ import com.marcusrosado.stamp.data.Places
 import com.marcusrosado.stamp.data.yourCities
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.util.Locale
 
@@ -99,12 +100,20 @@ fun CityPicker(
     var query by rememberSaveable { mutableStateOf("") }
     // A trip can carry on across a border: "Anywhere" searches every country's cities.
     var anywhere by rememberSaveable { mutableStateOf(alpha2.isEmpty()) }
-    val search = { if (anywhere) places?.searchAll(query).orEmpty() else places?.search(alpha2, query).orEmpty() }
     // Nothing typed is the country's list as it stands, or nothing at all: no search to wait for.
-    val found = rememberSearch(places, alpha2, query, anywhere, quick = places != null && query.isBlank(), search = search)
+    val search = rememberSearch(CityAsk(places, alpha2, query, anywhere), quick = places != null && query.isBlank()) { ask, check ->
+        val p = ask.places
+        when {
+            p == null -> emptyList()
+            ask.anywhere -> p.searchAll(ask.query, check = check)
+            else -> p.search(ask.alpha2, ask.query, check)
+        }
+    }
+    val found = search.found
     val results = found?.items.orEmpty()
-    // The first world search sorts every city; do it while the user is still reading the list.
-    LaunchedEffect(places) { places?.let { p -> withContext(Dispatchers.Default) { p.prepareWorldSearch() } } }
+    // The first world search sorts every city: done once Anywhere is chosen, before the first
+    // letters typed have to wait on it.
+    LaunchedEffect(places, anywhere) { if (anywhere) places?.let { p -> withContext(Dispatchers.Default) { p.prepareWorldSearch() } } }
     val app = LocalContext.current.applicationContext as? StampApp
     val recentFlow = remember(app) { app?.recentCities ?: MutableStateFlow(emptyList()) }
     val recent by recentFlow.collectAsState()
@@ -117,13 +126,10 @@ fun CityPicker(
     val showYours = typed.isEmpty() && yours.isNotEmpty()
     val rest = if (showYours) yours.mapTo(HashSet()) { it.id }.let { ids -> results.filter { it.id !in ids } } else results
     val pick: (City) -> Unit = { c -> app?.cityPicked(c.id); onPick(c) }
-    // Enter takes the first match the user could tap, for what is in the field now, even when
-    // it was typed faster than the search could keep up.
-    val first = {
-        if (typed.isEmpty()) null else {
-            val now = if (found?.fresh == true) rest else search()
-            now.firstOrNull { it.id !in already || againOk }
-        }
+    // Enter takes the first match the user could tap, for what is in the field now: typed faster
+    // than the search could keep up, it waits for that answer rather than searching here.
+    val enter = {
+        if (typed.isNotEmpty()) search.whenAnswered { now -> now.firstOrNull { it.id !in already || againOk }?.let(pick) }
     }
     SeamDialog(onDismissRequest = onDismiss) {
         Surface(
@@ -160,7 +166,7 @@ fun CityPicker(
                     } else null,
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                    keyboardActions = KeyboardActions(onSearch = { first()?.let(pick) }),
+                    keyboardActions = KeyboardActions(onSearch = { enter() }),
                     shape = RoundedCornerShape(28.dp),
                     colors = TextFieldDefaults.colors(
                         focusedIndicatorColor = Color.Transparent,
@@ -183,6 +189,9 @@ fun CityPicker(
                     when {
                         places == null || (found == null && !showYours) -> Quiet("Loading cities")
                         !showYours && anywhere && typed.length < 2 -> Quiet("Type a city in any country")
+                        // An empty answer to what was asked before says nothing about what is asked
+                        // now: no "not listed" until the answer is in.
+                        !showYours && found?.fresh != true && results.isEmpty() -> Box(Modifier.fillMaxSize())
                         !showYours && results.isEmpty() && typed.isEmpty() -> Quiet("No cities listed for $countryName")
                         !showYours && results.isEmpty() && (alpha2.isEmpty() || anywhere) -> Quiet("No city called \"$typed\"")
                         !showYours && results.isEmpty() -> NotListed(typed, onPin = { onPin(typed) })
@@ -360,22 +369,57 @@ private fun people(n: Int): String = when {
     else -> "$n"
 }
 
+/** What the city picker asks a search: every value is taken when the key is made. */
+private data class CityAsk(val places: Places?, val alpha2: String, val query: String, val anywhere: Boolean)
+
 /** A search's answer, and whether it answers what is asked now or what was asked a moment ago. */
 internal class Searched<T>(val items: List<T>, val fresh: Boolean)
 
 /**
- * What [search] finds, worked out off the main thread whenever [keys] change, so a keystroke
- * never waits on a search through thousands of cities. The last answer stays up while the next
- * one is found. Null until the first answer, unless [quick] says that one is cheap enough to
- * find on the spot, such as an empty field.
+ * A search kept off the main thread: its latest answer, and Enter's wait for the answer to what
+ * is asked now.
+ */
+internal class LiveSearch<K, T> {
+    internal var answer by mutableStateOf<Pair<K, List<T>>?>(null)
+    internal var asked: Any? = null
+    internal var found: Searched<T>? = null
+    private var waiting: Pair<Any?, (List<T>) -> Unit>? = null
+
+    /** Runs [action] with the answer to what is asked now: at once when it is in, else when it lands. */
+    fun whenAnswered(action: (List<T>) -> Unit) {
+        val a = answer
+        if (a != null && a.first == asked) action(a.second) else waiting = asked to action
+    }
+
+    internal fun land(key: K, items: List<T>) {
+        answer = key to items
+        val w = waiting ?: return
+        if (w.first != asked) { waiting = null; return }
+        if (key != asked) return
+        waiting = null
+        w.second(items)
+    }
+}
+
+/**
+ * What [search] finds for [key], worked out off the main thread whenever the key changes, so a
+ * keystroke never waits on a search through thousands of cities. The search is handed the key,
+ * never reads live state, and calls its check often, so a newer key stops it early. The last
+ * answer stays up while the next one is found. No answer until the first lands, unless [quick]
+ * says that one is cheap enough to find on the spot, such as an empty field.
  */
 @Composable
-internal fun <T> rememberSearch(vararg keys: Any?, quick: Boolean = false, search: () -> List<T>): Searched<T>? {
-    val asked = keys.toList()
-    val first = remember { if (quick) asked to search() else null }
-    val answer by produceState(first, *keys) {
-        if (value?.first == asked) return@produceState
-        value = asked to withContext(Dispatchers.Default) { search() }
+internal fun <K, T> rememberSearch(key: K, quick: Boolean = false, search: (K, check: () -> Unit) -> List<T>): LiveSearch<K, T> {
+    val live = remember { LiveSearch<K, T>().also { if (quick) it.answer = key to search(key) {} } }
+    live.found = live.answer?.let { (at, items) -> Searched(items, at == key) }
+    SideEffect { live.asked = key }
+    LaunchedEffect(key) {
+        if (live.answer?.first == key) return@LaunchedEffect
+        val items = withContext(Dispatchers.Default) {
+            val job = coroutineContext
+            search(key) { job.ensureActive() }
+        }
+        live.land(key, items)
     }
-    return answer?.let { (at, items) -> Searched(items, at == asked) }
+    return live
 }

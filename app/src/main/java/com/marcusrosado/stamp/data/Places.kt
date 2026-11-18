@@ -94,14 +94,18 @@ class Places private constructor(
     /**
      * Cities in a country matching [query], ignoring case and accents. Names starting with
      * the query come before names that only contain it; within each, bigger cities first.
+     * [check] is called every few thousand cities, so a search no longer wanted can throw out of
+     * the loop instead of finishing it.
      */
-    fun search(alpha2: String, query: String): List<City> {
+    fun search(alpha2: String, query: String, check: () -> Unit = {}): List<City> {
         val all = citiesIn(alpha2)
         val q = fold(query.trim())
         if (q.isEmpty()) return all
         val starts = ArrayList<City>()
         val contains = ArrayList<City>()
+        var n = 0
         for (c in all) {
+            if (++n and CHECK_EVERY == 0) check()
             val n = c.key
             val a = c.asciiKey
             when {
@@ -124,13 +128,16 @@ class Places private constructor(
     /**
      * Cities anywhere in the world matching [query], for a trip that crosses a border. Names that
      * start with the query come first, bigger cities first within each; at most [limit].
+     * [check] is called every few thousand cities, as in [search].
      */
-    fun searchAll(query: String, limit: Int = 60): List<City> {
+    fun searchAll(query: String, limit: Int = 60, check: () -> Unit = {}): List<City> {
         val q = fold(query.trim())
         if (q.length < 2) return emptyList()
         val starts = ArrayList<City>()
         val contains = ArrayList<City>()
+        var n = 0
         for (c in all) {
+            if (++n and CHECK_EVERY == 0) check()
             val a = c.asciiKey
             when {
                 c.key.startsWith(q) || a.startsWith(q) -> if (starts.size < limit) starts += c
@@ -205,6 +212,9 @@ class Places private constructor(
             val v = mant.toDouble() / POW10[scale]
             return if (neg) -v else v
         }
+
+        /** One less than how many cities a search goes through between two calls of its check. */
+        private const val CHECK_EVERY = 4095
 
         private val POW10 = DoubleArray(16).also { p -> p[0] = 1.0; for (k in 1 until p.size) p[k] = p[k - 1] * 10 }
 

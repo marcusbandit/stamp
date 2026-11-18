@@ -103,4 +103,20 @@ class PlacesReadTest {
         fresh.prepareWorldSearch()
         for (q in listOf("par", "são", "x", "ab")) assertEquals(q, places.searchAll(q).map { it.id }, fresh.searchAll(q).map { it.id })
     }
+
+    @Test fun aSearchNoLongerWantedStopsEarly() {
+        // A newer keystroke makes the check throw: the search leaves its loop at the next check
+        // instead of going through every city first.
+        class Stop : RuntimeException()
+        var checks = 0
+        val stopped = runCatching { places.searchAll("zzzz", check = { if (++checks == 2) throw Stop() }) }.exceptionOrNull()
+        org.junit.Assert.assertTrue(stopped is Stop)
+        assertEquals(2, checks)
+        checks = 0
+        assertEquals(places.searchAll("par").map { it.id }, places.searchAll("par", check = { checks++ }).map { it.id })
+        org.junit.Assert.assertTrue("checked every few thousand cities: $checks", checks > 0)
+        checks = 0
+        assertEquals(places.search("US", "spring").map { it.id }, places.search("US", "spring") { checks++ }.map { it.id })
+        org.junit.Assert.assertTrue("checked in a country search too: $checks", checks > 0)
+    }
 }
