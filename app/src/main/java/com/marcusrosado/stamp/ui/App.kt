@@ -85,6 +85,8 @@ class AppState(
     val onSet: (String, TravelState?) -> Unit,
     val details: DetailActions,
     val onOpenList: () -> Unit,
+    /** Opens the country list on what a tapped count counted. */
+    val onOpenListOf: (ListFilter) -> Unit = {},
     /** Search every country's cities and fly to the one picked. */
     val onFindCity: () -> Unit,
     /** Start a trip at a city anywhere, then open it. */
@@ -296,6 +298,9 @@ private fun App(
     }
     var selectedId by rememberSaveable { mutableStateOf<String?>(null) }
     var showList by rememberSaveable { mutableStateOf(false) }
+    // What the country list opens on: everything, or what a tapped count counted.
+    var listFilter by rememberSaveable(stateSaver = ListFilter.Saver) { mutableStateOf(ListFilter()) }
+    var listOpened by rememberSaveable { mutableStateOf(0L) }
     // A city search across every country: to fly to a city, or to start a trip there.
     var cityHunt by rememberSaveable { mutableStateOf<String?>(null) }
     var spot by rememberSaveable(stateSaver = SpotSaver) { mutableStateOf<Spot?>(null) }
@@ -497,7 +502,8 @@ private fun App(
                 onAddRegion = app.visits::addRegion,
                 onRemoveRegion = { a, b -> undo.run("Region removed") { app.visits.removeRegion(a, b) } },
             ) },
-            onOpenList = { showList = true },
+            onOpenList = { listFilter = ListFilter(); showList = true },
+            onOpenListOf = { listFilter = it; listOpened = System.nanoTime(); showList = true },
             onFindCity = { cityHunt = "find" },
             onNewTrip = { cityHunt = "trip" },
             pendingTrip = pendingTrip,
@@ -680,6 +686,8 @@ private fun App(
                     onShowOnMap = openCountry,
                     onClose = { showList = false },
                     split = split,
+                    start = listFilter,
+                    opened = listOpened,
                 )
             }
         }

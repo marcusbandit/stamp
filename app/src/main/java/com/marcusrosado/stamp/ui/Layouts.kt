@@ -423,6 +423,8 @@ private fun Passport(state: AppState, padding: PaddingValues, modifier: Modifier
     onScan = state.onOpenScan, onOpenCountry = state.onOpenCountry, contentPadding = padding,
     modifier = modifier, split = state.split,
     trips = state.trips, places = state.places, onOpenTrip = state.onOpenTrip,
+    onOpenList = state.onOpenListOf,
+    onShowMap = { state.onDestination(Destination.Map) },
 )
 
 /** A country's card, with everything it needs from the app's state. */
@@ -798,12 +800,17 @@ private fun Legend(state: AppState, modifier: Modifier) {
         shadowElevation = 2.dp,
     ) {
         Row(
-            Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             TravelState.entries.forEach { s ->
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                // Each count opens the list of what it counts.
+                Row(
+                    Modifier.clip(RoundedCornerShape(50)).clickable(onClickLabel = "Show ${s.label.lowercase()} countries") { state.onOpenListOf(ListFilter.of(s)) }
+                        .padding(horizontal = 4.dp, vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     Swatch(palette.of(s))
                     Spacer(Modifier.width(6.dp))
                     Text(
