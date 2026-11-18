@@ -413,7 +413,7 @@ private fun TripMap(state: AppState, modifier: Modifier, at: Pair<Double, Double
     val camera = remember { CameraSpot(at?.first ?: 30.0, at?.second ?: 10.0, if (at != null) 6.0 else 0.6) }
     var focus by remember { mutableStateOf<Focus?>(null) }
     LaunchedEffect(at) { at?.let { focus = Focus(it.first, it.second, 5.0) } }
-    StampMap(state, modifier, camera = camera, focus = focus, onFocused = { focus = null }, onTap = {}, selectable = false)
+    StampMap(state, modifier, camera = camera, focus = focus, onFocused = { focus = null }, onTap = {}, selectable = false, light = true)
 }
 
 /** The passport, with everything it needs from the app's state. */
@@ -476,6 +476,13 @@ private fun StampMap(
     onRestore: (String?) -> Unit = state.onRestoreSelection,
     selectable: Boolean = true,
     animate: Boolean = true,
+    /**
+     * A second map beside a page, such as a trip's: countries, its lines and its stops, without
+     * the regions, every city of the cities view, the heat map, photos or city outlines. Each of
+     * those is built again for every map that draws it, and a second full map was enough to run
+     * a phone out of memory.
+     */
+    light: Boolean = false,
 ) {
     val selected = state.selected
     // A tapped line opens the picker for the leg it draws, right over the map: no country
@@ -540,7 +547,7 @@ private fun StampMap(
     }
     val rv = state.regionView
     // The cities view's dots: every city of some size, and every one on a visit or wanted.
-    val cityView = state.mapView == com.marcusrosado.stamp.data.MapView.Cities
+    val cityView = !light && state.mapView == com.marcusrosado.stamp.data.MapView.Cities
     val allCities by androidx.compose.runtime.produceState(emptyList<CityDot>(), cityView, state.places, state.visits) {
         val p = state.places
         if (!cityView || p == null) { value = emptyList(); return@produceState }
@@ -551,7 +558,7 @@ private fun StampMap(
         }
     }
     val heat by androidx.compose.runtime.produceState(emptyList<com.marcusrosado.stamp.data.HeatCell>(), state.seen, state.heatMap) {
-        value = if (!state.heatMap) emptyList()
+        value = if (!state.heatMap || light) emptyList()
         else kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { com.marcusrosado.stamp.data.Seen.cells(state.seen) }
     }
     val wantCities = remember(state.visits, state.places) {
@@ -559,15 +566,15 @@ private fun StampMap(
     }
     WorldMap(
         animate = animate,
-        regionLayer = if (rv.countries.isEmpty()) null else RegionLayer(rv.shapes, rv.marks, rv.countryMarks),
-        complete = rv.complete,
-        plain = state.mapView == com.marcusrosado.stamp.data.MapView.Cities,
+        regionLayer = if (light || rv.countries.isEmpty()) null else RegionLayer(rv.shapes, rv.marks, rv.countryMarks),
+        complete = if (light) emptySet() else rv.complete,
+        plain = !light && state.mapView == com.marcusrosado.stamp.data.MapView.Cities,
         wantCities = wantCities,
         onRegion = if (selectable) { cid, rid -> state.onSpot(Spot.Region(cid, rid)) } else null,
         allCities = allCities,
-        selectedRegion = (state.spot as? Spot.Region)?.regionId,
-        selectedCity = (state.spot as? Spot.City)?.let { it.lat to it.lon },
-        selectedArea = state.spotArea.takeIf { state.spot is Spot.City },
+        selectedRegion = (state.spot as? Spot.Region)?.regionId.takeIf { !light },
+        selectedCity = (state.spot as? Spot.City)?.let { it.lat to it.lon }.takeIf { !light },
+        selectedArea = state.spotArea.takeIf { state.spot is Spot.City && !light },
         heat = heat,
         onViewport = if (selectable) state.onViewport else null,
         onCity = if (selectable) { id ->
@@ -587,7 +594,7 @@ private fun StampMap(
         split = state.split,
         routes = LocalMapRoutes.current,
         photos = remember(state.visits, state.places, state.mapPhotos) {
-            if (!state.mapPhotos) return@remember emptyList()
+            if (!state.mapPhotos || light) return@remember emptyList()
             // The first photo kept at each place; places only, not the visit as a whole.
             state.visits.values.filter { it.state.counts }.flatMap { v ->
                 (v.trips.flatMap { t -> t.memories } + v.memories).filter { it.media != null && it.place != null }
@@ -599,7 +606,8 @@ private fun StampMap(
                     }
             }.distinct()
         },
-        areas = remember(state.visits, state.cityAreas, state.keptOutlines) {
+        areas = remember(state.visits, state.cityAreas, state.keptOutlines, light) {
+            if (light) return@remember emptyList()
             state.visits.values.filter { it.state.counts }.flatMap { it.cities }.distinct()
                 .mapNotNull { state.cityAreas.of(it) ?: state.keptOutlines[it] }
         },
