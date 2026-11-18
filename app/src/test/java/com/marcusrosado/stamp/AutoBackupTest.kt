@@ -17,4 +17,14 @@ class AutoBackupTest {
         assertEquals(own.take(3).toSet(), gone.toSet())
         assertEquals(emptyList<String>(), AutoBackup.stale(own.take(5), keep = 5))
     }
+
+    @Test fun aChangeSoonAfterABackupWaitsForTheDayNotTheWeek() {
+        val day = AutoBackup.DAY_MS
+        val now = 10 * day
+        // Last backup an hour ago: the next one when the day is up, 23 hours from now.
+        assertEquals(day - 3_600_000L, AutoBackup.delayAfterChange(now, now - 3_600_000L))
+        // A day old or never: soon, once the edits settle.
+        assertEquals(15 * 60_000L, AutoBackup.delayAfterChange(now, now - 2 * day))
+        assertEquals(15 * 60_000L, AutoBackup.delayAfterChange(now, 0L))
+    }
 }

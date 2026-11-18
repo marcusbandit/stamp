@@ -40,7 +40,12 @@ class AutoBackup(context: Context, params: WorkerParameters) : CoroutineWorker(c
         val ok = withContext(Dispatchers.IO) {
             runCatching { write(applicationContext, Uri.parse(folder.uri), fileName(LocalDate.now()), app.backupText()) }.getOrDefault(false)
         }
-        if (!ok) return if (runAttemptCount < 3) Result.retry() else Result.success()
+        if (!ok) {
+            if (runAttemptCount < 3) return Result.retry()
+            // Given up: Settings says so on the switch, instead of a last date that only grows old.
+            app.autoBackupFailedAt(now)
+            return Result.success()
+        }
         app.autoBackedUp(now)
         return Result.success()
     }
@@ -81,15 +86,24 @@ class AutoBackup(context: Context, params: WorkerParameters) : CoroutineWorker(c
         /** A backup right away, as when the folder was just picked. */
         fun now(context: Context) = once(context, 0L, 0L, ExistingWorkPolicy.REPLACE)
 
-        /**
-         * A backup a while after a change, so a run of edits is saved once, and only when the
-         * last backup is a day old by then. A change while one is waiting adds nothing.
-         */
-        fun afterChange(context: Context) = once(context, DAY_MS, 15, ExistingWorkPolicy.KEEP)
+        /** How long a change waits for its backup, so a run of edits is saved once. */
+        private const val SETTLE_MS = 15 * 60_000L
 
-        private fun once(context: Context, minAge: Long, delayMinutes: Long, policy: ExistingWorkPolicy) {
+        /**
+         * How long after a change at [now] its backup should run: once the edits have settled, or,
+         * when the last automatic backup at [last] is not a day old yet, when the day is up.
+         */
+        fun delayAfterChange(now: Long, last: Long): Long = maxOf(SETTLE_MS, last + DAY_MS - now)
+
+        /**
+         * A backup [delayMs] after a change. It still waits for the last one to be a day old, give
+         * or take a minute of clock, and a change while one is waiting adds nothing.
+         */
+        fun afterChange(context: Context, delayMs: Long) = once(context, DAY_MS - 60_000L, delayMs, ExistingWorkPolicy.KEEP)
+
+        private fun once(context: Context, minAge: Long, delayMs: Long, policy: ExistingWorkPolicy) {
             val req = OneTimeWorkRequestBuilder<AutoBackup>()
-                .setInitialDelay(delayMinutes, TimeUnit.MINUTES)
+                .setInitialDelay(delayMs, TimeUnit.MILLISECONDS)
                 .setInputData(workDataOf(KEY_MIN_AGE to minAge))
                 .build()
             WorkManager.getInstance(context).enqueueUniqueWork(SOON, policy, req)

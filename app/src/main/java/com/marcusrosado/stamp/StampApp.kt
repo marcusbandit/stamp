@@ -174,11 +174,7 @@ class StampApp : Application(), androidx.work.Configuration.Provider {
      * Adds what a backup holds that the phone lacks, places seen included, and keeps all that is
      * here. Null and nothing changed when it is no Stamp backup; otherwise how much came in.
      */
-    fun mergeText(text: String): Int? {
-        val n = visits.merge(text) ?: return null
-        runCatching { org.json.JSONObject(text).optJSONArray("seen")?.let { seen.merge(it) } }
-        return n
-    }
+    fun mergeText(text: String): Int? = com.marcusrosado.stamp.data.mergeBackup(visits, seen, text)
 
     /** Whether a country's separate land masses, such as Corsica or Hawaii, are marked on their own. */
     val split by lazy { Toggle(FLAG_WHOLE) }
@@ -264,71 +260,116 @@ class StampApp : Application(), androidx.work.Configuration.Provider {
         )
     }
 
-    /** An automatic backup was saved: on disk before returning, since a worker's process may end right after. */
+    /**
+     * An automatic backup was saved, on disk before returning, since a worker's process may end
+     * right after. Only the folder's own time moves: [lastBackup] stays the copy saved by hand.
+     */
     suspend fun autoBackedUp(at: Long) {
-        lastBackup.value = at
         lastAutoBackup.value = at
+        autoBackupFailed.value = 0L
         kotlinx.coroutines.withContext(lookWriter) {
-            runCatching { File(filesDir, BACKUP_FILE).writeText("$at") }
             runCatching { File(filesDir, AUTO_BACKUP_FILE).writeText("$at") }
+            File(filesDir, AUTO_BACKUP_FAILED_FILE).delete()
         }
     }
+
+    /**
+     * When automatic backups last gave up on the folder, epoch ms, or 0 while they work. Set when
+     * a backup fails for good, cleared by the next one that works or by a new choice of folder,
+     * so Settings can say the folder stopped taking them.
+     */
+    val autoBackupFailed: kotlinx.coroutines.flow.MutableStateFlow<Long> by lazy {
+        kotlinx.coroutines.flow.MutableStateFlow(
+            runCatching { File(filesDir, AUTO_BACKUP_FAILED_FILE).readText().trim().toLong() }.getOrDefault(0L),
+        )
+    }
+
+    /** An automatic backup failed for good; on disk before returning, like [autoBackedUp]. */
+    suspend fun autoBackupFailedAt(at: Long) {
+        autoBackupFailed.value = at
+        kotlinx.coroutines.withContext(lookWriter) { runCatching { File(filesDir, AUTO_BACKUP_FAILED_FILE).writeText("$at") } }
+    }
+
+    private fun readBackupFolder(): com.marcusrosado.stamp.data.BackupFolder? =
+        runCatching { File(filesDir, BACKUP_FOLDER_FILE).readLines() }.getOrNull()
+            ?.takeIf { it.isNotEmpty() && it[0].isNotBlank() }
+            ?.let { com.marcusrosado.stamp.data.BackupFolder(it[0].trim(), it.getOrNull(1)?.trim().orEmpty()) }
 
     /**
      * The folder automatic backups go to, or null while they are off. The tree's uri and its name
      * are kept in a two-line file, so Settings can show the name without asking Android again.
      */
     val backupFolder: kotlinx.coroutines.flow.MutableStateFlow<com.marcusrosado.stamp.data.BackupFolder?> by lazy {
-        kotlinx.coroutines.flow.MutableStateFlow(
-            runCatching { File(filesDir, BACKUP_FOLDER_FILE).readLines() }.getOrNull()
-                ?.takeIf { it.isNotEmpty() && it[0].isNotBlank() }
-                ?.let { com.marcusrosado.stamp.data.BackupFolder(it[0].trim(), it.getOrNull(1)?.trim().orEmpty()) },
-        )
+        kotlinx.coroutines.flow.MutableStateFlow(readBackupFolder())
     }
+
+    /** Counts the user's choices of backup folder, so only the latest one is carried out. */
+    private val backupChoice = java.util.concurrent.atomic.AtomicInteger()
 
     /**
      * Turns automatic backups on into the folder [tree] the user just picked, or off with null.
      * On holds on to Android's grant for the folder and saves a first backup right away; off
      * hands the grant back and cancels what was to come.
+     *
+     * Every choice is carried out on the one writer, in the order made, and one that a later
+     * choice has overtaken does nothing: on and off in quick succession end off, with the file,
+     * the schedule, the grants and the switch all saying so.
      */
     fun setBackupFolder(tree: android.net.Uri?) {
-        val flags = android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-        val before = backupFolder.value
-        if (tree == null) {
-            backupFolder.value = null
-            com.marcusrosado.stamp.data.AutoBackup.schedule(this, false)
-            scope.launch(lookWriter) {
-                File(filesDir, BACKUP_FOLDER_FILE).delete()
-                before?.let { runCatching { contentResolver.releasePersistableUriPermission(android.net.Uri.parse(it.uri), flags) } }
-            }
-            return
-        }
-        // Without a lasting grant the folder is gone the next time the phone restarts.
-        if (runCatching { contentResolver.takePersistableUriPermission(tree, flags) }.isFailure) return
+        val choice = backupChoice.incrementAndGet()
+        // Off shows at once; on shows once the folder is kept, a moment later.
+        if (tree == null) backupFolder.value = null
         scope.launch(lookWriter) {
+            if (choice != backupChoice.get()) return@launch
+            val flags = android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            fun release(uri: String) = runCatching { contentResolver.releasePersistableUriPermission(android.net.Uri.parse(uri), flags) }
+            val before = readBackupFolder()
+            backupDueAt = 0L
+            autoBackupFailed.value = 0L
+            File(filesDir, AUTO_BACKUP_FAILED_FILE).delete()
+            if (tree == null) {
+                com.marcusrosado.stamp.data.AutoBackup.schedule(this@StampApp, false)
+                File(filesDir, BACKUP_FOLDER_FILE).delete()
+                before?.let { release(it.uri) }
+                backupFolder.value = null
+                return@launch
+            }
+            // Without a lasting grant the folder is gone the next time the phone restarts.
+            if (runCatching { contentResolver.takePersistableUriPermission(tree, flags) }.isFailure) {
+                if (choice == backupChoice.get()) backupFolder.value = before
+                return@launch
+            }
             val name = com.marcusrosado.stamp.data.AutoBackup.nameOf(this@StampApp, tree) ?: tree.lastPathSegment?.substringAfterLast(':').orEmpty()
             val folder = com.marcusrosado.stamp.data.BackupFolder(tree.toString(), name)
             runCatching { File(filesDir, BACKUP_FOLDER_FILE).writeText("${folder.uri}\n${folder.name}\n") }
             // A new folder replaces the old one, whose grant goes back.
-            if (before != null && before.uri != folder.uri) {
-                runCatching { contentResolver.releasePersistableUriPermission(android.net.Uri.parse(before.uri), flags) }
-            }
-            backupFolder.value = folder
+            if (before != null && before.uri != folder.uri) release(before.uri)
             com.marcusrosado.stamp.data.AutoBackup.schedule(this@StampApp, true)
             com.marcusrosado.stamp.data.AutoBackup.now(this@StampApp)
+            // A choice made while this ran is queued behind it and sets the switch itself.
+            if (choice == backupChoice.get()) backupFolder.value = folder
         }
     }
 
-    /** When a backup after a change was last asked for, so a run of edits asks once. */
-    @Volatile private var backupAskedAt = 0L
+    /**
+     * When the backup after a change that is waiting will run, so a run of edits asks for one.
+     * Kept in memory only: after a restart the next change asks again, and WorkManager keeps
+     * the one already waiting.
+     */
+    @Volatile private var backupDueAt = 0L
 
-    /** After a change, a backup on its way once the last one is a day old. */
+    /**
+     * After a change, a backup on its way: soon when the last one is a day old, otherwise when
+     * the day is up, so a change right after a backup is never left for the weekly one.
+     */
     private fun changed() {
         if (backupFolder.value == null) return
         val now = System.currentTimeMillis()
-        if (now - lastAutoBackup.value < com.marcusrosado.stamp.data.AutoBackup.DAY_MS || now - backupAskedAt < 3_600_000L) return
-        backupAskedAt = now
-        com.marcusrosado.stamp.data.AutoBackup.afterChange(this)
+        // The one waiting has not run yet, and will read the store as it is then.
+        if (now < backupDueAt) return
+        val delay = com.marcusrosado.stamp.data.AutoBackup.delayAfterChange(now, lastAutoBackup.value)
+        backupDueAt = now + delay
+        com.marcusrosado.stamp.data.AutoBackup.afterChange(this, delay)
     }
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
@@ -429,7 +470,9 @@ class StampApp : Application(), androidx.work.Configuration.Provider {
         scope.launch(Dispatchers.IO) {
             val visits = visitsLoading.await()
             if (visits.damaged || setAside.value.isNotEmpty()) return@launch
-            val inUse = visits.visits.value.values.flatMap { v -> v.trips.flatMap { it.memories } + v.memories }.mapNotNull { it.media }.toSet()
+            // The backup folder's grant is no memory's, and backups need it kept.
+            val inUse = visits.visits.value.values.flatMap { v -> v.trips.flatMap { it.memories } + v.memories }.mapNotNull { it.media }.toSet() +
+                listOfNotNull(backupFolder.value?.uri)
             com.marcusrosado.stamp.scan.Memories.releaseUnused(this@StampApp, inUse)
         }
     }
@@ -458,5 +501,6 @@ class StampApp : Application(), androidx.work.Configuration.Provider {
         private const val BACKUP_FILE = "last_backup.txt"
         private const val BACKUP_FOLDER_FILE = "backup_folder.txt"
         private const val AUTO_BACKUP_FILE = "last_auto_backup.txt"
+        private const val AUTO_BACKUP_FAILED_FILE = "auto_backup_failed.txt"
     }
 }

@@ -173,6 +173,7 @@ fun SettingsScreen(state: AppState, contentPadding: PaddingValues, modifier: Mod
     val stamp = state.app
     val update by stamp.updates.state.collectAsStateWithLifecycle()
     val autoBackup by stamp.backupFolder.collectAsStateWithLifecycle()
+    val lastAuto by stamp.lastAutoBackup.collectAsStateWithLifecycle()
 
     // The hourly look counts as on only while Android still lets it run.
     val hourlyOn = state.hourly && com.marcusrosado.stamp.data.Hourly.allowed(LocalContext.current)
@@ -185,10 +186,14 @@ fun SettingsScreen(state: AppState, contentPadding: PaddingValues, modifier: Mod
             hourlyOn -> "Every hour · ${placesLabel(state.seen.size)}"
             else -> placesLabel(state.seen.size)
         }
-        Page.Backup -> listOfNotNull(
-            if (autoBackup != null) "Automatic" else null,
-            if (state.lastBackup > 0) "Last backup ${date(state.lastBackup)}" else "Not backed up yet",
-        ).joinToString(" · ")
+        Page.Backup -> {
+            // Either kind of backup is a backup here; the page itself tells them apart.
+            val last = maxOf(state.lastBackup, if (autoBackup != null) lastAuto else 0L)
+            listOfNotNull(
+                if (autoBackup != null) "Automatic" else null,
+                if (last > 0) "Last backup ${date(last)}" else "Not backed up yet",
+            ).joinToString(" · ")
+        }
         Page.About -> when (val u = update) {
             is com.marcusrosado.stamp.data.Update.Available -> "Version ${BuildConfig.VERSION_NAME} · ${u.release.version} is out"
             is com.marcusrosado.stamp.data.Update.Downloading -> "Downloading ${u.release.version}"
@@ -770,6 +775,7 @@ private fun BackupPage(state: AppState) {
     // The folder automatic backups go to. Android hands the tree back once the user picks one.
     val folder by state.app.backupFolder.collectAsStateWithLifecycle()
     val lastAuto by state.app.lastAutoBackup.collectAsStateWithLifecycle()
+    val failed by state.app.autoBackupFailed.collectAsStateWithLifecycle()
     val pickFolder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         uri?.let { state.app.setBackupFolder(it) }
     }
@@ -778,7 +784,17 @@ private fun BackupPage(state: AppState) {
     Category("Backup")
     SwitchPref(
         "Back up automatically",
-        folder?.let { f -> listOfNotNull(f.name.ifEmpty { null }, if (lastAuto > 0) "Last backup ${date(lastAuto)}" else null).joinToString(" · ").ifEmpty { null } },
+        folder?.let { f ->
+            listOfNotNull(
+                f.name.ifEmpty { null },
+                when {
+                    // A folder that stopped taking backups says so where the last date would be.
+                    failed > 0 -> "Couldn't save there on ${date(failed)}"
+                    lastAuto > 0 -> "Last backup ${date(lastAuto)}"
+                    else -> null
+                },
+            ).joinToString(" · ").ifEmpty { null }
+        },
         folder != null,
     ) { on -> if (on) pickFolder.launch(null) else state.app.setBackupFolder(null) }
     Pref("Save a backup", if (state.lastBackup > 0) "Last saved ${date(state.lastBackup)}" else "Never saved", onClick = { save.launch("stamp-backup-$today.json") })
