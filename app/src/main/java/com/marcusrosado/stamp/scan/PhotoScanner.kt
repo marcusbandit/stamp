@@ -26,6 +26,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.coroutineContext
@@ -46,7 +47,17 @@ sealed interface ScanState {
         val found: List<Found>,
     ) : ScanState
 
-    data class Done(val found: List<Found>, val total: Int, val located: Int, val source: ScanSource = ScanSource.Device) : ScanState
+    data class Done(
+        val found: List<Found>,
+        val total: Int,
+        val located: Int,
+        val source: ScanSource = ScanSource.Device,
+        /**
+         * The ticks the user changed in the review, by country id. Kept here and not in the
+         * screen, so closing the review and opening it again from Passport keeps them.
+         */
+        val picks: Map<String, Boolean> = emptyMap(),
+    ) : ScanState
 
     data class Failed(val message: String, val source: ScanSource = ScanSource.Device) : ScanState
 }
@@ -80,6 +91,11 @@ class PhotoScanner(
         generation++
         job?.cancel()
         _state.value = ScanState.Idle
+    }
+
+    /** Records ticks changed in the review of a finished scan; does nothing once it is gone. */
+    fun pick(changes: Map<String, Boolean>) {
+        _state.update { s -> if (s is ScanState.Done) s.copy(picks = s.picks + changes) else s }
     }
 
     /** Bumped on every start and cancel, so a stopped scan can never write state again. */

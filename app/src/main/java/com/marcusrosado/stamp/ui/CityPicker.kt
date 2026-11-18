@@ -21,6 +21,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
@@ -38,6 +40,7 @@ import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -49,6 +52,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -59,7 +64,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.marcusrosado.stamp.data.City
+import com.marcusrosado.stamp.StampApp
 import com.marcusrosado.stamp.data.Places
+import com.marcusrosado.stamp.data.yourCities
+import kotlinx.coroutines.flow.MutableStateFlow
 import java.util.Locale
 
 /**
@@ -82,6 +90,8 @@ fun CityPicker(
     countryLabel: (String) -> String = { it },
     /** Replaces "Cities in <country>"; with no country, the search covers the whole world. */
     title: String? = null,
+    /** City ids on the user's visits, offered with the recent picks before anything is typed. */
+    mine: Collection<String> = emptySet(),
 ) {
     var query by rememberSaveable { mutableStateOf("") }
     // A trip can carry on across a border: "Anywhere" searches every country's cities.
@@ -89,8 +99,20 @@ fun CityPicker(
     val results = remember(places, alpha2, query, anywhere) {
         if (anywhere) places?.searchAll(query).orEmpty() else places?.search(alpha2, query).orEmpty()
     }
+    val app = LocalContext.current.applicationContext as? StampApp
+    val recentFlow = remember(app) { app?.recentCities ?: MutableStateFlow(emptyList()) }
+    val recent by recentFlow.collectAsState()
+    val yours = remember(places, alpha2, anywhere, recent, mine) {
+        places?.let { p -> yourCities(recent, mine, p.byId, keep = { anywhere || it.country.equals(alpha2, ignoreCase = true) }) }.orEmpty()
+    }
     val focus = remember { FocusRequester() }
     val typed = query.trim()
+    // With nothing typed, the user's own and recent cities come first, and not again below.
+    val showYours = typed.isEmpty() && yours.isNotEmpty()
+    val rest = if (showYours) yours.mapTo(HashSet()) { it.id }.let { ids -> results.filter { it.id !in ids } } else results
+    val pick: (City) -> Unit = { c -> app?.cityPicked(c.id); onPick(c) }
+    // Enter takes the first match the user could tap.
+    val first = if (typed.isEmpty()) null else rest.firstOrNull { it.id !in already || againOk }
     SeamDialog(onDismissRequest = onDismiss) {
         Surface(
             Modifier.widthIn(max = 560.dp).fillMaxWidth(0.94f).fillMaxHeight(0.85f),
@@ -125,6 +147,8 @@ fun CityPicker(
                         { IconButton(onClick = { query = "" }) { Icon(Icons.Filled.Close, contentDescription = "Clear") } }
                     } else null,
                     singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(onSearch = { first?.let(pick) }),
                     shape = RoundedCornerShape(28.dp),
                     colors = TextFieldDefaults.colors(
                         focusedIndicatorColor = Color.Transparent,
@@ -146,25 +170,33 @@ fun CityPicker(
                 Box(Modifier.weight(1f).fillMaxWidth()) {
                     when {
                         places == null -> Quiet("Loading cities")
-                        anywhere && typed.length < 2 -> Quiet("Type a city in any country")
-                        results.isEmpty() && typed.isEmpty() -> Quiet("No cities listed for $countryName")
-                        results.isEmpty() && (alpha2.isEmpty() || anywhere) -> Quiet("No city called \"$typed\"")
-                        results.isEmpty() -> NotListed(typed, onPin = { onPin(typed) })
+                        !showYours && anywhere && typed.length < 2 -> Quiet("Type a city in any country")
+                        !showYours && results.isEmpty() && typed.isEmpty() -> Quiet("No cities listed for $countryName")
+                        !showYours && results.isEmpty() && (alpha2.isEmpty() || anywhere) -> Quiet("No city called \"$typed\"")
+                        !showYours && results.isEmpty() -> NotListed(typed, onPin = { onPin(typed) })
                         else -> LazyColumn(
                             Modifier.fillMaxSize().imePadding(),
                             contentPadding = PaddingValues(start = 8.dp, end = 8.dp, bottom = 16.dp),
                         ) {
-                            if (typed.isEmpty()) {
+                            fun region(c: City) =
+                                if (c.country != alpha2) listOfNotNull(places.regionOf(c), countryLabel(c.country)).joinToString(" · ") else places.regionOf(c)
+                            if (showYours) {
+                                item(key = "yours-header") { SectionLabel("Your cities") }
+                                items(yours, key = { "yours-" + it.id }) { c ->
+                                    CityRow(c, region(c), typed, added = c.id in already, again = againOk, onClick = { pick(c) })
+                                }
+                            }
+                            if (typed.isEmpty() && rest.isNotEmpty()) {
                                 item(key = "header") { SectionLabel("Biggest first") }
                             }
-                            items(results, key = { it.id }) { c ->
+                            items(rest, key = { it.id }) { c ->
                                 CityRow(
                                     city = c,
-                                    region = if (c.country != alpha2) listOfNotNull(places.regionOf(c), countryLabel(c.country)).joinToString(" · ") else places.regionOf(c),
+                                    region = region(c),
                                     query = typed,
                                     added = c.id in already,
                                     again = againOk,
-                                    onClick = { onPick(c) },
+                                    onClick = { pick(c) },
                                 )
                             }
                             // Pinning needs a country to draw; a search across the world has none.

@@ -210,6 +210,19 @@ class StampApp : Application(), androidx.work.Configuration.Provider {
         scope.launch(lookWriter) { runCatching { File(filesDir, MAP_VIEW_FILE).writeText(v.key) } }
     }
 
+    /** The cities picked last, newest first, so the city picker can offer them before typing. */
+    val recentCities: kotlinx.coroutines.flow.MutableStateFlow<List<String>> by lazy {
+        kotlinx.coroutines.flow.MutableStateFlow(
+            com.marcusrosado.stamp.data.recentFromText(runCatching { File(filesDir, RECENT_CITIES_FILE).readText() }.getOrNull()),
+        )
+    }
+
+    fun cityPicked(id: String) {
+        val now = com.marcusrosado.stamp.data.bumpRecent(recentCities.value, id)
+        recentCities.value = now
+        scope.launch(lookWriter) { runCatching { File(filesDir, RECENT_CITIES_FILE).writeText(com.marcusrosado.stamp.data.recentToText(now)) } }
+    }
+
     /** The outlines of each country's regions, read per country when first drawn. */
     val regionShapes by lazy {
         com.marcusrosado.stamp.data.RegionShapes { cc -> runCatching { assets.open("regions/$cc.bin") }.getOrNull() }
@@ -346,6 +359,7 @@ class StampApp : Application(), androidx.work.Configuration.Provider {
         private const val FLAG_NO_HERE = "no_here"
         private const val FLAG_NO_UPDATE_CHECK = "no_update_check"
         private const val MAP_VIEW_FILE = "map_view.txt"
+        private const val RECENT_CITIES_FILE = "recent_cities.txt"
         private const val BACKUP_FILE = "last_backup.txt"
     }
 }

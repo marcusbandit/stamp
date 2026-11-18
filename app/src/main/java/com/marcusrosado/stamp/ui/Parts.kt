@@ -91,8 +91,12 @@ fun StateButtons(current: TravelState?, onSet: (TravelState?) -> Unit, modifier:
 @Composable
 private fun StateButton(s: TravelState, on: Boolean, onSet: (TravelState?) -> Unit, modifier: Modifier, label: String) {
     val tint = LocalMapPalette.current.of(s)
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
     FilledTonalButton(
-        onClick = { onSet(if (on) null else s) },
+        onClick = {
+            haptic.performHapticFeedback(if (on) androidx.compose.ui.hapticfeedback.HapticFeedbackType.ToggleOff else androidx.compose.ui.hapticfeedback.HapticFeedbackType.ToggleOn)
+            onSet(if (on) null else s)
+        },
         modifier = modifier,
         contentPadding = ButtonDefaults.ButtonWithIconContentPadding,
         colors = if (on) {
@@ -348,6 +352,8 @@ fun CountryDetail(
             alpha2 = citiesCountry(country),
             places = places,
             already = trip.cities.map(::placeIdOf).toSet(),
+            // The country's other cities first: the ones on this trip are there already.
+            mine = visit?.cities.orEmpty().filterNot { it in trip.cities.map(::placeIdOf) },
             onPick = { c ->
                 actions.onAddCity(country.id, trip.id, c.id)
                 pickingFor = null
@@ -384,6 +390,7 @@ fun CountryDetail(
             alpha2 = citiesCountry(country),
             places = places,
             already = trip.placesAt(stop).toSet(),
+            mine = visit?.cities.orEmpty().filterNot { it in trip.placesAt(stop) },
             // Gone there from this stop already: nothing to add again.
             againOk = false,
             title = "Went from ${placeOf(stop, visit, places)?.name ?: "here"} to",
