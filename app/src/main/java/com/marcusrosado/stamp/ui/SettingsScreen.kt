@@ -44,7 +44,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.Canvas
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -598,7 +598,9 @@ private fun PartsChoice(atlas: Atlas, label: String, selected: Boolean, colours:
             .clickable(onClick = onClick),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Canvas(Modifier.fillMaxWidth().aspectRatio(1.3f).background(palette.ocean)) {
+        // The paths are made once per size and colours: a tap's ripple redraws this card every
+        // frame, and only the drawing should run then.
+        Spacer(Modifier.fillMaxWidth().aspectRatio(1.3f).background(palette.ocean).drawWithCache {
             // The United States with Alaska and Hawaii, on an equirectangular view squeezed for
             // their latitude. The Aleutians that cross the date line are left out of the picture.
             val west = -176.0; val east = -64.0; val south = 17.0; val north = 73.0
@@ -609,8 +611,8 @@ private fun PartsChoice(atlas: Atlas, label: String, selected: Boolean, colours:
             val ox = (size.width - (spanX * scale).toFloat()) / 2
             val oy = (size.height - (spanY * scale).toFloat()) / 2
             fun pt(lon: Double, lat: Double) = Offset(ox + ((lon - west) * k * scale).toFloat(), oy + ((north - lat) * scale).toFloat())
-            for ((id, colour) in colours) {
-                val c = atlas.byId[id] ?: continue
+            val shapes = colours.mapNotNull { (id, colour) ->
+                val c = atlas.byId[id] ?: return@mapNotNull null
                 val path = Path().apply { fillType = PathFillType.EvenOdd }
                 for (s in c.shapes) for (r in listOf(s.outer) + s.holes) {
                     if (r.xs.average() > 0) continue
@@ -620,10 +622,16 @@ private fun PartsChoice(atlas: Atlas, label: String, selected: Boolean, colours:
                     }
                     path.close()
                 }
-                drawPath(path, colour)
-                drawPath(path, palette.border, style = Stroke(width = 1f))
+                path to colour
             }
-        }
+            val outline = Stroke(width = 1f)
+            onDrawBehind {
+                for ((path, colour) in shapes) {
+                    drawPath(path, colour)
+                    drawPath(path, palette.border, style = outline)
+                }
+            }
+        })
         Row(Modifier.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             RadioButton(selected = selected, onClick = onClick)
             Text(label, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(end = 12.dp))
