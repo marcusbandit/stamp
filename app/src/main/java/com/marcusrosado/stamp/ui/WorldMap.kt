@@ -344,11 +344,12 @@ fun WorldMap(
             .map { r -> Glide(r, phase = ((r.points to r.way).hashCode() and 0xFFFF) / 65536.0) } else emptyList()
     }
     val glideFrame = remember { androidx.compose.runtime.mutableLongStateOf(0L) }
-    var cameraMoving by remember { mutableStateOf(false) }
+    // Plain fields, not state: the loop below reads them, and nothing should recompose for them.
+    val cameraMoving = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
     DisposableEffect(map) {
         val m = map ?: return@DisposableEffect onDispose { }
-        val started = MapLibreMap.OnCameraMoveStartedListener { cameraMoving = true }
-        val idle = MapLibreMap.OnCameraIdleListener { cameraMoving = false }
+        val started = MapLibreMap.OnCameraMoveStartedListener { cameraMoving.set(true) }
+        val idle = MapLibreMap.OnCameraIdleListener { cameraMoving.set(false) }
         m.addOnCameraMoveStartedListener(started)
         m.addOnCameraIdleListener(idle)
         onDispose {
@@ -356,21 +357,24 @@ fun WorldMap(
             m.removeOnCameraIdleListener(idle)
         }
     }
-    val glideOn by rememberUpdatedState(animate && glides.isNotEmpty())
-    val stillMoving by rememberUpdatedState(cameraMoving)
-    LaunchedEffect(glides) {
+    val glideOn by rememberUpdatedState(animate)
+    LaunchedEffect(glides, map) {
+        val m = map ?: return@LaunchedEffect
         if (glides.isEmpty()) return@LaunchedEffect
         while (true) {
-            // Under a page, behind a dialog or off screen nobody sees it move.
-            if (!glideOn || !mapView.isShown || !mapView.hasWindowFocus()) {
+            // Under a page, behind a dialog, off screen, or with no leg in view, nobody sees one
+            // move: hide them and check back now and then. While the map moves they hide too,
+            // since the map draws on its own thread and icons drawn over it would trail behind.
+            val bounds = m.projection.visibleRegion.latLngBounds
+            if (!glideOn || cameraMoving.get() || !mapView.isShown || !mapView.hasWindowFocus() || glides.none { it.onScreen(bounds) }) {
                 if (glideFrame.longValue != 0L) glideFrame.longValue = 0L
-                kotlinx.coroutines.delay(400)
+                kotlinx.coroutines.delay(if (cameraMoving.get()) 100 else 400)
                 continue
             }
-            androidx.compose.runtime.withFrameNanos { glideFrame.longValue = it }
-            // While the map moves the icons keep to it every frame; at rest 30 a second is
-            // smooth enough for something this slow.
-            if (!stillMoving) kotlinx.coroutines.delay(25)
+            // One step about every other frame, some 30 a second: smooth enough for something
+            // this slow, and the rest of the time no frame is asked for at all.
+            glideFrame.longValue = androidx.compose.runtime.withFrameNanos { it }
+            kotlinx.coroutines.delay(16)
         }
     }
 
