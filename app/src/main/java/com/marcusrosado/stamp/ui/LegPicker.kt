@@ -508,12 +508,16 @@ private fun StopSearch(title: String, airports: Airports?, places: Places?, near
     var query by remember { mutableStateOf("") }
     val focus = remember { androidx.compose.ui.focus.FocusRequester() }
     LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
-    val found = remember(query, near, airports, places) {
+    val search = {
         fun ap(a: Airport) = StopHit(Step.airport(a.code), a.code, a.name, listOf(a.town, a.country).filter { it.isNotBlank() }.joinToString(", "))
         if (query.isBlank()) near.flatMap { airports?.near(it, 4).orEmpty() }.distinctBy { it.code }.map(::ap)
         else airports?.search(query, 8).orEmpty().map(::ap) +
             places?.searchAll(query, 12).orEmpty().map { c -> StopHit(c.id, null, c.name, c.country) }
     }
+    // Typing searches every town in the world, so it runs off the main thread; the airports
+    // near the step, before anything is typed, are found on the spot.
+    val answer = rememberSearch(query, near, airports, places, quick = query.isBlank(), search = search)
+    val found = answer?.items.orEmpty()
     SeamAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
@@ -528,7 +532,7 @@ private fun StopSearch(title: String, airports: Airports?, places: Places?, near
                     // Enter takes the top match, as in the city picker; with nothing typed there is none.
                     keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Search),
                     keyboardActions = androidx.compose.foundation.text.KeyboardActions(
-                        onSearch = { if (query.isNotBlank()) found.firstOrNull()?.let { onPick(it.id) } },
+                        onSearch = { if (query.isNotBlank()) (if (answer?.fresh == true) found else search()).firstOrNull()?.let { onPick(it.id) } },
                     ),
                     modifier = Modifier.fillMaxWidth().focusRequester(focus),
                 )

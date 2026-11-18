@@ -112,7 +112,14 @@ class Places private constructor(
         return starts + contains
     }
 
+    // Sorted once, the first time the world is searched, then kept: 162,000 cities take a while.
     private val all: List<City> by lazy { byCountry.values.flatten().sortedByDescending { it.population } }
+
+    /**
+     * Sorts the world's cities for [searchAll] ahead of the first search, so the first letters
+     * typed do not wait on it. Slow: call it off the main thread.
+     */
+    fun prepareWorldSearch() { all }
 
     /**
      * Cities anywhere in the world matching [query], for a trip that crosses a border. Names that

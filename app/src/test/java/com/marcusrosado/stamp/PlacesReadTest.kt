@@ -81,4 +81,26 @@ class PlacesReadTest {
             }
         }
     }
+
+    @Test fun worldSearchIsTheSameFromManyThreadsAtOnce() {
+        // The pickers search off the main thread, and a search a keystroke made stale keeps
+        // running beside the next one: the first ones race to sort the world's cities.
+        val fresh = citiesFile.bufferedReader().use { c -> "".reader().buffered().use { r -> Places.read(c, r) } }
+        val queries = listOf("par", "sao", "kyo", "new", "mal", "ber", "osl", "lon")
+        val pool = java.util.concurrent.Executors.newFixedThreadPool(queries.size)
+        try {
+            val start = java.util.concurrent.CountDownLatch(1)
+            val answers = queries.map { q -> pool.submit<List<String>> { start.await(); fresh.searchAll(q).map { it.id } } }
+            start.countDown()
+            for ((q, a) in queries.zip(answers)) assertEquals(q, places.searchAll(q).map { it.id }, a.get())
+        } finally {
+            pool.shutdown()
+        }
+    }
+
+    @Test fun worldSearchAfterPreparingIsUnchanged() {
+        val fresh = citiesFile.bufferedReader().use { c -> "".reader().buffered().use { r -> Places.read(c, r) } }
+        fresh.prepareWorldSearch()
+        for (q in listOf("par", "são", "x", "ab")) assertEquals(q, places.searchAll(q).map { it.id }, fresh.searchAll(q).map { it.id })
+    }
 }

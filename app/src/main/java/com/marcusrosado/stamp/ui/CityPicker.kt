@@ -43,6 +43,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -67,7 +68,9 @@ import com.marcusrosado.stamp.data.City
 import com.marcusrosado.stamp.StampApp
 import com.marcusrosado.stamp.data.Places
 import com.marcusrosado.stamp.data.yourCities
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.withContext
 import java.util.Locale
 
 /**
@@ -96,9 +99,12 @@ fun CityPicker(
     var query by rememberSaveable { mutableStateOf("") }
     // A trip can carry on across a border: "Anywhere" searches every country's cities.
     var anywhere by rememberSaveable { mutableStateOf(alpha2.isEmpty()) }
-    val results = remember(places, alpha2, query, anywhere) {
-        if (anywhere) places?.searchAll(query).orEmpty() else places?.search(alpha2, query).orEmpty()
-    }
+    val search = { if (anywhere) places?.searchAll(query).orEmpty() else places?.search(alpha2, query).orEmpty() }
+    // Nothing typed is the country's list as it stands, or nothing at all: no search to wait for.
+    val found = rememberSearch(places, alpha2, query, anywhere, quick = places != null && query.isBlank(), search = search)
+    val results = found?.items.orEmpty()
+    // The first world search sorts every city; do it while the user is still reading the list.
+    LaunchedEffect(places) { places?.let { p -> withContext(Dispatchers.Default) { p.prepareWorldSearch() } } }
     val app = LocalContext.current.applicationContext as? StampApp
     val recentFlow = remember(app) { app?.recentCities ?: MutableStateFlow(emptyList()) }
     val recent by recentFlow.collectAsState()
@@ -111,8 +117,14 @@ fun CityPicker(
     val showYours = typed.isEmpty() && yours.isNotEmpty()
     val rest = if (showYours) yours.mapTo(HashSet()) { it.id }.let { ids -> results.filter { it.id !in ids } } else results
     val pick: (City) -> Unit = { c -> app?.cityPicked(c.id); onPick(c) }
-    // Enter takes the first match the user could tap.
-    val first = if (typed.isEmpty()) null else rest.firstOrNull { it.id !in already || againOk }
+    // Enter takes the first match the user could tap, for what is in the field now, even when
+    // it was typed faster than the search could keep up.
+    val first = {
+        if (typed.isEmpty()) null else {
+            val now = if (found?.fresh == true) rest else search()
+            now.firstOrNull { it.id !in already || againOk }
+        }
+    }
     SeamDialog(onDismissRequest = onDismiss) {
         Surface(
             Modifier.widthIn(max = 560.dp).fillMaxWidth(0.94f).fillMaxHeight(0.85f),
@@ -148,7 +160,7 @@ fun CityPicker(
                     } else null,
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                    keyboardActions = KeyboardActions(onSearch = { first?.let(pick) }),
+                    keyboardActions = KeyboardActions(onSearch = { first()?.let(pick) }),
                     shape = RoundedCornerShape(28.dp),
                     colors = TextFieldDefaults.colors(
                         focusedIndicatorColor = Color.Transparent,
@@ -169,7 +181,7 @@ fun CityPicker(
                 }
                 Box(Modifier.weight(1f).fillMaxWidth()) {
                     when {
-                        places == null -> Quiet("Loading cities")
+                        places == null || (found == null && !showYours) -> Quiet("Loading cities")
                         !showYours && anywhere && typed.length < 2 -> Quiet("Type a city in any country")
                         !showYours && results.isEmpty() && typed.isEmpty() -> Quiet("No cities listed for $countryName")
                         !showYours && results.isEmpty() && (alpha2.isEmpty() || anywhere) -> Quiet("No city called \"$typed\"")
@@ -346,4 +358,24 @@ private fun people(n: Int): String = when {
     n >= 9_950 -> "${(n + 500) / 1000}k"
     n >= 1000 -> String.format(Locale.ROOT, "%.1fk", n / 1000.0)
     else -> "$n"
+}
+
+/** A search's answer, and whether it answers what is asked now or what was asked a moment ago. */
+internal class Searched<T>(val items: List<T>, val fresh: Boolean)
+
+/**
+ * What [search] finds, worked out off the main thread whenever [keys] change, so a keystroke
+ * never waits on a search through thousands of cities. The last answer stays up while the next
+ * one is found. Null until the first answer, unless [quick] says that one is cheap enough to
+ * find on the spot, such as an empty field.
+ */
+@Composable
+internal fun <T> rememberSearch(vararg keys: Any?, quick: Boolean = false, search: () -> List<T>): Searched<T>? {
+    val asked = keys.toList()
+    val first = remember { if (quick) asked to search() else null }
+    val answer by produceState(first, *keys) {
+        if (value?.first == asked) return@produceState
+        value = asked to withContext(Dispatchers.Default) { search() }
+    }
+    return answer?.let { (at, items) -> Searched(items, at == asked) }
 }

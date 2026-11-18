@@ -84,7 +84,10 @@ fun TripEndPicker(
     onDismiss: () -> Unit,
 ) {
     var query by remember { mutableStateOf("") }
-    val found = remember(query, places) { if (query.isBlank() || places == null) emptyList() else places.searchAll(query, 30) }
+    // Every town in the world: searched off the main thread, so typing never waits on it.
+    val found = rememberSearch(query, places, quick = query.isBlank()) {
+        if (query.isBlank() || places == null) emptyList() else places.searchAll(query, 30)
+    }?.items.orEmpty()
     SeamAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
