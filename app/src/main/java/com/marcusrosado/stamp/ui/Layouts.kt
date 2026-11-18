@@ -560,19 +560,18 @@ private fun StampMap(
     // kept from then on, so leaving the view and coming back, or marking a city, builds and
     // sends none of the 31,000 again. The map hides them in the other views.
     val cityView = !light && state.mapView == com.marcusrosado.stamp.data.MapView.Cities
-    val allCities by androidx.compose.runtime.produceState<Pair<com.marcusrosado.stamp.data.Places?, List<CityDot>>>(null to emptyList(), cityView, state.places) {
+    val allCities by androidx.compose.runtime.produceState<Pair<com.marcusrosado.stamp.data.Places?, String?>>(null to null, cityView, state.places) {
         val p = state.places
         if (!cityView || p == null || value.first === p) return@produceState
         value = p to kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
-            p.byId.values.filter { it.population >= CITY_DOT_FLOOR }.map { CityDot(it.id, it.lat, it.lon, it.population, it.name) }
+            citiesJson(p.byId.values.filter { it.population >= CITY_DOT_FLOOR })
         }
     }
     // Every city on a visit or wanted, whatever its size: a few, so a mark change sends only these.
     val myCities = remember(cityView, state.visits, state.places) {
         val p = state.places
-        if (!cityView || p == null) emptyList()
-        else state.visits.values.flatMap { it.cities + it.wantCities }.distinct().mapNotNull { p.byId[it] }
-            .map { CityDot(it.id, it.lat, it.lon, it.population, it.name) }
+        if (!cityView || p == null) null
+        else citiesJson(state.visits.values.flatMap { it.cities + it.wantCities }.distinct().mapNotNull { p.byId[it] })
     }
     // A scan adds places in batches, several a second: the heat map takes them about once a
     // second, not laid out again for each batch.
@@ -590,12 +589,11 @@ private fun StampMap(
         animate = animate,
         regionLayer = if (light || rv.countries.isEmpty()) null else RegionLayer(rv.shapes, rv.marks, rv.countryMarks),
         complete = if (light) emptySet() else rv.complete,
-        plain = !light && state.mapView == com.marcusrosado.stamp.data.MapView.Cities,
+        plain = cityView,
         wantCities = wantCities,
         onRegion = if (selectable) { cid, rid -> state.onSpot(Spot.Region(cid, rid)) } else null,
         allCities = allCities.second,
         myCities = myCities,
-        showAllCities = cityView,
         selectedRegion = (state.spot as? Spot.Region)?.regionId.takeIf { !light },
         selectedCity = (state.spot as? Spot.City)?.let { it.lat to it.lon }.takeIf { !light },
         selectedArea = state.spotArea.takeIf { state.spot is Spot.City && !light },

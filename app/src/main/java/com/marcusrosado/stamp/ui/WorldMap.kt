@@ -114,14 +114,12 @@ fun WorldMap(
     /** A tapped region, as its country id and region id; null leaves taps to the countries. */
     onRegion: ((String, String) -> Unit)? = null,
     /**
-     * Every city worth a dot, for the cities view: more of them as the map zooms in. Sent to the
-     * map once and kept there; [showAllCities] shows or hides them.
+     * Every city worth a dot, as GeoJSON text from [citiesJson], for the cities view: more of
+     * them as the map zooms in. Sent to the map once and kept there; they draw while [plain].
      */
-    allCities: List<CityDot> = emptyList(),
-    /** The cities on a visit or wanted, whatever their size, dotted from the start in the cities view. */
-    myCities: List<CityDot> = emptyList(),
-    /** Whether [allCities] and [myCities] draw: the cities view. */
-    showAllCities: Boolean = false,
+    allCities: String? = null,
+    /** The cities on a visit or wanted, whatever their size, as [citiesJson] text, dotted from the start. */
+    myCities: String? = null,
     /** A tapped city of [allCities] or [myCities], by id; null leaves taps to the countries. */
     onCity: ((String) -> Unit)? = null,
     /** The region picked, outlined as a picked country is. */
@@ -161,7 +159,7 @@ fun WorldMap(
     // that is drawn and has something in it.
     val routeTap by rememberUpdatedState(onRoute.takeIf { showRoutes && routes.isNotEmpty() })
     val regionTap by rememberUpdatedState(onRegion.takeIf { regionLayer?.shapes?.isNotEmpty() == true })
-    val cityTap by rememberUpdatedState(onCity.takeIf { showAllCities && (allCities.isNotEmpty() || myCities.isNotEmpty()) })
+    val cityTap by rememberUpdatedState(onCity.takeIf { plain && (allCities != null || myCities != null) })
     val viewport by rememberUpdatedState(onViewport)
     val longPress by rememberUpdatedState(onLongPress.takeIf { selectable })
 
@@ -483,23 +481,19 @@ fun WorldMap(
     }
     // The 31,000 cities go to the map once per list and stay there, hidden outside the cities
     // view: sending them again laid out the whole source again on every switch to the view.
-    // Their features are built once too, so a new look sends the same ones to its new style.
-    val allCityFeatures = remember(allCities) { arrayOfNulls<FeatureCollection>(1) }
+    // They come as one string, which MapLibre reads on its own thread, so a new look sends the
+    // same text to its new style.
     LaunchedEffect(style, allCities) {
         val s = style ?: return@LaunchedEffect
-        if (allCities.isEmpty()) return@LaunchedEffect
-        val json = allCityFeatures[0] ?: kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
-            cityFeatures(allCities)
-        }.also { allCityFeatures[0] = it }
-        s.getSourceAs<GeoJsonSource>(SOURCE_ALL_CITIES)?.setGeoJson(json)
+        s.getSourceAs<GeoJsonSource>(SOURCE_ALL_CITIES)?.setGeoJson(allCities ?: return@LaunchedEffect)
     }
     LaunchedEffect(style, myCities) {
         val s = style ?: return@LaunchedEffect
-        s.getSourceAs<GeoJsonSource>(SOURCE_MY_CITIES)?.setGeoJson(cityFeatures(myCities))
+        s.getSourceAs<GeoJsonSource>(SOURCE_MY_CITIES)?.setGeoJson(myCities ?: EMPTY_DATA)
     }
-    LaunchedEffect(style, showAllCities) {
+    LaunchedEffect(style, plain) {
         val s = style ?: return@LaunchedEffect
-        val v = if (showAllCities) org.maplibre.android.style.layers.Property.VISIBLE else org.maplibre.android.style.layers.Property.NONE
+        val v = if (plain) org.maplibre.android.style.layers.Property.VISIBLE else org.maplibre.android.style.layers.Property.NONE
         for (id in ALL_CITY_LAYERS + CITY_LABEL_LAYERS) s.getLayer(id)?.setProperties(PropertyFactory.visibility(v))
     }
     // In the cities view the cities been to carry the visited colour and stand out.
@@ -745,19 +739,44 @@ private const val SOURCE_SPOT = "spot"
 private const val SOURCE_SPOT_AREA = "spot-area"
 private const val SOURCE_HEAT = "heat"
 
-/** A city as the cities view draws it: a dot, more of them as the map zooms in. */
-class CityDot(val id: String, val lat: Double, val lon: Double, val population: Int, val name: String = "")
-
 /** The smallest city the cities view dots unless it is on a visit or wanted. */
 internal const val CITY_DOT_FLOOR = 15_000
 
-private fun cityFeatures(cities: List<CityDot>) = FeatureCollection.fromFeatures(cities.map { c ->
-    Feature.fromGeometry(Point.fromLngLat(c.lon, c.lat)).apply {
-        addStringProperty("id", c.id)
-        addNumberProperty("pop", c.population)
-        addStringProperty("name", c.name)
+/**
+ * [cities] as a GeoJSON FeatureCollection of points with their id, population and name, the way
+ * the cities view draws them. Written straight to text: 31,000 cities held as one string cost a
+ * fraction of what a list of them plus their built features did.
+ */
+internal fun citiesJson(cities: Collection<com.marcusrosado.stamp.data.City>): String {
+    val b = StringBuilder(64 + cities.size * 96)
+    b.append("{\"type\":\"FeatureCollection\",\"features\":[")
+    var first = true
+    for (c in cities) {
+        if (!first) b.append(',')
+        first = false
+        b.append("{\"type\":\"Feature\",\"geometry\":{\"type\":\"Point\",\"coordinates\":[")
+            .append(c.lon).append(',').append(c.lat).append("]},\"properties\":{\"id\":")
+        jsonString(b, c.id)
+        b.append(",\"pop\":").append(c.population).append(",\"name\":")
+        jsonString(b, c.name)
+        b.append("}}")
     }
-})
+    return b.append("]}").toString()
+}
+
+/** [s] as a JSON string, quoted and escaped. */
+private fun jsonString(b: StringBuilder, s: String) {
+    b.append('"')
+    for (ch in s) {
+        when {
+            ch == '"' -> b.append("\\\"")
+            ch == '\\' -> b.append("\\\\")
+            ch < ' ' -> b.append("\\u").append(String.format(java.util.Locale.ROOT, "%04x", ch.code))
+            else -> b.append(ch)
+        }
+    }
+    b.append('"')
+}
 
 // Bigger cities first: a dot for every city over a million from the start, smaller ones as the
 // map zooms in. A city on a visit or wanted shows from the start whatever its size, from its
