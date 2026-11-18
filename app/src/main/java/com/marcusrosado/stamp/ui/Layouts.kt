@@ -68,6 +68,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.layout
 import androidx.compose.runtime.remember
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.ui.unit.dp
@@ -326,12 +327,16 @@ private fun MapPane(state: AppState, sidePanel: Boolean, bottomInset: Dp) {
                     androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(220)),
             ) {
                 val shown = lastSelected ?: return@AnimatedVisibility
-                // Laid out once at its tallest and slid down to the height it shows: a drag then
-                // only moves it, where changing its height measured the whole card on every frame.
+                // The height is read while laying out, not while composing, so a drag measures the
+                // card again on each frame but never recomposes it or the map pane around it.
                 val expanded by remember(h) { androidx.compose.runtime.derivedStateOf { sheetH > h * 0.7f } }
                 Surface(
-                    modifier = Modifier.fillMaxWidth().height(tallest)
-                        .offset { androidx.compose.ui.unit.IntOffset(0, (tallest - sheetH).coerceAtLeast(0.dp).roundToPx()) }
+                    modifier = Modifier.fillMaxWidth()
+                        .layout { m, c ->
+                            val px = sheetH.roundToPx().coerceIn(c.minHeight, c.maxHeight)
+                            val p = m.measure(c.copy(minHeight = px, maxHeight = px))
+                            layout(p.width, px) { p.place(0, 0) }
+                        }
                         .nestedScroll(sheetScroll)
                         .draggable(
                             orientation = androidx.compose.foundation.gestures.Orientation.Vertical,
@@ -350,7 +355,7 @@ private fun MapPane(state: AppState, sidePanel: Boolean, bottomInset: Dp) {
                                 settling[0]?.cancel()
                                 settling[0] = scope.launch {
                                     androidx.compose.animation.core.animate(
-                                        sheetH.value, (if (sheetH > h * 0.7f) opened else tallest - SHEET_TOP_GAP).value,
+                                        sheetH.value, (if (expanded) opened else tallest - SHEET_TOP_GAP).value,
                                         animationSpec = androidx.compose.animation.core.spring(dampingRatio = 0.85f, stiffness = 380f),
                                     ) { v, _ -> sheetH = v.dp }
                                     restedAt = sheetH
@@ -949,6 +954,7 @@ fun Split(
                 { e.value + g.value },
                 { (full - e.value - g.value).coerceAtLeast(0.dp) },
                 (full - extent - gap).coerceAtLeast(0.dp),
+                fromEnd = true,
             ),
         ) { second() }
     }

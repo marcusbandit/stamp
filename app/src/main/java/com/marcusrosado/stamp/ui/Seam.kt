@@ -67,16 +67,17 @@ fun InHalf(
         val motion = spring<Dp>(dampingRatio = 0.9f, stiffness = 320f)
         val s = animateDpAsState(start, motion, label = "halfStart")
         val e = animateDpAsState(extent, motion, label = "halfExtent")
-        Box(Modifier.revealed(vertical, { s.value }, { e.value }, extent), contentAlignment = contentAlignment) { content() }
+        Box(Modifier.revealed(vertical, { s.value }, { e.value }, extent, fromEnd = half == Half.Second), contentAlignment = contentAlignment) { content() }
     }
 }
 
 /**
  * A box that slides and opens along one axis while what is inside keeps the size it ends at:
  * [start] and [shown] move every frame of a bend, but only in placement, so the page inside is
- * measured once at [final] and its text never reflows mid-slide. The part past [shown] is cut off.
+ * measured once at [final] and its text never reflows mid-slide. The part past [shown] is cut off,
+ * at the end, or with [fromEnd] at the start, for a pane whose far edge is the screen's.
  */
-internal fun Modifier.revealed(vertical: Boolean, start: () -> Dp, shown: () -> Dp, final: Dp): Modifier =
+internal fun Modifier.revealed(vertical: Boolean, start: () -> Dp, shown: () -> Dp, final: Dp, fromEnd: Boolean = false): Modifier =
     this
         .offset { start().roundToPx().let { if (vertical) IntOffset(it, 0) else IntOffset(0, it) } }
         .clipToBounds()
@@ -84,7 +85,12 @@ internal fun Modifier.revealed(vertical: Boolean, start: () -> Dp, shown: () -> 
             val fin = final.roundToPx().coerceAtLeast(0)
             val show = shown().roundToPx().coerceAtLeast(0)
             val p = if (vertical) m.measure(Constraints.fixed(fin, c.maxHeight)) else m.measure(Constraints.fixed(c.maxWidth, fin))
-            layout(if (vertical) show else c.maxWidth, if (vertical) c.maxHeight else show) { p.place(0, 0) }
+            // A pane on the far side keeps its far edge on the screen's edge while it slides, so
+            // narrowing never leaves an empty strip there; one on the near side keeps its start.
+            val shift = if (fromEnd) show - fin else 0
+            layout(if (vertical) show else c.maxWidth, if (vertical) c.maxHeight else show) {
+                if (vertical) p.place(shift, 0) else p.place(0, shift)
+            }
         }
 
 /**
