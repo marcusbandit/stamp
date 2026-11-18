@@ -118,4 +118,36 @@ class StatsTest {
         assertEquals(listOf(a), y.getValue("ITA").trips)
         assertTrue("a hand-added region has no year", y.getValue("ITA").regions.isEmpty())
     }
+
+    @Test fun onlyTripsToPlacesBeenCountAndNothingStillToCome() {
+        val visits = mapOf(
+            "ITA" to Visit(TravelState.Visited),
+            "DNK" to Visit(TravelState.Lived),
+            "JPN" to Visit(TravelState.Want),
+        )
+        val trips = listOf(
+            Trip("rome", lands = listOf("ITA")),
+            Trip("stay", lands = listOf("DNK")),
+            Trip("planned", date = day(2027, 4, 1), lands = listOf("JPN")),
+            Trip("lost", lands = listOf("XXX")),
+        )
+        assertEquals(listOf("rome", "stay"), TravelStats.counted(trips, visits).map { it.id })
+        // A planned trip to a wanted place adds no days away, even once it is dated in the past.
+        val abroad = { _: Trip -> true }
+        val past = trips.map { if (it.id == "planned") it.copy(date = day(2025, 4, 1), until = day(2025, 4, 9)) else it }
+        assertEquals(0, TravelStats.daysAbroad(TravelStats.counted(past, visits), abroad, today))
+
+        val at = mapOf("a" to (0.0 to 0.0), "b" to (0.0 to 1.0), "c" to (0.0 to 2.0))
+        val one = 111.19
+        // Every date still to come: nothing yet.
+        val later = Trip("t", date = day(2026, 7, 1), cities = listOf("a", "b", "c"))
+        assertEquals(0.0, TravelStats.tripKm(later, { at[it] }, { at[it] }, today), 1e-9)
+        assertEquals("without a today it all counts", 2 * one, TravelStats.tripKm(later, { at[it] }, { at[it] }), 0.1)
+        // Under way: the leg to a stop reached later waits for it.
+        val going = Trip("t", date = day(2026, 5, 28), cities = listOf("a", "b", "c"), arrived = mapOf("c" to day(2026, 6, 3)))
+        assertEquals(one, TravelStats.tripKm(going, { at[it] }, { at[it] }, today), 0.1)
+        // The month that holds today may have been: it counts.
+        val thisMonth = Trip("t", date = PartialDate(2026, 6), cities = listOf("a", "b"))
+        assertEquals(one, TravelStats.tripKm(thisMonth, { at[it] }, { at[it] }, today), 0.1)
+    }
 }

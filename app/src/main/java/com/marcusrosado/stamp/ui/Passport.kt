@@ -49,6 +49,7 @@ import com.marcusrosado.stamp.data.TravelState
 import com.marcusrosado.stamp.data.TravelStats
 import com.marcusrosado.stamp.data.Visit
 import com.marcusrosado.stamp.scan.ScanState
+import kotlinx.coroutines.ensureActive
 import kotlin.math.roundToInt
 
 private val ContinentOrder = listOf("Europe", "Asia", "Africa", "North America", "South America", "Oceania")
@@ -235,7 +236,7 @@ private fun rememberMoreNumbers(
     return state.value
 }
 
-private fun moreNumbers(
+private suspend fun moreNumbers(
     atlas: Atlas,
     visits: Map<String, Visit>,
     trips: List<com.marcusrosado.stamp.data.Trip>,
@@ -245,24 +246,34 @@ private fun moreNumbers(
     journey: Journey,
     year: Int?,
 ): MoreNumbers {
-    val (cities, regions) = TravelStats.placesBeen(visits.values) { id -> places?.let { p -> p.byId[id]?.let { p.regionIdOf(it) } } }
+    // A newer pass for newer marks has started: this one stops at the next trip or place.
+    val job = kotlinx.coroutines.currentCoroutineContext()
+    val (cities, regions) = TravelStats.placesBeen(visits.values) { id ->
+        job.ensureActive()
+        places?.let { p -> p.byId[id]?.let { p.regionIdOf(it) } }
+    }
     val continents = atlas.countedCountries(visits).mapNotNull { atlas.byId[it]?.continent }.toSet()
+    val today = java.time.LocalDate.now()
     // Away is anywhere outside the country lived in now; with no home set, every trip is away.
+    // Only trips to places been to or lived in count, never one planned to a place only wanted.
     val homeCountry = home?.let { atlas.countryOf(it) }
     val days = TravelStats.daysAbroad(
-        allTrips,
-        abroad = { t -> homeCountry == null || t.lands.none { atlas.countryOf(it) == homeCountry } },
-        today = java.time.LocalDate.now(),
+        TravelStats.counted(allTrips, journey.visits),
+        abroad = { t -> job.ensureActive(); homeCountry == null || t.lands.none { atlas.countryOf(it) == homeCountry } },
+        today = today,
         within = year?.let { TravelStats.yearDays(it) },
     )
     // Homes are where the user lived, not a journey, as on the map: a stay adds no distance.
-    val km = trips.sumOf { t ->
+    var km = 0.0
+    for (t in TravelStats.counted(trips, journey.visits)) {
+        job.ensureActive()
         val v = t.home?.let { journey.visits[it] }
-        if (v?.state == TravelState.Lived) return@sumOf 0.0
-        TravelStats.tripKm(
+        if (v?.state == TravelState.Lived) continue
+        km += TravelStats.tripKm(
             t,
             endPoint = { id -> journey.endPoint(t, v, id)?.let { it.lat to it.lon } },
             stopPoint = { id -> journey.stopPoint(id, v) },
+            today = today,
         )
     }
     return MoreNumbers(

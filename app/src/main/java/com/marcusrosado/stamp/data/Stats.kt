@@ -64,21 +64,39 @@ object TravelStats {
     fun yearDays(year: Int): LongRange = LocalDate.of(year, 1, 1).toEpochDay()..LocalDate.of(year, 12, 31).toEpochDay()
 
     /**
+     * The trips that count for the numbers: those on a place the user has been to or lived in,
+     * by the land they started from. A trip planned to a place only wanted is no travel yet.
+     */
+    fun counted(trips: List<Trip>, visits: Map<String, Visit>): List<Trip> =
+        trips.filter { t -> t.home?.let { visits[it] }?.state?.counts == true }
+
+    /**
      * Kilometres along the Earth between the stops of [t], through the airports and stations
      * each leg names, in great circles. [endPoint] places a stop, or [Leg.START] and [Leg.END];
      * [stopPoint] places a stop inside a leg. The way there and the way home count only where
      * the user said how they went, as the map draws them, and a leg with an end that cannot be
-     * placed counts nothing.
+     * placed counts nothing. With [today], nothing that is surely still to come counts: a trip
+     * whose every date is later adds nothing, and nor does a leg to a stop reached later.
      */
     fun tripKm(
         t: Trip,
         endPoint: (String) -> Pair<Double, Double>?,
         stopPoint: (String) -> Pair<Double, Double>?,
+        today: LocalDate? = null,
     ): Double {
+        if (today != null) {
+            val dates = listOfNotNull(t.date, t.until) + t.arrived.values + t.left.values
+            if (dates.isNotEmpty() && dates.all { earliest(it) > today }) return 0.0
+        }
         var km = 0.0
         for ((a, b) in t.legEnds) {
             val leg = t.legBetween(a, b)
             if ((a == Leg.START || b == Leg.END) && leg == null) continue
+            if (today != null) {
+                // When the leg was taken, as near as the trip says: leaving one stop, or reaching the next.
+                val at = t.left[a] ?: (if (b == Leg.END) t.until else (t.arrived[b] ?: (if (a == Leg.START) t.date else null)))
+                if (at != null && earliest(at) > today) continue
+            }
             val from = endPoint(a) ?: continue
             val to = endPoint(b) ?: continue
             val via = leg?.steps.orEmpty().mapNotNull { s -> s.to?.let(stopPoint) }
