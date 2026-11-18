@@ -597,6 +597,8 @@ fun VisitTimeline(
             )
         }
         viewing?.let { id ->
+            // Gone meanwhile, by an undo or a scan: close rather than open on another memory.
+            if (inOrder.none { it.id == id }) { viewing = null; return@let }
             MemoryViewer(
                 memories = inOrder,
                 startId = id,
@@ -610,9 +612,11 @@ fun VisitTimeline(
             if (m == null) { moving = null; return@let }
             MoveMemoryDialog(
                 targets = moveTargets(m, stops),
-                stopName = { placeOf(it, visit, places)?.name ?: journey.place(it)?.name ?: "Unknown place" },
+                stopName = ::nameOf,
                 stopNumber = { stops.indexOf(it) + 1 },
                 whole = if (lived) "The whole stay" else "The whole trip",
+                // The same icon as the timeline's start, where the whole trip's memories sit.
+                wholeIcon = if (lived) Icons.Outlined.Home else Icons.Outlined.Flight,
                 onPick = { stop -> actions.onMoveMemory(id, stop); moving = null },
                 onDismiss = { moving = null },
             )
@@ -1033,6 +1037,7 @@ private fun MoveMemoryDialog(
     stopName: (String) -> String,
     stopNumber: (String) -> Int,
     whole: String,
+    wholeIcon: androidx.compose.ui.graphics.vector.ImageVector,
     onPick: (String?) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -1048,7 +1053,7 @@ private fun MoveMemoryDialog(
                     ) {
                         Box(Modifier.size(28.dp).clip(CircleShape).background(MaterialTheme.colorScheme.secondaryContainer), contentAlignment = Alignment.Center) {
                             if (t == null) {
-                                Icon(Icons.Outlined.Flight, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSecondaryContainer)
+                                Icon(wholeIcon, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSecondaryContainer)
                             } else {
                                 Text("${stopNumber(t)}", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSecondaryContainer)
                             }
@@ -1498,7 +1503,6 @@ private fun ZoomablePhoto(uri: Uri, shown: Boolean) {
             .fillMaxSize()
             .clipToBounds()
             .pointerInput(Unit) {
-                val center = Offset(size.width / 2f, size.height / 2f)
                 // The photo may not be pulled past its edges: at most half of what zoom added.
                 fun bounded(o: Offset, s: Float): Offset {
                     val x = size.width * (s - 1) / 2
@@ -1511,6 +1515,8 @@ private fun ZoomablePhoto(uri: Uri, shown: Boolean) {
                         val event = awaitPointerEvent()
                         val fingers = event.changes.count { it.pressed }
                         if (fingers > 1 || scale > 1f) {
+                            // Read on every move: a fold or an unfold resizes the viewer mid-use.
+                            val center = Offset(size.width / 2f, size.height / 2f)
                             val zoom = event.calculateZoom()
                             val pan = event.calculatePan()
                             val centroid = event.calculateCentroid(useCurrent = true)
