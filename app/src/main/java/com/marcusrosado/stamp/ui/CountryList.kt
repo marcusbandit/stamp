@@ -138,14 +138,7 @@ fun CountryListScreen(
                 contentPadding = PaddingValues(horizontal = 16.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                val marksShown = listOf(ListFilter.ALL to "All", ListFilter.BEEN to "Been") + TravelState.entries.map { it.name to it.label }
-                items(marksShown, key = { it.first }) { (mark, label) ->
-                    FilterChip(
-                        selected = filter.mark == mark,
-                        onClick = { filter = filter.copy(mark = mark) },
-                        label = { Text("$label ${count(mark)}") },
-                    )
-                }
+                // The continent first: opened on one from the passport, it shows which.
                 item(key = "continent") {
                     var open by remember { mutableStateOf(false) }
                     Box {
@@ -168,6 +161,14 @@ fun CountryListScreen(
                             }
                         }
                     }
+                }
+                val marksShown = listOf(ListFilter.ALL to "All", ListFilter.BEEN to "Been") + TravelState.entries.map { it.name to it.label }
+                items(marksShown, key = { it.first }) { (mark, label) ->
+                    FilterChip(
+                        selected = filter.mark == mark,
+                        onClick = { filter = filter.copy(mark = mark) },
+                        label = { Text("$label ${count(mark)}") },
+                    )
                 }
             }
             LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
