@@ -58,7 +58,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -141,9 +141,10 @@ fun stayLabel(t: Trip): String? = when {
 @Composable
 fun LoveAndRating(loved: Boolean, rating: Int, onLoved: (Boolean) -> Unit, onRating: (Int) -> Unit) {
     val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
-    fun tick() = haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+    // Toggle effects, which every supported Android version plays, unlike the text handle tick.
+    fun tick(on: Boolean) = haptic.performHapticFeedback(if (on) androidx.compose.ui.hapticfeedback.HapticFeedbackType.ToggleOn else androidx.compose.ui.hapticfeedback.HapticFeedbackType.ToggleOff)
     Row(verticalAlignment = Alignment.CenterVertically) {
-        IconButton(onClick = { tick(); onLoved(!loved) }) {
+        IconButton(onClick = { tick(!loved); onLoved(!loved) }) {
             Icon(
                 if (loved) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
                 contentDescription = if (loved) "Loved" else "Love it",
@@ -151,13 +152,17 @@ fun LoveAndRating(loved: Boolean, rating: Int, onLoved: (Boolean) -> Unit, onRat
             )
         }
         Spacer(Modifier.width(8.dp))
-        // TalkBack reads the stars as one rating, "3 of 5 stars", and each star as what it sets.
-        Row(Modifier.semantics { stateDescription = if (rating == 0) "Not rated" else "$rating of $MAX_RATING stars" }) {
+        // TalkBack reads each star as what it sets, and the one given now as selected:
+        // "3 stars, selected" is the rating itself.
+        Row {
             for (n in 1..MAX_RATING) {
-                IconButton(onClick = { tick(); onRating(if (rating == n) 0 else n) }, modifier = Modifier.size(40.dp)) {
+                IconButton(
+                    onClick = { tick(rating != n); onRating(if (rating == n) 0 else n) },
+                    modifier = Modifier.size(40.dp).semantics { selected = rating == n },
+                ) {
                     Icon(
                         if (n <= rating) Icons.Filled.Star else Icons.Filled.StarBorder,
-                        contentDescription = if (rating == n) "Clear rating" else "Rate $n",
+                        contentDescription = if (n == 1) "1 star" else "$n stars",
                         tint = if (n <= rating) StarGold else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
