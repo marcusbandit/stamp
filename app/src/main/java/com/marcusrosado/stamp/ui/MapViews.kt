@@ -106,7 +106,7 @@ fun countriesInView(atlas: Atlas, viewport: DoubleArray?): List<String> {
 /** How close the map must be before every country in sight draws as its regions. */
 const val REGIONS_FROM_ZOOM = 3.0
 private const val MOST_IN_VIEW = 30
-private const val MOST_KEPT_IN_VIEW = 40
+private const val MOST_KEPT_IN_VIEW = MOST_IN_VIEW
 
 /**
  * The countries drawn as regions as the map moves: those in sight [now], then those [kept] from

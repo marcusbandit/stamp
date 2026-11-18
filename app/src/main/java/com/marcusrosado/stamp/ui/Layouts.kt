@@ -1,5 +1,6 @@
 package com.marcusrosado.stamp.ui
 
+import kotlinx.coroutines.flow.conflate
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.Velocity
@@ -574,13 +575,15 @@ private fun StampMap(
         else citiesJson(state.visits.values.flatMap { it.cities + it.wantCities }.distinct().mapNotNull { p.byId[it] })
     }
     // A scan adds places in batches, several a second: the heat map takes them about once a
-    // second, not laid out again for each batch.
-    val heatAt = remember { longArrayOf(0L) }
-    val heat by androidx.compose.runtime.produceState(emptyList<com.marcusrosado.stamp.data.HeatCell>(), state.seen, state.heatMap) {
+    // second, not laid out again for each batch. A count that has started always finishes;
+    // batches that land meanwhile wait as one, the newest.
+    val seenNow by androidx.compose.runtime.rememberUpdatedState(state.seen)
+    val heat by androidx.compose.runtime.produceState(emptyList<com.marcusrosado.stamp.data.HeatCell>(), state.heatMap, light) {
         if (!state.heatMap || light) { value = emptyList(); return@produceState }
-        if (value.isNotEmpty()) kotlinx.coroutines.delay(heatAt[0] + HEAT_EVERY_MS - android.os.SystemClock.uptimeMillis())
-        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { com.marcusrosado.stamp.data.Seen.cells(state.seen) }
-        heatAt[0] = android.os.SystemClock.uptimeMillis()
+        androidx.compose.runtime.snapshotFlow { seenNow }.conflate().collect { points ->
+            value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { com.marcusrosado.stamp.data.Seen.cells(points) }
+            kotlinx.coroutines.delay(HEAT_EVERY_MS)
+        }
     }
     val wantCities = remember(state.visits, state.places) {
         state.visits.values.flatMap { v -> v.wantCities.mapNotNull { placeOf(it, v, state.places) } }.map { it.lat to it.lon }.distinct()
