@@ -21,6 +21,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOn
@@ -89,6 +90,8 @@ class AppState(
     val onSet: (String, TravelState?) -> Unit,
     val details: DetailActions,
     val onOpenList: () -> Unit,
+    /** Opens the country list on what a tapped count counted. */
+    val onOpenListOf: (ListFilter) -> Unit = {},
     /** Search every country's cities and fly to the one picked. */
     val onFindCity: () -> Unit,
     /** Start a trip at a city anywhere, then open it. */
@@ -302,6 +305,9 @@ private fun App(
     }
     var selectedId by rememberSaveable { mutableStateOf<String?>(null) }
     var showList by rememberSaveable { mutableStateOf(false) }
+    // What the country list opens on: everything, or what a tapped count counted.
+    var listFilter by rememberSaveable(stateSaver = ListFilter.Saver) { mutableStateOf(ListFilter()) }
+    var listOpened by rememberSaveable { mutableStateOf(0L) }
     // A city search across every country: to fly to a city, or to start a trip there.
     var cityHunt by rememberSaveable { mutableStateOf<String?>(null) }
     var spot by rememberSaveable(stateSaver = SpotSaver) { mutableStateOf<Spot?>(null) }
@@ -312,6 +318,7 @@ private fun App(
     var focus by focusState
     var me by remember { mutableStateOf<Pair<Double, Double>?>(null) }
     val locating = androidx.compose.runtime.rememberCoroutineScope()
+    val undo = remember(app) { Undo(app.visits, locating) }
     val camera = remember { CameraSpot() }
     val visits by app.visits.visits.collectAsStateWithLifecycle()
     val home by app.visits.home.collectAsStateWithLifecycle()
@@ -399,6 +406,9 @@ private fun App(
     // one finished, or a refund. The hourly look runs only while Pro and the switch say so.
     androidx.lifecycle.compose.LifecycleResumeEffect(Unit) { app.pro.refresh(); onPauseOrDispose { } }
     LaunchedEffect(hourly) {
+        // With the switch off there is nothing to stop: turning it off already cancelled the
+        // schedule, and WorkManager need not start for it.
+        if (!hourlyOn) return@LaunchedEffect
         com.marcusrosado.stamp.data.Hourly.schedule(app, hourly && com.marcusrosado.stamp.data.Hourly.allowed(app))
     }
     val keptOutlines by app.cityOutlines.kept.collectAsStateWithLifecycle()
@@ -433,6 +443,7 @@ private fun App(
         }
     }
 
+    androidx.compose.runtime.CompositionLocalProvider(LocalUndo provides undo) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val postureNow by rememberUpdatedState(postureFor(maxWidth.value.toInt(), maxHeight.value.toInt()))
         val state = AppState(
@@ -462,8 +473,16 @@ private fun App(
             },
             // Islands counted as part of their country: clearing the country clears its islands too.
             onSet = { id, s ->
-                if (s == null && !split) app.visits.clearAll(listOf(id) + atlas.partsOf(id).map { it.id })
-                else app.visits.set(id, s)
+                val name = atlas.byId[id]?.name ?: id
+                val was = app.visits.visits.value[id]?.state
+                when {
+                    s == null -> undo.run("$name cleared") {
+                        if (!split) app.visits.clearAll(listOf(id) + atlas.partsOf(id).map { it.id }) else app.visits.set(id, null)
+                    }
+                    // Want to go can take stops off trips; anything else only changes the colour.
+                    s == TravelState.Want && was != null && was != TravelState.Want -> undo.run("$name marked want to go") { app.visits.set(id, s) }
+                    else -> app.visits.set(id, s)
+                }
             },
             details = remember(app) { DetailActions(
                 onLoved = app.visits::setLoved,
@@ -471,7 +490,7 @@ private fun App(
                 onAddTrip = app.visits::addTrip,
                 onUpdateTrip = app.visits::updateTrip,
                 onRenameTrip = app.visits::renameTrip,
-                onRemoveTrip = app.visits::removeTrip,
+                onRemoveTrip = { a, b -> undo.run("Visit removed") { app.visits.removeTrip(a, b) } },
                 onAddCity = app.visits::addCity,
                 onAddPin = app.visits::addPin,
                 onRenamePin = app.visits::renamePin,
@@ -488,22 +507,23 @@ private fun App(
                 onTripStart = app.visits::setTripStart,
                 onAddDayPlace = app.visits::addDayPlace,
                 onAddDayPin = app.visits::addDayPin,
-                onRemoveDayPlace = app.visits::removeDayPlace,
+                onRemoveDayPlace = { a, b, c -> undo.run("Stop removed") { app.visits.removeDayPlace(a, b, c) } },
                 onSlept = app.visits::setSlept,
                 onTripEnd = app.visits::setTripEnd,
                 onAddMemories = app.visits::addMemories,
                 onUpdateMemory = app.visits::updateMemory,
-                onRemoveMemory = app.visits::removeMemory,
+                onRemoveMemory = { a, b -> undo.run("Memory removed") { app.visits.removeMemory(a, b) } },
                 onAddPlaceMemories = app.visits::addPlaceMemories,
                 onUpdatePlaceMemory = app.visits::updatePlaceMemory,
-                onRemovePlaceMemory = app.visits::removePlaceMemory,
-                onRemoveCity = app.visits::removeCity,
+                onRemovePlaceMemory = { a, b -> undo.run("Memory removed") { app.visits.removePlaceMemory(a, b) } },
+                onRemoveCity = { a, b -> undo.run("Place removed") { app.visits.removeCity(a, b) } },
                 onSplitRegions = app.visits::setSplitRegions,
                 onCityNote = app.visits::setCityNote,
                 onAddRegion = app.visits::addRegion,
-                onRemoveRegion = app.visits::removeRegion,
+                onRemoveRegion = { a, b -> undo.run("Region removed") { app.visits.removeRegion(a, b) } },
             ) },
-            onOpenList = { showList = true },
+            onOpenList = { listFilter = ListFilter(); showList = true },
+            onOpenListOf = { listFilter = it; listOpened = System.nanoTime(); showList = true },
             onFindCity = { cityHunt = "find" },
             onNewTrip = { cityHunt = "trip" },
             pendingTrip = pendingTrip,
@@ -582,7 +602,7 @@ private fun App(
                 locating.launch {
                     val at = com.marcusrosado.stamp.data.Here.find(context, com.marcusrosado.stamp.data.Here.TWO_MINUTES)
                     if (at == null) {
-                        android.widget.Toast.makeText(context, "Can't tell where you are right now", android.widget.Toast.LENGTH_SHORT).show()
+                        undo.say("Can't tell where you are right now")
                         return@launch
                     }
                     me = at
@@ -686,6 +706,8 @@ private fun App(
                     onShowOnMap = openCountry,
                     onClose = { showList = false },
                     split = split,
+                    start = listFilter,
+                    opened = listOpened,
                 )
             }
         }
@@ -697,7 +719,8 @@ private fun App(
                     home = home,
                     onStartDevice = { app.flags.set(FLAG_SCANNED, true); app.scanner.start() },
                     onAdd = { found, mark ->
-                        app.visits.addFromPhotos(found, mark)
+                        if (mark.isEmpty()) app.visits.addFromPhotos(found, mark)
+                        else undo.run(if (mark.size == 1) "1 country added" else "${mark.size} countries added") { app.visits.addFromPhotos(found, mark) }
                         app.scanner.cancel()
                         onScanOpen(false)
                         destination = Destination.Passport
@@ -709,6 +732,8 @@ private fun App(
                 )
             }
         }
+        UndoHost(undo, aboveBar = if (state.posture == Posture.Portrait) 80.dp else 0.dp)
+    }
     }
 }
 

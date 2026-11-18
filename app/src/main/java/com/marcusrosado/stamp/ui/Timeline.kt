@@ -8,7 +8,6 @@ import androidx.compose.material.icons.outlined.Map
 import androidx.compose.foundation.layout.BoxWithConstraints
 import android.Manifest
 import android.content.pm.PackageManager
-import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -251,6 +250,9 @@ fun VisitTimeline(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
     ) {
+        // The timeline is a window of its own, over the app's snackbar: it shows the same one.
+        val undo = LocalUndo.current
+        Box(Modifier.fillMaxSize()) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
           BoxWithConstraints(Modifier.fillMaxSize()) {
             val wide = maxWidth >= 600.dp
@@ -485,6 +487,8 @@ fun VisitTimeline(
                 timeline(Modifier.fillMaxSize())
             }
           }
+        }
+        undo?.let { UndoHost(it, aboveBar = 0.dp) }
         }
         if (naming) {
             NameDialog(
@@ -982,13 +986,19 @@ private fun MemoryTile(m: Memory, onClick: () -> Unit) {
 @Composable
 fun MediaImage(uri: Uri, video: Boolean, px: Int, modifier: Modifier = Modifier, crop: Boolean = true) {
     val context = LocalContext.current
-    val bmp by produceState<Bitmap?>(null, uri, px) {
-        value = if (crop) Memories.thumbnail(context, uri, video, px) else Memories.picture(context, uri, px)
+    val key = Thumbs.key(uri.toString(), video, px, crop)
+    // A picture decoded before shows on this very frame, so scrolling back never flashes grey.
+    // A new picture starts grey rather than showing the last one until it decodes.
+    var bmp by remember(key) { mutableStateOf(Thumbs[key]) }
+    androidx.compose.runtime.LaunchedEffect(key) {
+        if (bmp != null) return@LaunchedEffect
+        val decoded = if (crop) Memories.thumbnail(context, uri, video, px) else Memories.picture(context, uri, px)
+        bmp = decoded?.asImageBitmap()?.also { Thumbs.put(key, it) }
     }
     Box(modifier.background(MaterialTheme.colorScheme.surfaceContainerHighest)) {
         bmp?.let {
             Image(
-                it.asImageBitmap(),
+                it,
                 contentDescription = null,
                 contentScale = if (crop) ContentScale.Crop else ContentScale.Fit,
                 modifier = Modifier.fillMaxSize(),
@@ -1150,6 +1160,7 @@ private fun BigChoice(icon: androidx.compose.ui.graphics.vector.ImageVector, lab
 /** A memory full size: the photo, a video's frame with a play button, and its note. */
 @Composable
 private fun MemoryViewer(memory: Memory, onSave: (Memory) -> Unit, onRemove: () -> Unit, onDismiss: () -> Unit) {
+    val undoable = LocalUndo.current != null
     val context = LocalContext.current
     var text by remember(memory.id) { mutableStateOf(memory.text) }
     var removing by remember(memory.id) { mutableStateOf(false) }
@@ -1203,7 +1214,7 @@ private fun MemoryViewer(memory: Memory, onSave: (Memory) -> Unit, onRemove: () 
                         placeholder = { Text(if (memory.media == null) "What happened here?" else "Add a note") },
                     )
                     Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(onClick = { removing = true }) { Icon(Icons.Filled.Delete, contentDescription = "Remove memory") }
+                        IconButton(onClick = { if (undoable) onRemove() else removing = true }) { Icon(Icons.Filled.Delete, contentDescription = "Remove memory") }
                         Spacer(Modifier.weight(1f))
                         TextButton(onClick = ::finish) { Text("Done") }
                     }

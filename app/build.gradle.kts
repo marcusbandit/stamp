@@ -90,6 +90,9 @@ dependencies {
     implementation(libs.androidx.exifinterface)
     implementation(libs.maplibre)
     implementation(libs.androidx.work)
+    // Installs the baseline profiles, Compose's and Material's and src/main/baseline-prof.txt, on
+    // a copy that did not come from Play, so its first launches run compiled code.
+    implementation(libs.androidx.profileinstaller)
     implementation(libs.commons.compress)
     implementation(libs.androidx.window)
     if (playBuild) implementation(libs.billing)
