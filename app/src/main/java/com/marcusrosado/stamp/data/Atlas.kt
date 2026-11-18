@@ -1,7 +1,5 @@
 package com.marcusrosado.stamp.data
 
-import org.json.JSONArray
-import org.json.JSONObject
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
@@ -189,47 +187,281 @@ class Atlas(val countries: List<Country>) {
         /** About 20 km. */
         const val NEAR_DEG = 0.18
 
+        /**
+         * Reads countries.geojson as tools/build_countries.py writes it. One pass over the text,
+         * numbers straight into each ring's arrays: org.json built a tree of boxed numbers first,
+         * about 13 MB for this file, and the first screen waited for it.
+         */
         fun parse(geojson: String): Atlas {
-            val features = JSONObject(geojson).getJSONArray("features")
-            val list = ArrayList<Country>(features.length())
-            for (i in 0 until features.length()) {
-                val f = features.getJSONObject(i)
-                val p = f.getJSONObject("properties")
-                val g = f.getJSONObject("geometry")
-                val coords = g.getJSONArray("coordinates")
-                val shapes = when (g.getString("type")) {
-                    "Polygon" -> listOf(shape(coords))
-                    "MultiPolygon" -> List(coords.length()) { shape(coords.getJSONArray(it)) }
-                    else -> emptyList()
-                }
-                list += Country(
-                    id = p.getString("id"),
-                    name = p.getString("name"),
-                    continent = p.getString("continent"),
-                    un = p.getBoolean("un"),
-                    alpha2 = p.optString("a2"),
-                    labelLon = p.getDouble("lx"),
-                    labelLat = p.getDouble("ly"),
-                    shapes = shapes,
-                    country = p.optString("country").ifEmpty { p.getString("id") },
-                )
+            val list = ArrayList<Country>(300)
+            val r = GeoJsonReader(geojson)
+            var found = false
+            r.obj { key ->
+                if (key != "features") { r.skip(); return@obj }
+                found = true
+                r.arr { list += feature(r) }
             }
+            require(found) { "no features" }
             return Atlas(list)
         }
 
-        private fun shape(rings: JSONArray): Shape {
-            val all = List(rings.length()) { ring(rings.getJSONArray(it)) }
-            return Shape(all.first(), all.drop(1))
+        private fun feature(r: GeoJsonReader): Country {
+            var props: Map<String, Any?> = emptyMap()
+            var type: String? = null
+            var coords: Any? = null
+            r.obj { key ->
+                when (key) {
+                    "properties" -> props = r.flatObject()
+                    "geometry" -> r.obj { g ->
+                        when (g) {
+                            "type" -> type = r.string()
+                            "coordinates" -> coords = r.coordinates()
+                            else -> r.skip()
+                        }
+                    }
+                    else -> r.skip()
+                }
+            }
+            @Suppress("UNCHECKED_CAST")
+            val shapes = when (type) {
+                "Polygon" -> listOf(shape(coords as List<Ring>))
+                "MultiPolygon" -> (coords as List<List<Ring>>).map { shape(it) }
+                else -> emptyList()
+            }
+            fun string(k: String): String = props[k] as? String ?: throw IllegalArgumentException("no $k")
+            fun number(k: String): Double = props[k] as? Double ?: throw IllegalArgumentException("no $k")
+            fun optString(k: String): String = props[k]?.toString().orEmpty()
+            val id = string("id")
+            return Country(
+                id = id,
+                name = string("name"),
+                continent = string("continent"),
+                un = props["un"] as? Boolean ?: throw IllegalArgumentException("no un"),
+                alpha2 = optString("a2"),
+                labelLon = number("lx"),
+                labelLat = number("ly"),
+                shapes = shapes,
+                country = optString("country").ifEmpty { id },
+            )
         }
 
-        private fun ring(points: JSONArray): Ring {
-            val n = points.length()
-            val xs = DoubleArray(n); val ys = DoubleArray(n)
-            for (i in 0 until n) {
-                val pt = points.getJSONArray(i)
-                xs[i] = pt.getDouble(0); ys[i] = pt.getDouble(1)
-            }
-            return Ring(xs, ys)
+        private fun shape(rings: List<Ring>): Shape = Shape(rings.first(), rings.drop(1))
+    }
+}
+
+/**
+ * Just enough of a JSON reader for the country file: objects, arrays, strings, numbers, true,
+ * false and null, read in place from the text. Coordinates go straight into primitive arrays.
+ */
+private class GeoJsonReader(private val s: String) {
+    private var i = 0
+    // Scratch space for one ring, grown as needed and copied out at its exact size.
+    private var xs = DoubleArray(1024)
+    private var ys = DoubleArray(1024)
+
+    private fun bad(what: String): Nothing = throw IllegalArgumentException("$what at $i")
+
+    private fun ws() {
+        while (i < s.length) {
+            val c = s[i]
+            if (c == ' ' || c == '\n' || c == '\r' || c == '\t') i++ else return
         }
+    }
+
+    private fun peek(): Char {
+        ws()
+        if (i >= s.length) bad("end of text")
+        return s[i]
+    }
+
+    private fun expect(c: Char) {
+        if (peek() != c) bad("expected '$c'")
+        i++
+    }
+
+    /** Reads an object, handing each key to [member], which must read its value. */
+    fun obj(member: (String) -> Unit) {
+        expect('{')
+        if (peek() == '}') { i++; return }
+        while (true) {
+            val key = string()
+            expect(':')
+            member(key)
+            when (peek()) {
+                ',' -> i++
+                '}' -> { i++; return }
+                else -> bad("expected ',' or '}'")
+            }
+        }
+    }
+
+    /** Reads an array, calling [item] once per element, which must read it. */
+    fun arr(item: () -> Unit) {
+        expect('[')
+        if (peek() == ']') { i++; return }
+        while (true) {
+            item()
+            when (peek()) {
+                ',' -> i++
+                ']' -> { i++; return }
+                else -> bad("expected ',' or ']'")
+            }
+        }
+    }
+
+    /** An object of plain values, such as a feature's properties: strings, numbers, booleans, null. */
+    fun flatObject(): Map<String, Any?> {
+        val out = HashMap<String, Any?>(16)
+        obj { key ->
+            out[key] = when (val c = peek()) {
+                '"' -> string()
+                't', 'f' -> bool()
+                'n' -> { literal("null"); null }
+                '{', '[' -> { skip(); null }
+                else -> if (c == '-' || c in '0'..'9') number() else bad("unexpected '$c'")
+            }
+        }
+        return out
+    }
+
+    fun string(): String {
+        expect('"')
+        val start = i
+        // Most strings have no escapes and come straight out of the text.
+        while (i < s.length) {
+            val c = s[i]
+            if (c == '"') return s.substring(start, i++)
+            if (c == '\\') break
+            i++
+        }
+        val b = StringBuilder().append(s, start, i)
+        while (true) {
+            if (i >= s.length) bad("unclosed string")
+            val c = s[i++]
+            when (c) {
+                '"' -> return b.toString()
+                '\\' -> {
+                    if (i >= s.length) bad("unclosed string")
+                    when (val e = s[i++]) {
+                        '"', '\\', '/' -> b.append(e)
+                        'b' -> b.append('\b')
+                        'f' -> b.append('\u000C')
+                        'n' -> b.append('\n')
+                        'r' -> b.append('\r')
+                        't' -> b.append('\t')
+                        'u' -> {
+                            if (i + 4 > s.length) bad("short escape")
+                            b.append(s.substring(i, i + 4).toInt(16).toChar())
+                            i += 4
+                        }
+                        else -> bad("bad escape")
+                    }
+                }
+                else -> b.append(c)
+            }
+        }
+    }
+
+    private fun literal(word: String) {
+        ws()
+        if (!s.startsWith(word, i)) bad("expected $word")
+        i += word.length
+    }
+
+    private fun bool(): Boolean =
+        if (peek() == 't') { literal("true"); true } else { literal("false"); false }
+
+    /**
+     * A number. Up to 15 digits with up to 22 after the point is one exact long divided by an
+     * exact power of ten, which rounds the same as Double.parseDouble; anything else goes to it.
+     */
+    fun number(): Double {
+        ws()
+        val start = i
+        val neg = i < s.length && s[i] == '-'
+        if (neg) i++
+        var mant = 0L
+        var digits = 0
+        var scale = 0
+        while (i < s.length && s[i] in '0'..'9') { mant = mant * 10 + (s[i] - '0'); digits++; i++ }
+        if (i < s.length && s[i] == '.') {
+            i++
+            while (i < s.length && s[i] in '0'..'9') { mant = mant * 10 + (s[i] - '0'); digits++; scale++; i++ }
+        }
+        val exp = i < s.length && (s[i] == 'e' || s[i] == 'E')
+        if (exp || digits > 15 || scale >= POW10.size) {
+            if (exp) {
+                i++
+                if (i < s.length && (s[i] == '+' || s[i] == '-')) i++
+                while (i < s.length && s[i] in '0'..'9') i++
+            }
+            return s.substring(start, i).toDouble()
+        }
+        if (digits == 0) bad("expected a number")
+        val v = if (scale == 0) mant.toDouble() else mant.toDouble() / POW10[scale]
+        return if (neg) -v else v
+    }
+
+    /** Skips one value of any kind. */
+    fun skip() {
+        when (val c = peek()) {
+            '{' -> obj { skip() }
+            '[' -> arr { skip() }
+            '"' -> string()
+            't', 'f' -> bool()
+            'n' -> literal("null")
+            else -> if (c == '-' || c in '0'..'9') number() else bad("unexpected '$c'")
+        }
+    }
+
+    /**
+     * A geometry's coordinates as nested lists, with each innermost list of points read as a
+     * [Ring]: a list of rings for a Polygon, a list of those for a MultiPolygon.
+     */
+    fun coordinates(): Any {
+        expect('[')
+        // An array whose first element is an array of numbers is a ring of points.
+        var k = i
+        while (k < s.length && s[k].isWhitespace()) k++
+        if (k < s.length && s[k] == '[') {
+            k++
+            while (k < s.length && s[k].isWhitespace()) k++
+            if (k < s.length && (s[k] == '-' || s[k] in '0'..'9')) return ring()
+        }
+        val out = ArrayList<Any>()
+        if (peek() == ']') { i++; return out }
+        while (true) {
+            if (peek() == '[') out += coordinates() else skip()
+            when (peek()) {
+                ',' -> i++
+                ']' -> { i++; return out }
+                else -> bad("expected ',' or ']'")
+            }
+        }
+    }
+
+    /** The points of one ring, its opening bracket already read. */
+    private fun ring(): Ring {
+        var n = 0
+        while (true) {
+            if (n == xs.size) { xs = xs.copyOf(n * 2); ys = ys.copyOf(n * 2) }
+            // A point: longitude and latitude, and any further numbers, such as height, ignored.
+            expect('[')
+            xs[n] = number()
+            expect(',')
+            ys[n] = number()
+            while (peek() == ',') { i++; number() }
+            expect(']')
+            n++
+            when (peek()) {
+                ',' -> i++
+                ']' -> { i++; return Ring(xs.copyOf(n), ys.copyOf(n)) }
+                else -> bad("expected ',' or ']'")
+            }
+        }
+    }
+
+    private companion object {
+        val POW10 = DoubleArray(23).also { p -> p[0] = 1.0; for (k in 1 until p.size) p[k] = p[k - 1] * 10 }
     }
 }

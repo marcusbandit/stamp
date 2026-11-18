@@ -11,6 +11,7 @@ import java.io.File
 
 class FineShapesTest {
     companion object {
+        private const val FILE = "src/main/assets/countries_10m.geojson"
         private lateinit var atlas: Atlas
         private lateinit var fine: FineShapes
 
@@ -18,7 +19,7 @@ class FineShapesTest {
         @JvmStatic
         fun load() {
             atlas = Atlas.parse(File("src/main/assets/countries.geojson").readText())
-            fine = FineShapes.read(File("src/main/assets/countries_10m.geojson").readBytes())
+            fine = FineShapes.index { File(FILE).inputStream() }
         }
     }
 
@@ -34,4 +35,28 @@ class FineShapesTest {
     }
 
     @Test fun unknownIdHasNoFeature() = assertNull(fine.feature("XXX"))
+
+    @Test fun aMissingFileHasNoFeatures() {
+        val none = FineShapes.index { null }
+        assertEquals(emptySet<String>(), none.ids)
+        assertNull(none.feature("AFG"))
+    }
+
+    // Each feature read from the file matches what cutting it out of the whole file in memory
+    // gave, the way this class worked before it stopped keeping the file.
+    @Test fun everyFeatureMatchesTheWholeFileCut() {
+        val bytes = File(FILE).readBytes()
+        val start = "{\"type\":\"Feature\",\"id\":\"".toByteArray()
+        val text = String(bytes, Charsets.ISO_8859_1)
+        val pattern = String(start, Charsets.ISO_8859_1)
+        val starts = generateSequence(text.indexOf(pattern).takeIf { it >= 0 }) { i -> text.indexOf(pattern, i + start.size).takeIf { it >= 0 } }.toList()
+        val end = bytes.lastIndexOf(']'.code.toByte())
+        assertEquals(starts.size, fine.ids.size)
+        for ((k, s) in starts.withIndex()) {
+            val idFrom = s + start.size
+            val id = String(bytes, idFrom, text.indexOf('"', idFrom) - idFrom, Charsets.UTF_8)
+            val to = if (k + 1 < starts.size) starts[k + 1] - 1 else end
+            assertEquals(id, String(bytes, s, to - s, Charsets.UTF_8), fine.feature(id))
+        }
+    }
 }

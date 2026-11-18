@@ -382,6 +382,9 @@ private fun App(
     // one finished, or a refund. The hourly look runs only while Pro and the switch say so.
     androidx.lifecycle.compose.LifecycleResumeEffect(Unit) { app.pro.refresh(); onPauseOrDispose { } }
     LaunchedEffect(hourly) {
+        // With the switch off there is nothing to stop: turning it off already cancelled the
+        // schedule, and WorkManager need not start for it.
+        if (!hourlyOn) return@LaunchedEffect
         com.marcusrosado.stamp.data.Hourly.schedule(app, hourly && com.marcusrosado.stamp.data.Hourly.allowed(app))
     }
     val keptOutlines by app.cityOutlines.kept.collectAsStateWithLifecycle()
