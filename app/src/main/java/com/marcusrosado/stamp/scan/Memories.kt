@@ -96,13 +96,18 @@ object Memories {
      */
     fun location(context: Context, uri: Uri): Pair<Double, Double>? {
         val original = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) runCatching { MediaStore.setRequireOriginal(uri) }.getOrNull() else null
-        return original?.let { read(context, it) } ?: read(context, uri)
+        // A photo whose original opened and has no fix has none: it is not read a second time.
+        original?.let { read(context, it) }?.let { return it.at }
+        return read(context, uri)?.at
     }
 
-    private fun read(context: Context, uri: Uri): Pair<Double, Double>? = runCatching {
+    /** A photo's EXIF position, null inside when it has none; null itself when it would not open. */
+    private class Read(val at: Pair<Double, Double>?)
+
+    private fun read(context: Context, uri: Uri): Read? = runCatching {
         context.contentResolver.openInputStream(uri)?.use { s ->
             // 0,0 is a camera with no fix, not a photo from the Gulf of Guinea.
-            ExifInterface(s).latLong?.takeIf { it[0] != 0.0 || it[1] != 0.0 }?.let { it[0] to it[1] }
+            Read(ExifInterface(s).latLong?.takeIf { it[0] != 0.0 || it[1] != 0.0 }?.let { it[0] to it[1] })
         }
     }.getOrNull()
 

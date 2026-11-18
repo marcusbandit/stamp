@@ -363,6 +363,9 @@ private fun App(
     // yet (a home stays lived, a wish becomes a visit), and open the map over it.
     val context = androidx.compose.ui.platform.LocalContext.current
     var located by rememberSaveable { mutableStateOf(false) }
+    // A geo link or a shared photo already put the map somewhere: the phone's own country must
+    // not pull it away from there a moment later.
+    var spotFromOutside by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(here) {
         if (!here || located) return@LaunchedEffect
         val (lat, lon) = com.marcusrosado.stamp.data.Here.find(context) ?: return@LaunchedEffect
@@ -374,6 +377,8 @@ private fun App(
         if (now == null || now == TravelState.Want) {
             app.visits.set(markId, TravelState.Visited)
         }
+        val waiting = launches.value
+        if (spotFromOutside || waiting is com.marcusrosado.stamp.Launch.Place || waiting is com.marcusrosado.stamp.Launch.Photo) return@LaunchedEffect
         focus = Focus(country.labelLat, country.labelLon, HERE_ZOOM)
     }
     val lookId by app.look.collectAsStateWithLifecycle()
@@ -512,18 +517,20 @@ private fun App(
     }
     val askLocation = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
-    ) { granted -> if (granted) locate() }
+    ) { granted -> if (granted) locate() else undo.say("Stamp needs location access to find you") }
+    // The card a land mass shows: its own when islands are marked apart, else its country's.
+    fun cardOf(land: Country): String = if (app.split.on.value) land.id else atlas.countryOf(land.id)
     // The map over a spot from outside the app, with the card of the country it is in. Back
     // from there leaves the app, as from any plain launch: nothing in the app was left for it.
-    fun showSpot(lat: Double, lon: Double, f: Focus) {
+    fun showSpot(land: Country?, f: Focus) {
+        spotFromOutside = true
         showList = false
         cityHunt = null
         destination = Destination.Map
         cameFrom = null
         spot = null
         pendingTrip = null
-        val land = atlas.locate(lat, lon)
-        selectedId = land?.let { if (app.split.on.value) it.id else atlas.countryOf(it.id) }
+        selectedId = land?.let { cardOf(it) }
         focus = f
         if (land == null) undo.say("That spot isn't in any country")
     }
@@ -553,12 +560,12 @@ private fun App(
                     else {
                         // The country it was taken in, whole, as when its card opens from the map.
                         val land = atlas.locate(at.first, at.second)
-                        val country = land?.let { atlas.byId[if (app.split.on.value) it.id else atlas.countryOf(it.id)] }
-                        showSpot(at.first, at.second, country?.let { focusOn(it) } ?: Focus(at.first, at.second, CITY_ZOOM))
+                        val country = land?.let { atlas.byId[cardOf(it)] }
+                        showSpot(land, country?.let { focusOn(it) } ?: Focus(at.first, at.second, CITY_ZOOM))
                     }
                 }
                 is com.marcusrosado.stamp.Launch.Place ->
-                    showSpot(l.lat, l.lon, Focus(l.lat, l.lon, (l.zoom ?: CITY_ZOOM).coerceIn(1.0, HOME_ZOOM)))
+                    showSpot(atlas.locate(l.lat, l.lon), Focus(l.lat, l.lon, (l.zoom ?: CITY_ZOOM).coerceIn(1.0, HOME_ZOOM)))
                 com.marcusrosado.stamp.Launch.Unreadable -> undo.say("Stamp can't find a place in that link")
             }
         }

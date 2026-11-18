@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- The app icon's shortcuts. Each opens MainActivity with the SHORTCUT extra, which Launch.of
-     reads; the targetPackage is the application id, the same in the Play build. -->
+<!-- The app icon's shortcuts. Each opens ShortcutActivity, which hands the SHORTCUT extra on
+     to MainActivity for Launch.of to read; the targetPackage is the application id, the same in
+     the Play build. -->
 <shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
     <shortcut
         android:shortcutId="new_trip"
@@ -11,7 +12,7 @@
         <intent
             android:action="android.intent.action.VIEW"
             android:targetPackage="com.marcusrosado.stamp"
-            android:targetClass="com.marcusrosado.stamp.MainActivity">
+            android:targetClass="com.marcusrosado.stamp.ShortcutActivity">
             <extra android:name="com.marcusrosado.stamp.SHORTCUT" android:value="trip" />
         </intent>
     </shortcut>
@@ -24,7 +25,7 @@
         <intent
             android:action="android.intent.action.VIEW"
             android:targetPackage="com.marcusrosado.stamp"
-            android:targetClass="com.marcusrosado.stamp.MainActivity">
+            android:targetClass="com.marcusrosado.stamp.ShortcutActivity">
             <extra android:name="com.marcusrosado.stamp.SHORTCUT" android:value="find" />
         </intent>
     </shortcut>
@@ -37,7 +38,7 @@
         <intent
             android:action="android.intent.action.VIEW"
             android:targetPackage="com.marcusrosado.stamp"
-            android:targetClass="com.marcusrosado.stamp.MainActivity">
+            android:targetClass="com.marcusrosado.stamp.ShortcutActivity">
             <extra android:name="com.marcusrosado.stamp.SHORTCUT" android:value="scan" />
         </intent>
     </shortcut>
@@ -50,7 +51,7 @@
         <intent
             android:action="android.intent.action.VIEW"
             android:targetPackage="com.marcusrosado.stamp"
-            android:targetClass="com.marcusrosado.stamp.MainActivity">
+            android:targetClass="com.marcusrosado.stamp.ShortcutActivity">
             <extra android:name="com.marcusrosado.stamp.SHORTCUT" android:value="here" />
         </intent>
     </shortcut>

@@ -49,12 +49,14 @@
         <profileable android:shell="true" />
         <!-- configChanges keeps the activity alive across fold, unfold and rotate.
              Compose recomposes from the new window size instead of a full restart. -->
-        <!-- singleTop: a shortcut, a shared photo or a place link while Stamp is already in
-             front goes to the activity that shows (onNewIntent) instead of a second copy. -->
+        <!-- singleTask: one Stamp, always in its own task. A photo shared from another app or a
+             place link goes to the Stamp already open (onNewIntent) instead of a second copy in
+             the other app's task; back from the map then returns to that app, as Android does
+             for any task brought forward. Shortcuts come through ShortcutActivity below. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:launchMode="singleTop"
+            android:launchMode="singleTask"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|density|keyboardHidden|uiMode">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -76,6 +78,17 @@
             </intent-filter>
             <meta-data android:name="android.app.shortcuts" android:resource="@xml/shortcuts" />
         </activity>
+        <!-- The shortcuts' landing: in a task of its own, so the clear-task flag the launcher
+             adds to a static shortcut clears only that task, never the open app. It shows
+             nothing and hands the shortcut on to MainActivity. Exported so any launcher can
+             start it; what it can be asked for is only what the shortcuts already offer. -->
+        <activity
+            android:name=".ShortcutActivity"
+            android:exported="true"
+            android:taskAffinity="${applicationId}.shortcut"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.NoDisplay" />
 
         <!-- WorkManager starts on demand, from StampApp, instead of on the main thread at every
              launch: only the hourly look uses it. -->
