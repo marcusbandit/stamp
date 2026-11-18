@@ -556,16 +556,23 @@ private fun StampMap(
         )
     }
     val rv = state.regionView
-    // The cities view's dots: every city of some size, and every one on a visit or wanted.
+    // The cities view's dots: every city of some size, built the first time the view opens and
+    // kept from then on, so leaving the view and coming back, or marking a city, builds and
+    // sends none of the 31,000 again. The map hides them in the other views.
     val cityView = !light && state.mapView == com.marcusrosado.stamp.data.MapView.Cities
-    val allCities by androidx.compose.runtime.produceState(emptyList<CityDot>(), cityView, state.places, state.visits) {
+    val allCities by androidx.compose.runtime.produceState<Pair<com.marcusrosado.stamp.data.Places?, List<CityDot>>>(null to emptyList(), cityView, state.places) {
         val p = state.places
-        if (!cityView || p == null) { value = emptyList(); return@produceState }
-        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
-            val mine = state.visits.values.flatMap { it.cities + it.wantCities }.toSet()
-            p.byId.values.filter { it.population >= 15_000 || it.id in mine }
-                .map { CityDot(it.id, it.lat, it.lon, it.population, it.id in mine, it.name) }
+        if (!cityView || p == null || value.first === p) return@produceState
+        value = p to kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            p.byId.values.filter { it.population >= CITY_DOT_FLOOR }.map { CityDot(it.id, it.lat, it.lon, it.population, it.name) }
         }
+    }
+    // Every city on a visit or wanted, whatever its size: a few, so a mark change sends only these.
+    val myCities = remember(cityView, state.visits, state.places) {
+        val p = state.places
+        if (!cityView || p == null) emptyList()
+        else state.visits.values.flatMap { it.cities + it.wantCities }.distinct().mapNotNull { p.byId[it] }
+            .map { CityDot(it.id, it.lat, it.lon, it.population, it.name) }
     }
     val heat by androidx.compose.runtime.produceState(emptyList<com.marcusrosado.stamp.data.HeatCell>(), state.seen, state.heatMap) {
         value = if (!state.heatMap || light) emptyList()
@@ -581,7 +588,9 @@ private fun StampMap(
         plain = !light && state.mapView == com.marcusrosado.stamp.data.MapView.Cities,
         wantCities = wantCities,
         onRegion = if (selectable) { cid, rid -> state.onSpot(Spot.Region(cid, rid)) } else null,
-        allCities = allCities,
+        allCities = allCities.second,
+        myCities = myCities,
+        showAllCities = cityView,
         selectedRegion = (state.spot as? Spot.Region)?.regionId.takeIf { !light },
         selectedCity = (state.spot as? Spot.City)?.let { it.lat to it.lon }.takeIf { !light },
         selectedArea = state.spotArea.takeIf { state.spot is Spot.City && !light },

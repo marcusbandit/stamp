@@ -113,9 +113,16 @@ fun WorldMap(
     wantCities: List<Pair<Double, Double>> = emptyList(),
     /** A tapped region, as its country id and region id; null leaves taps to the countries. */
     onRegion: ((String, String) -> Unit)? = null,
-    /** Every city worth a dot, for the cities view: more of them as the map zooms in. */
+    /**
+     * Every city worth a dot, for the cities view: more of them as the map zooms in. Sent to the
+     * map once and kept there; [showAllCities] shows or hides them.
+     */
     allCities: List<CityDot> = emptyList(),
-    /** A tapped city of [allCities], by id; null leaves taps to the countries. */
+    /** The cities on a visit or wanted, whatever their size, dotted from the start in the cities view. */
+    myCities: List<CityDot> = emptyList(),
+    /** Whether [allCities] and [myCities] draw: the cities view. */
+    showAllCities: Boolean = false,
+    /** A tapped city of [allCities] or [myCities], by id; null leaves taps to the countries. */
     onCity: ((String) -> Unit)? = null,
     /** The region picked, outlined as a picked country is. */
     selectedRegion: String? = null,
@@ -152,7 +159,7 @@ fun WorldMap(
     val tapKey by rememberUpdatedState(if (split) "id" else "country")
     val routeTap by rememberUpdatedState(onRoute.takeIf { showRoutes })
     val regionTap by rememberUpdatedState(onRegion.takeIf { regionLayer != null })
-    val cityTap by rememberUpdatedState(onCity.takeIf { allCities.isNotEmpty() })
+    val cityTap by rememberUpdatedState(onCity.takeIf { showAllCities && (allCities.isNotEmpty() || myCities.isNotEmpty()) })
     val viewport by rememberUpdatedState(onViewport)
     val longPress by rememberUpdatedState(onLongPress.takeIf { selectable })
 
@@ -472,19 +479,26 @@ fun WorldMap(
         val filter = Expression.`in`(Expression.get("country"), Expression.literal(complete.toTypedArray()))
         for (id in COMPLETE_LAYERS) s.getLayerAs<org.maplibre.android.style.layers.LineLayer>(id)?.setFilter(filter)
     }
+    // The 31,000 cities go to the map once per list and stay there, hidden outside the cities
+    // view: sending them again laid out the whole source again on every switch to the view.
+    // Their features are built once too, so a new look sends the same ones to its new style.
+    val allCityFeatures = remember(allCities) { arrayOfNulls<FeatureCollection>(1) }
     LaunchedEffect(style, allCities) {
         val s = style ?: return@LaunchedEffect
-        val json = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
-            FeatureCollection.fromFeatures(allCities.map { c ->
-                Feature.fromGeometry(Point.fromLngLat(c.lon, c.lat)).apply {
-                    addStringProperty("id", c.id)
-                    addNumberProperty("pop", c.population)
-                    addBooleanProperty("mine", c.mine)
-                    addStringProperty("name", c.name)
-                }
-            })
-        }
+        if (allCities.isEmpty()) return@LaunchedEffect
+        val json = allCityFeatures[0] ?: kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            cityFeatures(allCities)
+        }.also { allCityFeatures[0] = it }
         s.getSourceAs<GeoJsonSource>(SOURCE_ALL_CITIES)?.setGeoJson(json)
+    }
+    LaunchedEffect(style, myCities) {
+        val s = style ?: return@LaunchedEffect
+        s.getSourceAs<GeoJsonSource>(SOURCE_MY_CITIES)?.setGeoJson(cityFeatures(myCities))
+    }
+    LaunchedEffect(style, showAllCities) {
+        val s = style ?: return@LaunchedEffect
+        val v = if (showAllCities) org.maplibre.android.style.layers.Property.VISIBLE else org.maplibre.android.style.layers.Property.NONE
+        for (id in ALL_CITY_LAYERS + CITY_LABEL_LAYERS) s.getLayer(id)?.setProperties(PropertyFactory.visibility(v))
     }
     // In the cities view the cities been to carry the visited colour and stand out.
     LaunchedEffect(style, plain, palette) {
@@ -724,46 +738,72 @@ private const val SOURCE_WANT_CITIES = "want-cities"
 private const val LAYER_REGIONS = "regions-fill"
 private val COMPLETE_LAYERS = listOf("complete-glow", "complete-line", "complete-glow-fine", "complete-line-fine")
 private const val SOURCE_ALL_CITIES = "all-cities"
+private const val SOURCE_MY_CITIES = "my-cities"
 private const val SOURCE_SPOT = "spot"
 private const val SOURCE_SPOT_AREA = "spot-area"
 private const val SOURCE_HEAT = "heat"
 
 /** A city as the cities view draws it: a dot, more of them as the map zooms in. */
-class CityDot(val id: String, val lat: Double, val lon: Double, val population: Int, val mine: Boolean, val name: String = "")
+class CityDot(val id: String, val lat: Double, val lon: Double, val population: Int, val name: String = "")
+
+/** The smallest city the cities view dots unless it is on a visit or wanted. */
+internal const val CITY_DOT_FLOOR = 15_000
+
+private fun cityFeatures(cities: List<CityDot>) = FeatureCollection.fromFeatures(cities.map { c ->
+    Feature.fromGeometry(Point.fromLngLat(c.lon, c.lat)).apply {
+        addStringProperty("id", c.id)
+        addNumberProperty("pop", c.population)
+        addStringProperty("name", c.name)
+    }
+})
 
 // Bigger cities first: a dot for every city over a million from the start, smaller ones as the
-// map zooms in. A city on a visit or wanted shows from the start whatever its size.
+// map zooms in. A city on a visit or wanted shows from the start whatever its size, from its
+// own small source; where it is big enough to be in the other one too, the visited and wanted
+// dots drawn over both hide the second dot.
 private val CITY_STEPS = listOf(0.0 to 1_000_000, 3.0 to 250_000, 4.5 to 80_000, 6.0 to 0)
-private val ALL_CITY_LAYERS = CITY_STEPS.indices.map { "all-cities-$it" }.toTypedArray()
+private const val LAYER_MY_CITIES = "my-city-dots"
+private val ALL_CITY_LAYERS = (CITY_STEPS.indices.map { "all-cities-$it" } + LAYER_MY_CITIES).toTypedArray()
 
-private fun allCityLayersJson(p: MapPalette) = CITY_STEPS.mapIndexed { i, (zoom, least) ->
-    val most = CITY_STEPS.getOrNull(i - 1)?.second
-    val filter = when {
-        i == 0 -> """["any", ["==", ["get", "mine"], true], [">=", ["get", "pop"], $least]]"""
-        else -> """["all", ["!=", ["get", "mine"], true], [">=", ["get", "pop"], $least], ["<", ["get", "pop"], $most]]"""
-    }
-    """    { "id": "all-cities-$i", "type": "circle", "source": "$SOURCE_ALL_CITIES", "minzoom": $zoom, "filter": $filter,
+private fun cityDotJson(id: String, source: String, zoom: Double, filter: String?, p: MapPalette) =
+    """    { "id": "$id", "type": "circle", "source": "$source", "minzoom": $zoom,${filter?.let { " \"filter\": $it," }.orEmpty()}
+      "layout": { "visibility": "none" },
       "paint": { "circle-radius": ["interpolate", ["linear"], ["zoom"], 1, 1.8, 6, 3.2, 9, 4.5],
                  "circle-color": "${hex(p.selected)}", "circle-opacity": 0.55,
                  "circle-stroke-color": "${hex(p.ocean)}", "circle-stroke-width": 0.6 } }"""
-}.joinToString(",\n")
+
+private fun allCityLayersJson(p: MapPalette) = (CITY_STEPS.mapIndexed { i, (zoom, least) ->
+    val most = CITY_STEPS.getOrNull(i - 1)?.second
+    val filter = if (most == null) """[">=", ["get", "pop"], $least]"""
+    else """["all", [">=", ["get", "pop"], $least], ["<", ["get", "pop"], $most]]"""
+    cityDotJson("all-cities-$i", SOURCE_ALL_CITIES, zoom, filter, p)
+} + cityDotJson(LAYER_MY_CITIES, SOURCE_MY_CITIES, 0.0, null, p)).joinToString(",\n")
 
 // City names in the cities view, by size the way the dots are: the biggest first, smaller ones as
 // the map zooms in. Bigger cities sit higher in the stack, so where two names would collide the
 // bigger one is placed and the smaller one waits for more room.
-// The last step has no floor, so a small town the user logged gets its name too.
 private val LABEL_STEPS = listOf(2.5 to 2_000_000, 3.8 to 600_000, 5.0 to 200_000, 6.3 to 60_000, 7.6 to 0)
+
+// The towns too small for the big source take their names from the user's own, at the last
+// step, placed last so any bigger name wins the room.
+private const val LAYER_MY_CITY_LABELS = "my-city-labels"
+private val CITY_LABEL_LAYERS = LABEL_STEPS.indices.map { "city-labels-$it" } + LAYER_MY_CITY_LABELS
 
 private fun cityLabelLayersJson(p: MapPalette): String {
     val ink = if (p.land.luminance() < 0.5f) "#F1F1EE" else "#1D1D1B"
-    return LABEL_STEPS.indices.reversed().joinToString(",\n") { i ->
-        val (zoom, least) = LABEL_STEPS[i]
+    val small = LABEL_STEPS.lastIndex to """["<", ["get", "pop"], $CITY_DOT_FLOOR]"""
+    return (listOf(Triple(LAYER_MY_CITY_LABELS, SOURCE_MY_CITIES, small)) + LABEL_STEPS.indices.reversed().map { i ->
+        val least = LABEL_STEPS[i].second
         val most = LABEL_STEPS.getOrNull(i - 1)?.second
         val filter = if (most == null) """[">=", ["get", "pop"], $least]"""
         else """["all", [">=", ["get", "pop"], $least], ["<", ["get", "pop"], $most]]"""
+        Triple("city-labels-$i", SOURCE_ALL_CITIES, i to filter)
+    }).joinToString(",\n") { (id, source, step) ->
+        val (i, filter) = step
+        val zoom = LABEL_STEPS[i].first
         val size = 13.5 - i * 0.8
-        """    { "id": "city-labels-$i", "type": "symbol", "source": "$SOURCE_ALL_CITIES", "minzoom": $zoom, "filter": $filter,
-      "layout": { "text-field": ["get", "name"], "text-font": ["NotoSansMedium"],
+        """    { "id": "$id", "type": "symbol", "source": "$source", "minzoom": $zoom, "filter": $filter,
+      "layout": { "visibility": "none", "text-field": ["get", "name"], "text-font": ["NotoSansMedium"],
                   "text-size": ["interpolate", ["linear"], ["zoom"], $zoom, $size, ${zoom + 4}, ${size + 3}],
                   "text-anchor": "top", "text-offset": [0, 0.55], "text-max-width": 8,
                   "text-padding": 3, "symbol-sort-key": ["-", 0, ["get", "pop"]] },
@@ -882,6 +922,7 @@ private fun styleJson(p: MapPalette, fineLater: Boolean) = """
     "$SOURCE_REGIONS": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
     "$SOURCE_WANT_CITIES": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
     "$SOURCE_ALL_CITIES": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
+    "$SOURCE_MY_CITIES": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
     "$SOURCE_SPOT": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
     "$SOURCE_SPOT_AREA": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
     "$SOURCE_HEAT": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } }
