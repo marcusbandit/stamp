@@ -495,6 +495,8 @@ private fun App(
                 onUpdateTrip = app.visits::updateTrip,
                 onRenameTrip = app.visits::renameTrip,
                 onRemoveTrip = { a, b -> undo.run("Visit removed") { app.visits.removeTrip(a, b) } },
+                onSetHome = { id -> undo.run("${atlas.byId[id]?.name ?: id} is home now") { app.visits.setHome(id) } },
+                onDuplicateTrip = { t -> var id: String? = null; undo.run("Visit copied") { id = app.visits.duplicateTrip(t) }; id },
                 onAddCity = app.visits::addCity,
                 onAddPin = app.visits::addPin,
                 onRenamePin = app.visits::renamePin,

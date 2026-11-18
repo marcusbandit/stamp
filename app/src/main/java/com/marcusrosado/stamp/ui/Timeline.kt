@@ -56,6 +56,7 @@ import androidx.compose.material.icons.filled.SubdirectoryArrowRight
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.outlined.AddAPhoto
 import androidx.compose.material.icons.outlined.EditNote
 import androidx.compose.material.icons.outlined.Edit
@@ -148,6 +149,10 @@ class TimelineActions(
     val onAddMemories: (List<Memory>) -> Unit,
     val onUpdateMemory: (Memory) -> Unit,
     val onRemoveMemory: (String) -> Unit,
+    /** Copies the trip, route and all, with no dates; null when it cannot be. */
+    val onDuplicate: (() -> Unit)? = null,
+    /** Removes the trip; null when it is the only one its country keeps. */
+    val onDelete: (() -> Unit)? = null,
 )
 
 /**
@@ -283,6 +288,7 @@ fun VisitTimeline(
                         mapShown = if (map != null && LocalHinge.current == null) showMap else null,
                         // With the map shown it is the picture: the header shrinks to a title row.
                         compact = map != null && (showMap || LocalHinge.current != null),
+                        menu = { tint -> TripMenu(actions, onRename = { naming = true }, onDates = { editingDates = true }, tint = tint) },
                         onMap = { showMap = !showMap },
                     )
                 }
@@ -583,13 +589,16 @@ private fun Hero(
     mapShown: Boolean? = null,
     onMap: () -> Unit = {},
     compact: Boolean = false,
+    /** The trip's menu button, in the colour it should take over the header. */
+    menu: @Composable (tint: Color) -> Unit = {},
 ) {
     val accent = MaterialTheme.colorScheme.primary
     if (compact) {
-        Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 12.dp, top = 8.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 4.dp, top = 8.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
             HeroTitles(where, title, dates, onDates, onName, big = false, modifier = Modifier.weight(1f).padding(start = 4.dp))
             if (mapShown != null) MapButton(mapShown, onMap)
+            menu(MaterialTheme.colorScheme.onSurface)
         }
         return
     }
@@ -617,7 +626,10 @@ private fun Hero(
         IconButton(onClick = onBack, modifier = Modifier.statusBarsPadding().padding(8.dp)) {
             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
         }
-        if (mapShown != null) MapButton(mapShown, onMap, Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(12.dp))
+        Row(Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(top = 8.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (mapShown != null) MapButton(mapShown, onMap)
+            menu(Color.White)
+        }
         HeroTitles(where, title, dates, onDates, onName, big = true, modifier = Modifier.align(Alignment.BottomStart).padding(horizontal = 24.dp, vertical = 12.dp))
     }
 }
@@ -648,6 +660,28 @@ private fun HeroTitles(where: String, title: String, dates: String?, onDates: ()
             color = if (dates == null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable(onClick = onDates).padding(vertical = if (big) 4.dp else 0.dp),
         )
+    }
+}
+
+/** What can be done with a whole trip, behind one button in its header. */
+@Composable
+private fun TripMenu(actions: TimelineActions, onRename: () -> Unit, onDates: () -> Unit, tint: Color) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { open = true }) { Icon(Icons.Filled.MoreVert, contentDescription = "Trip options", tint = tint) }
+        androidx.compose.material3.DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            androidx.compose.material3.DropdownMenuItem(text = { Text("Rename") }, onClick = { open = false; onRename() })
+            androidx.compose.material3.DropdownMenuItem(text = { Text("Change dates") }, onClick = { open = false; onDates() })
+            actions.onDuplicate?.let { dup ->
+                androidx.compose.material3.DropdownMenuItem(text = { Text("Duplicate") }, onClick = { open = false; dup() })
+            }
+            actions.onDelete?.let { del ->
+                androidx.compose.material3.DropdownMenuItem(
+                    text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
+                    onClick = { open = false; del() },
+                )
+            }
+        }
     }
 }
 

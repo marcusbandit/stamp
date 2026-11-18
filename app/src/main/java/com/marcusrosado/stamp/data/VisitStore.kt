@@ -384,6 +384,20 @@ class VisitStore(private val file: File) {
         return true
     }
 
+    /**
+     * A copy of a trip to take again: the same stops, ways and day trips, with no dates, no name
+     * and no memories, since those belong to the time it was taken. Returns the copy's id.
+     */
+    @Synchronized
+    fun duplicateTrip(tripId: String): String? {
+        val t = trips.firstOrNull { it.id == tripId } ?: return null
+        val copy = t.copy(id = newTripId(), name = "", date = null, until = null, now = false, arrived = emptyMap(), left = emptyMap(), memories = emptyList())
+        val at = trips.indexOf(t)
+        trips = trips.take(at + 1) + copy + trips.drop(at + 1)
+        save()
+        return copy.id
+    }
+
     /** One more visit to [id], starting there, with nothing filled in yet. */
     @Synchronized
     fun addTrip(id: String) {

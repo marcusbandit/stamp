@@ -18,6 +18,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.Home
@@ -183,6 +184,31 @@ fun CountryDetail(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            // What else can be done with the country: few things, so they wait behind one button.
+            if ((!isHome && partOf == null) || visit != null) {
+                var menu by remember { mutableStateOf(false) }
+                Box {
+                    IconButton(onClick = { menu = true }) { Icon(Icons.Filled.MoreVert, contentDescription = "More for ${country.name}") }
+                    androidx.compose.material3.DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                        if (!isHome && partOf == null) {
+                            androidx.compose.material3.DropdownMenuItem(
+                                text = { Text("I live here now") },
+                                onClick = { menu = false; actions.onSetHome(country.id) },
+                            )
+                        }
+                        if (visit != null) {
+                            androidx.compose.material3.DropdownMenuItem(
+                                text = { Text("Clear ${country.name}", color = MaterialTheme.colorScheme.error) },
+                                onClick = {
+                                    menu = false
+                                    val loss = if (undoable) null else lossOf(country.id, country.name, visit, null, partVisits)
+                                    if (loss != null) asking = null to loss else onSet(null)
+                                },
+                            )
+                        }
+                    }
+                }
+            }
             IconButton(onClick = onClose) { Icon(Icons.Filled.Close, contentDescription = "Close") }
         }
         if (markedParts.isNotEmpty()) {
@@ -291,6 +317,13 @@ fun CountryDetail(
                 onAddMemories = { actions.onAddMemories(tripId, it) },
                 onUpdateMemory = { actions.onUpdateMemory(tripId, it) },
                 onRemoveMemory = { actions.onRemoveMemory(tripId, it) },
+                onDuplicate = if (v.state == TravelState.Lived) null else {
+                    { actions.onDuplicateTrip(tripId)?.let { timelineFor = it } }
+                },
+                // A visited or lived country always keeps one trip.
+                onDelete = if (v.trips.size > 1 || !v.state.counts) {
+                    { timelineFor = null; onTripClosed(); actions.onRemoveTrip(country.id, tripId) }
+                } else null,
             ),
             onDismiss = { timelineFor = null; onTripClosed() },
             map = tripMap,
