@@ -84,6 +84,10 @@ class DetailActions(
     val onUpdateTrip: (trip: Trip) -> Unit,
     val onRenameTrip: (tripId: String, name: String) -> Unit,
     val onRemoveTrip: (id: String, tripId: String) -> Unit,
+    /** Makes a country where the user lives now. */
+    val onSetHome: (id: String) -> Unit = {},
+    /** Copies a trip with its route and no dates; the copy's id. */
+    val onDuplicateTrip: (tripId: String) -> String? = { null },
     /** A null trip puts the city on a new visit. */
     val onAddCity: (id: String, tripId: String?, cityId: String) -> Unit,
     val onRemoveCity: (tripId: String, cityId: String) -> Unit,
