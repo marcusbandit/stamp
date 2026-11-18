@@ -60,6 +60,9 @@ fun PassportScreen(
     trips: List<com.marcusrosado.stamp.data.Trip> = emptyList(),
     places: com.marcusrosado.stamp.data.Places? = null,
     onOpenTrip: (String) -> Unit = {},
+    /** Opens the country list on what a tapped number counts. */
+    onOpenList: (ListFilter) -> Unit = {},
+    onShowMap: () -> Unit = {},
 ) {
     val palette = LocalMapPalette.current
     // Countries, each once: Hawaii counts for the United States.
@@ -92,11 +95,16 @@ fun PassportScreen(
                 Text("Passport", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(vertical = 8.dp))
             }
             item {
-                MiniMap(atlas, { id -> atlas.markOf(id, visits, split)?.let { palette.of(it) } })
+                Box(Modifier.clip(RoundedCornerShape(16.dp)).clickable(onClickLabel = "Show the map", onClick = onShowMap)) {
+                    MiniMap(atlas, { id -> atlas.markOf(id, visits, split)?.let { palette.of(it) } })
+                }
             }
             item {
                 Panel {
-                    Row(verticalAlignment = Alignment.Bottom) {
+                    Row(
+                        Modifier.clip(RoundedCornerShape(12.dp)).clickable(onClickLabel = "Show the countries you have been to") { onOpenList(ListFilter(ListFilter.BEEN)) },
+                        verticalAlignment = Alignment.Bottom,
+                    ) {
                         Column(Modifier.weight(1f)) {
                             Text(
                                 "$been / ${atlas.unCount}",
@@ -119,7 +127,11 @@ fun PassportScreen(
                     Spacer(Modifier.height(12.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                         TravelState.entries.forEach { s ->
-                            Row(verticalAlignment = Alignment.CenterVertically) {
+                            Row(
+                                Modifier.clip(RoundedCornerShape(8.dp)).clickable(onClickLabel = "Show ${s.label.lowercase()} countries") { onOpenList(ListFilter.of(s)) }
+                                    .padding(vertical = 6.dp, horizontal = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
                                 Swatch(palette.of(s))
                                 Spacer(Modifier.width(6.dp))
                                 Text(
@@ -141,16 +153,22 @@ fun PassportScreen(
                     (ContinentOrder + extra).forEachIndexed { i, name ->
                         val total = atlas.unPerContinent[name] ?: 0
                         val n = counted.count { atlas.byId[it]?.continent == name }
-                        if (i > 0) Spacer(Modifier.height(14.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(name, Modifier.weight(1f))
-                            Text(
-                                if (total > 0) "$n / $total" else "$n",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+                        if (i > 0) Spacer(Modifier.height(4.dp))
+                        // A continent opens the list of every country in it, the ones still to go included.
+                        Column(
+                            Modifier.clip(RoundedCornerShape(8.dp)).clickable(onClickLabel = "Show the countries of $name") { onOpenList(ListFilter(continent = name)) }
+                                .padding(vertical = 5.dp),
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(name, Modifier.weight(1f))
+                                Text(
+                                    if (total > 0) "$n / $total" else "$n",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Spacer(Modifier.height(6.dp))
+                            Bar(if (total > 0) n.toFloat() / total else 1f)
                         }
-                        Spacer(Modifier.height(6.dp))
-                        Bar(if (total > 0) n.toFloat() / total else 1f)
                     }
                 }
             }

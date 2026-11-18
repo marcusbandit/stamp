@@ -21,6 +21,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -47,6 +49,29 @@ import com.marcusrosado.stamp.data.TravelState
 import com.marcusrosado.stamp.data.Visit
 import com.marcusrosado.stamp.data.Places.Companion.fold
 
+/**
+ * What the country list shows: every country, any marked one, or one mark, and optionally one
+ * continent. A count tapped anywhere in the app opens the list on what it counted.
+ */
+@androidx.compose.runtime.Immutable
+data class ListFilter(val mark: String = ALL, val continent: String? = null) {
+    fun keeps(state: TravelState?, continent: String): Boolean =
+        (mark == ALL || (mark == MARKED && state != null) || (mark == BEEN && state?.counts == true) || state?.name == mark) &&
+            (this.continent == null || this.continent == continent)
+
+    companion object {
+        const val ALL = "all"
+        const val MARKED = "marked"
+        /** Visited or lived: what the passport counts. */
+        const val BEEN = "been"
+        fun of(state: TravelState, continent: String? = null) = ListFilter(state.name, continent)
+        val Saver = androidx.compose.runtime.saveable.Saver<ListFilter, String>(
+            save = { "${it.mark}|${it.continent.orEmpty()}" },
+            restore = { s -> s.split('|').let { ListFilter(it[0], it.getOrNull(1)?.ifEmpty { null }) } },
+        )
+    }
+}
+
 /** Every country by name, searchable. The way to mark places too small to tap on the map. */
 @Composable
 fun CountryListScreen(
@@ -56,10 +81,15 @@ fun CountryListScreen(
     onShowOnMap: (String) -> Unit,
     onClose: () -> Unit,
     split: Boolean,
+    start: ListFilter = ListFilter(),
 ) {
     BackHandler(onBack = onClose)
     var query by rememberSaveable { mutableStateOf("") }
-    var mineOnly by rememberSaveable { mutableStateOf(false) }
+    var filter by rememberSaveable(start, stateSaver = ListFilter.Saver) { mutableStateOf(start) }
+    // Opened to search, the keyboard is up at once; opened on a count, the list is the point.
+    val focus = remember { FocusRequester() }
+    val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+    LaunchedEffect(Unit) { if (start == ListFilter()) runCatching { focus.requestFocus() } }
     // A change of mark that would throw something away, waiting for the user to say yes.
     var asking by remember { mutableStateOf<Triple<String, TravelState?, Loss>?>(null) }
     asking?.let { (id, s, loss) ->
@@ -69,14 +99,21 @@ fun CountryListScreen(
     val q = fold(query.trim())
     // Split, Corsica and Hawaii are listed on their own; whole, only countries are.
     val all = if (split) atlas.countries else atlas.mains
-    val shown = all
-        // A part also turns up under its country's name: "France" lists Corsica and Réunion.
-        .filter {
-            q.isEmpty() || fold(it.name).contains(q) || it.id.lowercase() == q ||
-                (it.isPart && atlas.byId[it.country]?.name?.let { n -> fold(n).contains(q) } == true)
-        }
-        .filter { !mineOnly || atlas.markOf(it.id, visits, split) != null }
-        .sortedBy { it.name }
+    // Names folded once and marks read once, not again on every keystroke.
+    val keys = remember(all) {
+        all.sortedBy { it.name }.map { com.marcusrosado.stamp.data.CountrySearch.Key(it, if (it.isPart) atlas.byId[it.country]?.name else null) }
+    }
+    val marks = remember(all, visits, split) { all.associate { it.id to atlas.markOf(it.id, visits, split) } }
+    val continents = remember(all) {
+        val order = listOf("Europe", "Asia", "Africa", "North America", "South America", "Oceania")
+        all.map { it.continent }.distinct().sortedBy { order.indexOf(it).let { i -> if (i < 0) order.size else i } }
+    }
+    val shown = remember(keys, marks, q, filter) {
+        keys.filter { filter.keeps(marks[it.c.id], it.c.continent) && com.marcusrosado.stamp.data.CountrySearch.matches(it, q) }.map { it.c }
+    }
+    // Each mark's count within the continent picked, so the chips say what a tap will show.
+    val inContinent = remember(all, filter.continent) { all.filter { filter.continent == null || it.continent == filter.continent } }
+    fun count(mark: String) = inContinent.count { ListFilter(mark).keeps(marks[it.id], it.continent) }
 
     Box(Modifier.fillMaxSize().safeDrawingPadding(), contentAlignment = Alignment.TopCenter) {
         Column(Modifier.widthIn(max = 680.dp).fillMaxSize()) {
@@ -89,12 +126,49 @@ fun CountryListScreen(
                     leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
                     singleLine = true,
                     shape = RoundedCornerShape(16.dp),
-                    modifier = Modifier.weight(1f).padding(end = 8.dp),
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Search),
+                    keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSearch = { keyboard?.hide() }),
+                    trailingIcon = if (query.isEmpty()) null else {
+                        { IconButton(onClick = { query = "" }) { Icon(Icons.Filled.Close, contentDescription = "Clear search") } }
+                    },
+                    modifier = Modifier.weight(1f).padding(end = 8.dp).focusRequester(focus),
                 )
             }
-            Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(selected = !mineOnly, onClick = { mineOnly = false }, label = { Text("All ${all.size}") })
-                FilterChip(selected = mineOnly, onClick = { mineOnly = true }, label = { Text("Marked ${all.count { atlas.markOf(it.id, visits, split) != null }}") })
+            androidx.compose.foundation.lazy.LazyRow(
+                contentPadding = PaddingValues(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                val marksShown = listOf(ListFilter.ALL to "All", ListFilter.BEEN to "Been") + TravelState.entries.map { it.name to it.label }
+                items(marksShown, key = { it.first }) { (mark, label) ->
+                    FilterChip(
+                        selected = filter.mark == mark,
+                        onClick = { filter = filter.copy(mark = mark) },
+                        label = { Text("$label ${count(mark)}") },
+                    )
+                }
+                item(key = "continent") {
+                    var open by remember { mutableStateOf(false) }
+                    Box {
+                        FilterChip(
+                            selected = filter.continent != null,
+                            onClick = { open = true },
+                            label = { Text(filter.continent ?: "Continent") },
+                            trailingIcon = { Icon(Icons.Filled.ArrowDropDown, contentDescription = null) },
+                        )
+                        androidx.compose.material3.DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+                            androidx.compose.material3.DropdownMenuItem(
+                                text = { Text("Every continent") },
+                                onClick = { filter = filter.copy(continent = null); open = false },
+                            )
+                            continents.forEach { name ->
+                                androidx.compose.material3.DropdownMenuItem(
+                                    text = { Text(name) },
+                                    onClick = { filter = filter.copy(continent = name); open = false },
+                                )
+                            }
+                        }
+                    }
+                }
             }
             LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
                 items(shown, key = { it.id }) { c ->
