@@ -49,14 +49,32 @@
         <profileable android:shell="true" />
         <!-- configChanges keeps the activity alive across fold, unfold and rotate.
              Compose recomposes from the new window size instead of a full restart. -->
+        <!-- singleTop: a shortcut, a shared photo or a place link while Stamp is already in
+             front goes to the activity that shows (onNewIntent) instead of a second copy. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTop"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|density|keyboardHidden|uiMode">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- A photo shared into Stamp: its location is read on the phone to open the
+                 country it was taken in. Nothing is uploaded or kept. -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
+            </intent-filter>
+            <!-- A place link, geo:lat,lon, opens the map there with the country's card. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="geo" />
+            </intent-filter>
+            <meta-data android:name="android.app.shortcuts" android:resource="@xml/shortcuts" />
         </activity>
 
         <!-- WorkManager starts on demand, from StampApp, instead of on the main thread at every

@@ -1,4 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Stamp</string>
+    <string name="shortcut_trip">New trip</string>
+    <string name="shortcut_find">Find a city</string>
+    <string name="shortcut_find_short">Find city</string>
+    <string name="shortcut_scan">Scan photos</string>
+    <string name="shortcut_scan_short">Scan</string>
+    <string name="shortcut_here">Where am I</string>
 </resources>

@@ -89,9 +89,18 @@ object Memories {
         }
     }
 
-    private fun location(context: Context, uri: Uri): Pair<Double, Double>? = runCatching {
-        val original = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) MediaStore.setRequireOriginal(uri) else uri
-        context.contentResolver.openInputStream(original)?.use { s ->
+    /**
+     * Where a photo was taken, from its EXIF, read on the phone. The original is asked for
+     * first, since Android strips the location from a gallery photo otherwise; a photo shared
+     * from another app may not offer that, so the plain file is tried after.
+     */
+    fun location(context: Context, uri: Uri): Pair<Double, Double>? {
+        val original = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) runCatching { MediaStore.setRequireOriginal(uri) }.getOrNull() else null
+        return original?.let { read(context, it) } ?: read(context, uri)
+    }
+
+    private fun read(context: Context, uri: Uri): Pair<Double, Double>? = runCatching {
+        context.contentResolver.openInputStream(uri)?.use { s ->
             // 0,0 is a camera with no fix, not a photo from the Gulf of Guinea.
             ExifInterface(s).latLong?.takeIf { it[0] != 0.0 || it[1] != 0.0 }?.let { it[0] to it[1] }
         }
