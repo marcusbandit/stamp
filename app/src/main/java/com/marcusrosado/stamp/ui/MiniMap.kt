@@ -18,6 +18,7 @@ import androidx.compose.ui.graphics.toArgb
 import com.marcusrosado.stamp.data.Atlas
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.ensureActive
 
 private const val TOP_LAT = 84.0
 private const val BOTTOM_LAT = -57.0
@@ -27,7 +28,8 @@ private data class LandKey(val w: Int, val h: Int, val line: Int, val fills: Lis
 
 /** Drawn pictures of the land, so opening the passport again shows the map at once. */
 private val lands = object : LinkedHashMap<LandKey, ImageBitmap>(8, 0.75f, true) {
-    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<LandKey, ImageBitmap>?) = size > 4
+    // Two: the passport's current picture and the one before it. Each is a few MB on a big screen.
+    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<LandKey, ImageBitmap>?) = size > 2
 }
 
 /**
@@ -92,7 +94,8 @@ fun MiniMap(
     }
 }
 
-private fun renderLand(countries: List<com.marcusrosado.stamp.data.Country>, key: LandKey): ImageBitmap {
+private suspend fun renderLand(countries: List<com.marcusrosado.stamp.data.Country>, key: LandKey): ImageBitmap {
+    val job = kotlin.coroutines.coroutineContext
     val (w, h) = key
     val bmp = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)
     val c = android.graphics.Canvas(bmp)
@@ -103,6 +106,8 @@ private fun renderLand(countries: List<com.marcusrosado.stamp.data.Country>, key
         color = key.line
     }
     countries.forEachIndexed { n, country ->
+        // A newer set of marks replaced this picture: stop drawing it.
+        job.ensureActive()
         val path = android.graphics.Path().apply { fillType = android.graphics.Path.FillType.EVEN_ODD }
         for (s in country.shapes) for (r in listOf(s.outer) + s.holes) {
             for (i in r.xs.indices) {
