@@ -525,6 +525,11 @@ private fun StopSearch(title: String, airports: Airports?, places: Places?, near
                     singleLine = true,
                     placeholder = { Text(if (places == null) "Code, airport or town" else "Airport or town") },
                     leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+                    // Enter takes the top match, as in the city picker; with nothing typed there is none.
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Search),
+                    keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+                        onSearch = { if (query.isNotBlank()) found.firstOrNull()?.let { onPick(it.id) } },
+                    ),
                     modifier = Modifier.fillMaxWidth().focusRequester(focus),
                 )
                 Spacer(Modifier.height(8.dp))

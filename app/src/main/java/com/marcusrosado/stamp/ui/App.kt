@@ -636,6 +636,7 @@ private fun App(
                 countryName = "", flag = "", alpha2 = "",
                 places = places,
                 already = emptySet(),
+                mine = remember(visits) { visits.values.flatMap { it.cities }.toSet() },
                 title = if (why == "trip") "Where did the trip start?" else "Find a city",
                 onPick = { c ->
                     cityHunt = null
@@ -685,6 +686,7 @@ private fun App(
                         onScanOpen(false)
                         destination = Destination.Passport
                     },
+                    onPick = { app.scanner.pick(it) },
                     onReset = { app.scanner.cancel() },
                     onClose = { onScanOpen(false); onScanTakeout(false) },
                     onImportTakeout = { app.scanner.importTakeout(it) },

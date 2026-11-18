@@ -308,6 +308,7 @@ fun CountryDetail(
             alpha2 = citiesCountry(country),
             places = places,
             already = trip.cities.map(::placeIdOf).toSet(),
+            mine = visit?.cities.orEmpty(),
             onPick = { c ->
                 actions.onAddCity(country.id, trip.id, c.id)
                 pickingFor = null
@@ -344,6 +345,7 @@ fun CountryDetail(
             alpha2 = citiesCountry(country),
             places = places,
             already = trip.placesAt(stop).toSet(),
+            mine = visit?.cities.orEmpty(),
             // Gone there from this stop already: nothing to add again.
             againOk = false,
             title = "Went from ${placeOf(stop, visit, places)?.name ?: "here"} to",

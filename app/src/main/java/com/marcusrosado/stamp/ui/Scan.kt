@@ -45,11 +45,10 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TriStateCheckbox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -57,6 +56,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.marcusrosado.stamp.data.PhotoEvidence
@@ -121,6 +123,8 @@ fun ScanScreen(
     onAdd: (found: Map<String, PhotoEvidence>, mark: Set<String>) -> Unit,
     onReset: () -> Unit,
     onClose: () -> Unit,
+    /** Ticks changed in the review, by country id, to keep with the finished scan. */
+    onPick: (Map<String, Boolean>) -> Unit = {},
     /** Reads the Google Takeout zips the user picked. */
     onImportTakeout: (List<Uri>) -> Unit = {},
     /** Opens straight on the Google Photos steps, as Settings and the introduction do. */
@@ -145,7 +149,7 @@ fun ScanScreen(
             when {
                 state is ScanState.Running -> Running(state)
                 state is ScanState.Done -> Review(
-                    state, visits, home, onAdd,
+                    state, visits, home, onAdd, onPick,
                     onAgain = if (state.source == ScanSource.Takeout) pickZips else ask,
                 )
                 state is ScanState.Failed -> Message(
@@ -324,6 +328,7 @@ private fun Review(
     visits: Map<String, Visit>,
     home: String?,
     onAdd: (found: Map<String, PhotoEvidence>, mark: Set<String>) -> Unit,
+    onPick: (Map<String, Boolean>) -> Unit,
     onAgain: () -> Unit,
 ) {
     if (state.found.isEmpty()) {
@@ -344,16 +349,35 @@ private fun Review(
     }
     // Unmarked countries and Want to go ones can be ticked: photos from a place prove a visit.
     fun tickable(id: String) = visits[id]?.state?.counts != true
-    val picked = remember(state) {
-        mutableStateMapOf<String, Boolean>().apply { state.found.forEach { put(it.country.id, tickable(it.country.id)) } }
-    }
-    val newCount = state.found.count { tickable(it.country.id) && picked[it.country.id] == true }
+    // A country the user has not touched starts ticked. The ticks live in the scan's state,
+    // so leaving the review and coming back keeps them.
+    fun ticked(id: String) = tickable(id) && (state.picks[id] ?: true)
+    val open = state.found.map { it.country.id }.filter(::tickable)
+    val newCount = open.count(::ticked)
     Column(Modifier.fillMaxSize()) {
-        Text(
-            "Found ${countries(state.found.size)} in %,d photos with a location.".format(state.located),
-            modifier = Modifier.padding(horizontal = 16.dp),
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        Row(
+            // The end padding lines the box up with the row boxes under it.
+            Modifier.fillMaxWidth().padding(start = 16.dp, end = if (open.isEmpty()) 16.dp else 20.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "Found ${countries(state.found.size)} in %,d photos with a location.".format(state.located),
+                modifier = Modifier.weight(1f),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (open.isNotEmpty()) {
+                TriStateCheckbox(
+                    state = when (newCount) {
+                        0 -> ToggleableState.Off
+                        open.size -> ToggleableState.On
+                        else -> ToggleableState.Indeterminate
+                    },
+                    // All ticked clears them all; anything less ticks them all.
+                    onClick = { onPick(open.associateWith { newCount < open.size }) },
+                    modifier = Modifier.semantics { contentDescription = "All countries" },
+                )
+            }
+        }
         LazyColumn(
             Modifier.weight(1f),
             contentPadding = PaddingValues(16.dp),
@@ -370,16 +394,16 @@ private fun Review(
                 }
                 FoundRow(
                     f,
-                    checked = if (tickable(f.country.id)) picked[f.country.id] == true else null,
+                    checked = if (tickable(f.country.id)) ticked(f.country.id) else null,
                     note = note,
-                    onToggle = { picked[f.country.id] = !(picked[f.country.id] ?: false) },
+                    onToggle = { onPick(mapOf(f.country.id to !ticked(f.country.id))) },
                 )
             }
         }
         Button(
             onClick = {
                 // Dates go onto every found country that is or will be marked.
-                val mark = state.found.map { it.country.id }.filter { tickable(it) && picked[it] == true }.toSet()
+                val mark = open.filter(::ticked).toSet()
                 onAdd(state.found.associate { it.country.id to it.evidence }, mark)
             },
             modifier = Modifier.fillMaxWidth().padding(16.dp),
