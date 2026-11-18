@@ -21,6 +21,12 @@ class City(
 ) {
     /** [name] folded for search, worked out once when the list loads. */
     val key: String = Places.fold(name)
+
+    /**
+     * [ascii] in lower case, for search, worked out once instead of on every keystroke for
+     * every city. Most are the same text as [key] and share it.
+     */
+    internal val asciiKey: String = ascii.lowercase(Locale.ROOT).let { if (it == key) key else it }
 }
 
 /** A first-level region: a US state, a Japanese prefecture, a Danish region. */
@@ -97,7 +103,7 @@ class Places private constructor(
         val contains = ArrayList<City>()
         for (c in all) {
             val n = c.key
-            val a = c.ascii.lowercase(Locale.ROOT)
+            val a = c.asciiKey
             when {
                 n.startsWith(q) || a.startsWith(q) -> starts += c
                 n.contains(q) || a.contains(q) -> contains += c
@@ -118,7 +124,7 @@ class Places private constructor(
         val starts = ArrayList<City>()
         val contains = ArrayList<City>()
         for (c in all) {
-            val a = c.ascii.lowercase(Locale.ROOT)
+            val a = c.asciiKey
             when {
                 c.key.startsWith(q) || a.startsWith(q) -> if (starts.size < limit) starts += c
                 contains.size < limit && (c.key.contains(q) || a.contains(q)) -> contains += c
@@ -133,17 +139,32 @@ class Places private constructor(
             // 160,000 cities share a few thousand country and region codes, and most ASCII
             // names equal the real name, so share those strings instead of keeping copies.
             val codes = HashMap<String, String>()
-            val list = cities.lineSequence().mapNotNull { line ->
-                val p = line.split('\t')
-                if (p.size < 8) return@mapNotNull null
-                val lat = p[5].toDoubleOrNull() ?: return@mapNotNull null
-                val lon = p[6].toDoubleOrNull() ?: return@mapNotNull null
-                val ascii = if (p[2] == p[1]) p[1] else p[2]
-                City(
-                    p[0], p[1], ascii, codes.getOrPut(p[3]) { p[3] }, codes.getOrPut(p[4]) { p[4] },
-                    lat, lon, p[7].toIntOrNull() ?: 0,
+            val list = ArrayList<City>(170_000)
+            // Fields are cut out by hand: split() made a list and eight strings per line, for
+            // 160,000 lines, where only the names and the id are kept.
+            val tabs = IntArray(8)
+            while (true) {
+                val line = cities.readLine() ?: break
+                var n = 0
+                var at = line.indexOf('\t')
+                while (at >= 0 && n < tabs.size) { tabs[n++] = at; at = line.indexOf('\t', at + 1) }
+                if (n < 7) continue
+                val found = n
+                fun from(k: Int) = if (k == 0) 0 else tabs[k - 1] + 1
+                fun to(k: Int) = if (k < found) tabs[k] else line.length
+                fun field(k: Int) = line.substring(from(k), to(k))
+                val lat = decimal(line, from(5), to(5)) ?: continue
+                val lon = decimal(line, from(6), to(6)) ?: continue
+                val name = field(1)
+                val asciiLen = to(2) - from(2)
+                val ascii = if (asciiLen == name.length && line.regionMatches(from(2), name, 0, asciiLen)) name else field(2)
+                val country = field(3)
+                val admin1 = field(4)
+                list += City(
+                    field(0), name, ascii, codes.getOrPut(country) { country }, codes.getOrPut(admin1) { admin1 },
+                    lat, lon, field(7).toIntOrNull() ?: 0,
                 )
-            }.toList()
+            }
             val names = regions.lineSequence().mapNotNull { line ->
                 val p = line.split('\t')
                 if (p.size < 3) null else Region(p[0], p[1], p[2])
@@ -151,10 +172,42 @@ class Places private constructor(
             return Places(list.groupBy { it.country }, names)
         }
 
+        /**
+         * A plain decimal such as "42.5078" read in place, without cutting out a string. Up to 15
+         * digits is one exact long over an exact power of ten, which rounds the same as
+         * toDouble(); anything else goes to toDoubleOrNull().
+         */
+        internal fun decimal(s: String, from: Int, to: Int): Double? {
+            var i = from
+            val neg = i < to && s[i] == '-'
+            if (neg) i++
+            var mant = 0L
+            var digits = 0
+            var scale = 0
+            var point = false
+            while (i < to) {
+                val c = s[i++]
+                when {
+                    c in '0'..'9' -> { mant = mant * 10 + (c - '0'); digits++; if (point) scale++ }
+                    c == '.' && !point -> point = true
+                    else -> return s.substring(from, to).toDoubleOrNull()
+                }
+                if (digits > 15) return s.substring(from, to).toDoubleOrNull()
+            }
+            if (digits == 0) return s.substring(from, to).toDoubleOrNull()
+            val v = mant.toDouble() / POW10[scale]
+            return if (neg) -v else v
+        }
+
+        private val POW10 = DoubleArray(16).also { p -> p[0] = 1.0; for (k in 1 until p.size) p[k] = p[k - 1] * 10 }
+
         private val marks = Regex("\\p{M}+")
 
         /** Lower case with accents removed, so "malmo" finds Malmö. */
-        fun fold(s: String): String =
-            marks.replace(Normalizer.normalize(s, Normalizer.Form.NFD), "").lowercase(Locale.ROOT)
+        fun fold(s: String): String {
+            // Plain ASCII has no accents to take off: most names skip the normalizing.
+            for (c in s) if (c >= '\u0080') return marks.replace(Normalizer.normalize(s, Normalizer.Form.NFD), "").lowercase(Locale.ROOT)
+            return s.lowercase(Locale.ROOT)
+        }
     }
 }
