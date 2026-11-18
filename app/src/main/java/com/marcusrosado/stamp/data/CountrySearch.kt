@@ -19,7 +19,7 @@ object CountrySearch {
         "MKD" to listOf("macedonia"),
         "TUR" to listOf("turkiye"),
         "CPV" to listOf("cape verde", "cabo verde"),
-        "TLS" to listOf("east timor"),
+        "TLS" to listOf("timor-leste", "timor leste"),
         "COD" to listOf("drc", "dr congo", "congo kinshasa", "zaire"),
         "COG" to listOf("congo brazzaville"),
         "ARE" to listOf("uae", "emirates", "dubai"),

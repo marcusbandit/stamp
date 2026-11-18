@@ -54,10 +54,15 @@ import com.marcusrosado.stamp.data.Places.Companion.fold
  * continent. A count tapped anywhere in the app opens the list on what it counted.
  */
 @androidx.compose.runtime.Immutable
-data class ListFilter(val mark: String = ALL, val continent: String? = null) {
-    fun keeps(state: TravelState?, continent: String): Boolean =
+data class ListFilter(
+    val mark: String = ALL,
+    val continent: String? = null,
+    /** UN countries only, the way the passport's total counts them. */
+    val unOnly: Boolean = false,
+) {
+    fun keeps(state: TravelState?, continent: String, un: Boolean = true): Boolean =
         (mark == ALL || (mark == MARKED && state != null) || (mark == BEEN && state?.counts == true) || state?.name == mark) &&
-            (this.continent == null || this.continent == continent)
+            (this.continent == null || this.continent == continent) && (!unOnly || un)
 
     companion object {
         const val ALL = "all"
@@ -66,8 +71,8 @@ data class ListFilter(val mark: String = ALL, val continent: String? = null) {
         const val BEEN = "been"
         fun of(state: TravelState, continent: String? = null) = ListFilter(state.name, continent)
         val Saver = androidx.compose.runtime.saveable.Saver<ListFilter, String>(
-            save = { "${it.mark}|${it.continent.orEmpty()}" },
-            restore = { s -> s.split('|').let { ListFilter(it[0], it.getOrNull(1)?.ifEmpty { null }) } },
+            save = { "${it.mark}|${it.continent.orEmpty()}|${it.unOnly}" },
+            restore = { s -> s.split('|').let { ListFilter(it[0], it.getOrNull(1)?.ifEmpty { null }, it.getOrNull(2) == "true") } },
         )
     }
 }
@@ -82,10 +87,12 @@ fun CountryListScreen(
     onClose: () -> Unit,
     split: Boolean,
     start: ListFilter = ListFilter(),
+    /** Changes on every count tapped, so tapping the same one again starts the list over. */
+    opened: Long = 0L,
 ) {
     BackHandler(onBack = onClose)
     var query by rememberSaveable { mutableStateOf("") }
-    var filter by rememberSaveable(start, stateSaver = ListFilter.Saver) { mutableStateOf(start) }
+    var filter by rememberSaveable(start, opened, stateSaver = ListFilter.Saver) { mutableStateOf(start) }
     // Opened to search, the keyboard is up at once; opened on a count, the list is the point.
     val focus = remember { FocusRequester() }
     val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
@@ -109,11 +116,15 @@ fun CountryListScreen(
         all.map { it.continent }.distinct().sortedBy { order.indexOf(it).let { i -> if (i < 0) order.size else i } }
     }
     val shown = remember(keys, marks, q, filter) {
-        keys.filter { filter.keeps(marks[it.c.id], it.c.continent) && com.marcusrosado.stamp.data.CountrySearch.matches(it, q) }.map { it.c }
+        keys.filter { filter.keeps(marks[it.c.id], it.c.continent, it.c.un) && com.marcusrosado.stamp.data.CountrySearch.matches(it, q) }.map { it.c }
     }
     // Each mark's count within the continent picked, so the chips say what a tap will show.
-    val inContinent = remember(all, filter.continent) { all.filter { filter.continent == null || it.continent == filter.continent } }
-    fun count(mark: String) = inContinent.count { ListFilter(mark).keeps(marks[it.id], it.continent) }
+    val counts = remember(all, marks, filter.continent, filter.unOnly) {
+        val inView = all.filter { (filter.continent == null || it.continent == filter.continent) && (!filter.unOnly || it.un) }
+        listOf(ListFilter.ALL, ListFilter.BEEN).plus(TravelState.entries.map { it.name })
+            .associateWith { mark -> inView.count { ListFilter(mark).keeps(marks[it.id], it.continent) } }
+    }
+    fun count(mark: String) = counts[mark] ?: 0
 
     Box(Modifier.fillMaxSize().safeDrawingPadding(), contentAlignment = Alignment.TopCenter) {
         Column(Modifier.widthIn(max = 680.dp).fillMaxSize()) {
@@ -166,7 +177,7 @@ fun CountryListScreen(
                 items(marksShown, key = { it.first }) { (mark, label) ->
                     FilterChip(
                         selected = filter.mark == mark,
-                        onClick = { filter = filter.copy(mark = mark) },
+                        onClick = { filter = filter.copy(mark = mark, unOnly = filter.unOnly && mark == ListFilter.BEEN) },
                         label = { Text("$label ${count(mark)}") },
                     )
                 }

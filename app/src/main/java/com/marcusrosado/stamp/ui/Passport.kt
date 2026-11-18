@@ -75,6 +75,12 @@ fun PassportScreen(
         else atlas.mains.mapNotNull { c -> atlas.wholeVisit(c.id, visits)?.let { c to it } })
             .sortedWith(compareBy({ it.first.id != home }, { it.first.name }))
     }
+    // Each mark counted the way the map's legend and the country list count it: a country takes
+    // the strongest mark of it and its islands, so a tapped count and the list it opens agree.
+    val markCounts = remember(atlas, visits, split) {
+        val marks = if (split) visits.values.map { it.state } else atlas.mains.mapNotNull { atlas.markOf(it.id, visits, false) }
+        marks.groupingBy { it }.eachCount()
+    }
     // Newest first by year, undated last. The countries come before them, so however many
     // trips pile up, the countries stay a short scroll away.
     // Read on every pass, so an app left open over New Year moves the current stay along.
@@ -102,7 +108,7 @@ fun PassportScreen(
             item {
                 Panel {
                     Row(
-                        Modifier.clip(RoundedCornerShape(12.dp)).clickable(onClickLabel = "Show the countries you have been to") { onOpenList(ListFilter(ListFilter.BEEN)) },
+                        Modifier.clip(RoundedCornerShape(12.dp)).clickable(onClickLabel = "Show the countries you have been to") { onOpenList(ListFilter(ListFilter.BEEN, unOnly = true)) },
                         verticalAlignment = Alignment.Bottom,
                     ) {
                         Column(Modifier.weight(1f)) {
@@ -135,7 +141,7 @@ fun PassportScreen(
                                 Swatch(palette.of(s))
                                 Spacer(Modifier.width(6.dp))
                                 Text(
-                                    "${s.label} ${mine.count { it.second.state == s }}",
+                                    "${s.label} ${markCounts[s] ?: 0}",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )

@@ -32,6 +32,7 @@ class CountrySearchTest {
         assertTrue("USA" in find("us"))
         assertTrue("NLD" in find("Holland"))
         assertTrue("CZE" in find("Czechia"))
+        assertTrue("TLS" in find("Timor-Leste"))
         assertTrue("CIV" in find("Côte"))
         assertTrue("DNK" in find("dk"))
         assertTrue("ARE" in find("UAE"))
@@ -56,5 +57,8 @@ class CountrySearchTest {
         assertTrue(ListFilter.of(TravelState.Want).keeps(TravelState.Want, "Asia"))
         assertFalse(ListFilter(continent = "Europe").keeps(TravelState.Visited, "Asia"))
         assertTrue(ListFilter(ListFilter.ALL, "Asia").keeps(null, "Asia"))
+        // The passport's total counts UN countries only, and so does the list it opens.
+        assertFalse(ListFilter(ListFilter.BEEN, unOnly = true).keeps(TravelState.Visited, "North America", un = false))
+        assertTrue(ListFilter(ListFilter.BEEN, unOnly = true).keeps(TravelState.Visited, "Europe", un = true))
     }
 }

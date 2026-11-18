@@ -299,6 +299,7 @@ private fun App(
     var showList by rememberSaveable { mutableStateOf(false) }
     // What the country list opens on: everything, or what a tapped count counted.
     var listFilter by rememberSaveable(stateSaver = ListFilter.Saver) { mutableStateOf(ListFilter()) }
+    var listOpened by rememberSaveable { mutableStateOf(0L) }
     // A city search across every country: to fly to a city, or to start a trip there.
     var cityHunt by rememberSaveable { mutableStateOf<String?>(null) }
     var spot by rememberSaveable(stateSaver = SpotSaver) { mutableStateOf<Spot?>(null) }
@@ -491,7 +492,7 @@ private fun App(
                 onRemoveRegion = app.visits::removeRegion,
             ) },
             onOpenList = { listFilter = ListFilter(); showList = true },
-            onOpenListOf = { listFilter = it; showList = true },
+            onOpenListOf = { listFilter = it; listOpened = System.nanoTime(); showList = true },
             onFindCity = { cityHunt = "find" },
             onNewTrip = { cityHunt = "trip" },
             pendingTrip = pendingTrip,
@@ -675,6 +676,7 @@ private fun App(
                     onClose = { showList = false },
                     split = split,
                     start = listFilter,
+                    opened = listOpened,
                 )
             }
         }
