@@ -60,7 +60,8 @@ fun rememberHinge(): Hinge? {
             }
         }
     }
-    androidx.compose.runtime.DisposableEffect(activity) {
+    val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+    androidx.compose.runtime.DisposableEffect(activity, lifecycle) {
         val sm = activity.getSystemService(android.hardware.SensorManager::class.java)
         val sensor = sm?.getDefaultSensor(android.hardware.Sensor.TYPE_HINGE_ANGLE)
         val listener = object : android.hardware.SensorEventListener {
@@ -80,8 +81,26 @@ fun rememberHinge(): Hinge? {
             }
             override fun onAccuracyChanged(s: android.hardware.Sensor?, a: Int) {}
         }
-        if (sensor != null) sm.registerListener(listener, sensor, android.hardware.SensorManager.SENSOR_DELAY_UI)
-        onDispose { if (sensor != null) sm.unregisterListener(listener) }
+        // Only while the app shows: in the background nobody sees a bend, and the sensor kept
+        // waking the phone for every one. Started again, it reports the angle it is at.
+        var on = false
+        fun listen(yes: Boolean) {
+            if (sensor == null || yes == on) return
+            if (yes) on = sm.registerListener(listener, sensor, android.hardware.SensorManager.SENSOR_DELAY_UI)
+            else { sm.unregisterListener(listener); on = false }
+        }
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, e ->
+            when (e) {
+                androidx.lifecycle.Lifecycle.Event.ON_START -> listen(true)
+                androidx.lifecycle.Lifecycle.Event.ON_STOP -> listen(false)
+                else -> {}
+            }
+        }
+        lifecycle.addObserver(observer)
+        onDispose {
+            lifecycle.removeObserver(observer)
+            listen(false)
+        }
     }
     val bent = bentBySensor ?: seam?.second ?: false
     val (hinge, _) = seam ?: return null

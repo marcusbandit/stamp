@@ -574,9 +574,14 @@ private fun StampMap(
         else state.visits.values.flatMap { it.cities + it.wantCities }.distinct().mapNotNull { p.byId[it] }
             .map { CityDot(it.id, it.lat, it.lon, it.population, it.name) }
     }
+    // A scan adds places in batches, several a second: the heat map takes them about once a
+    // second, not laid out again for each batch.
+    val heatAt = remember { longArrayOf(0L) }
     val heat by androidx.compose.runtime.produceState(emptyList<com.marcusrosado.stamp.data.HeatCell>(), state.seen, state.heatMap) {
-        value = if (!state.heatMap || light) emptyList()
-        else kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { com.marcusrosado.stamp.data.Seen.cells(state.seen) }
+        if (!state.heatMap || light) { value = emptyList(); return@produceState }
+        if (value.isNotEmpty()) kotlinx.coroutines.delay(heatAt[0] + HEAT_EVERY_MS - android.os.SystemClock.uptimeMillis())
+        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { com.marcusrosado.stamp.data.Seen.cells(state.seen) }
+        heatAt[0] = android.os.SystemClock.uptimeMillis()
     }
     val wantCities = remember(state.visits, state.places) {
         state.visits.values.flatMap { v -> v.wantCities.mapNotNull { placeOf(it, v, state.places) } }.map { it.lat to it.lon }.distinct()
@@ -987,3 +992,6 @@ fun Split(
         ) { second() }
     }
 }
+
+/** The least time between two heat maps sent while places keep coming, in milliseconds. */
+private const val HEAT_EVERY_MS = 1_000L
