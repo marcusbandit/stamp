@@ -376,7 +376,9 @@ fun WorldMap(
         val missing = photos.filter { it.uri !in thumbs }.distinctBy { it.uri }
         kotlinx.coroutines.coroutineScope {
             missing.map { p ->
-                async {
+                // The decode moves to IO on its own, but async would bring it back to the main
+                // thread for the rounding, which drew every map photo there.
+                async(kotlinx.coroutines.Dispatchers.Default) {
                     com.marcusrosado.stamp.scan.Memories.thumbnail(context, android.net.Uri.parse(p.uri), p.video, px)?.let { p.uri to roundPhoto(it, px, ring) }
                 }
             }.awaitAll().filterNotNull().forEach { (u, b) -> thumbs[u] = b }
