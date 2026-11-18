@@ -443,7 +443,7 @@ fun CityDialog(
                 onDismiss()
             }) { Text("Done") }
         },
-        dismissButton = removeLabel?.let { { TextButton(onClick = { if (undoable) onRemove() else removing = true }) { Text(it, color = MaterialTheme.colorScheme.error) } } },
+        dismissButton = removeLabel?.let { { TextButton(onClick = { if (undoable) { onRemove(); onDismiss() } else removing = true }) { Text(it, color = MaterialTheme.colorScheme.error) } } },
     )
 }
 
