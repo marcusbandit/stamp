@@ -24,6 +24,7 @@ runs on the phone. Nothing is uploaded, and there is no account.
 | `data/Updates.kt`, `ui/UpdateUi.kt` | Asks GitHub for the latest release and installs it from inside the app |
 | `ui/Onboarding.kt` | First launch: what Stamp does, the photo scan, how to mark a country |
 | `ui/Layouts.kt` | Portrait, landscape and unfolded layouts for a book-style foldable |
+| `app/src/main/baseline-prof.txt` | Stamp's own code in the baseline profile, compiled at install even outside Play |
 
 ## Running it
 

@@ -8,7 +8,6 @@ import androidx.compose.material.icons.outlined.Map
 import androidx.compose.foundation.layout.BoxWithConstraints
 import android.Manifest
 import android.content.pm.PackageManager
-import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -1021,13 +1020,19 @@ private fun MemoryTile(m: Memory, onClick: () -> Unit) {
 @Composable
 fun MediaImage(uri: Uri, video: Boolean, px: Int, modifier: Modifier = Modifier, crop: Boolean = true) {
     val context = LocalContext.current
-    val bmp by produceState<Bitmap?>(null, uri, px) {
-        value = if (crop) Memories.thumbnail(context, uri, video, px) else Memories.picture(context, uri, px)
+    val key = Thumbs.key(uri.toString(), video, px, crop)
+    // A picture decoded before shows on this very frame, so scrolling back never flashes grey.
+    // A new picture starts grey rather than showing the last one until it decodes.
+    var bmp by remember(key) { mutableStateOf(Thumbs[key]) }
+    androidx.compose.runtime.LaunchedEffect(key) {
+        if (bmp != null) return@LaunchedEffect
+        val decoded = if (crop) Memories.thumbnail(context, uri, video, px) else Memories.picture(context, uri, px)
+        bmp = decoded?.asImageBitmap()?.also { Thumbs.put(key, it) }
     }
     Box(modifier.background(MaterialTheme.colorScheme.surfaceContainerHighest)) {
         bmp?.let {
             Image(
-                it.asImageBitmap(),
+                it,
                 contentDescription = null,
                 contentScale = if (crop) ContentScale.Crop else ContentScale.Fit,
                 modifier = Modifier.fillMaxSize(),
