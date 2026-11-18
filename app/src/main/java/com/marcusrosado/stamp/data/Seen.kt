@@ -102,6 +102,9 @@ class Seen(private val file: File) {
         replace((0 until a.length()).mapNotNull { parse(a.optString(it)) })
     }
 
+    /** Adds the points of a backup that are not here yet, keeping every point here. */
+    fun merge(a: JSONArray): Int = add((0 until a.length()).mapNotNull { parse(a.optString(it)) })
+
     private fun replace(list: List<SeenPoint>) {
         keys.clear()
         val kept = list.filter { keys.add(key(it)) }

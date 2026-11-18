@@ -1,6 +1,7 @@
 package com.marcusrosado.stamp.ui
 
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.outlined.Backup
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
@@ -52,12 +53,13 @@ private val Sample = mapOf(
     "NZL" to TravelState.Want, "KEN" to TravelState.Want, "ARG" to TravelState.Want,
 )
 
-private const val PAGES = 7
+private const val PAGES = 8
 
 /**
- * First launch. Seven short pages: what Stamp is for, picking a look, the home country, the
- * country the phone is in, the hourly heat map, finding countries in photos (what it gives,
- * then the ask), and how to mark a country by hand. Every step can be skipped.
+ * First launch. Eight short pages: what Stamp is for, picking a look, the home country, the
+ * country the phone is in, the hourly heat map, a folder for automatic backups, finding
+ * countries in photos (what it gives, then the ask), and how to mark a country by hand. Every
+ * step can be skipped. Backups come before the photos, since starting a scan ends the tour.
  *
  * [onDone] gets true when the user started a scan, so the scan flow opens.
  */
@@ -84,6 +86,10 @@ fun Onboarding(
     onHourly: (Boolean) -> Unit = {},
     /** The places already seen, so the heat map's page shows the user's own once there are some. */
     seen: List<com.marcusrosado.stamp.data.SeenPoint> = emptyList(),
+    /** The folder automatic backups go to, by name, or null while they are off. */
+    backupFolder: String? = null,
+    /** Turns automatic backups on into the folder the user picked. */
+    onBackupFolder: (android.net.Uri) -> Unit = {},
     /** Set when the introduction is seen again: a close button, and back from the first page leaves. */
     onClose: (() -> Unit)? = null,
 ) {
@@ -94,13 +100,17 @@ fun Onboarding(
     BackHandler(enabled = page == 0 && !picking && onClose != null) { onClose?.invoke() }
     val ask = rememberPhotoAccess(
         onGranted = { onStartScan(); onDone(true) },
-        onDenied = { page = 6 },
+        onDenied = { page = 7 },
     )
     // Where the phone is: asked once, and the introduction moves on whatever the answer.
     val askHere = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
     ) { granted -> onHere(granted); page = 4 }
     val askHourly = rememberHourlyAsk { granted -> onHourly(granted); page = 5 }
+    // A cancelled pick stays on the page, to choose again or skip.
+    val pickFolder = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocumentTree(),
+    ) { uri -> if (uri != null) { onBackupFolder(uri); page = 6 } }
     if (picking) {
         HomePicker(atlas, home, onPick = { onHome(it); picking = false }, onClose = { picking = false })
         return
@@ -196,6 +206,25 @@ fun Onboarding(
                             HeatPreview(atlas, seen, Modifier.clip(androidx.compose.foundation.shape.RoundedCornerShape(16.dp)))
                         }
                         5 -> Page(
+                            "Keep a copy of your map",
+                            "Once a week, and after you change something, Stamp saves your places to a folder " +
+                                "you pick. Settings, Backup turns it off.",
+                        ) {
+                            Panel {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    androidx.compose.material3.Icon(
+                                        androidx.compose.material.icons.Icons.Outlined.Backup, contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(32.dp),
+                                    )
+                                    Spacer(Modifier.width(16.dp))
+                                    Column {
+                                        Text("Backups go to", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        Text(backupFolder?.ifEmpty { null } ?: "No folder yet", style = MaterialTheme.typography.titleLarge)
+                                    }
+                                }
+                            }
+                        }
+                        6 -> Page(
                             "Your photos know where you have been",
                             "Stamp reads where your photos were taken and finds the countries, with the first and " +
                                 "last date you were in each. Everything is read right here on this phone, and " +
@@ -249,10 +278,17 @@ fun Onboarding(
                     else Button(onClick = askHourly, Modifier.fillMaxWidth()) { Text("Build my heat map") }
                     TextButton(onClick = { page = 5 }, Modifier.fillMaxWidth()) { Text("Skip for now") }
                 }
-                5 -> {
+                5 -> if (backupFolder == null) {
+                    Button(onClick = { pickFolder.launch(null) }, Modifier.fillMaxWidth()) { Text("Choose a folder") }
+                    TextButton(onClick = { page = 6 }, Modifier.fillMaxWidth()) { Text("Skip for now") }
+                } else {
+                    Button(onClick = { page = 6 }, Modifier.fillMaxWidth()) { Text("Continue") }
+                    TextButton(onClick = { pickFolder.launch(null) }, Modifier.fillMaxWidth()) { Text("Change") }
+                }
+                6 -> {
                     Button(onClick = ask, Modifier.fillMaxWidth()) { Text("Scan this phone") }
                     androidx.compose.material3.OutlinedButton(onClick = onTakeout, Modifier.fillMaxWidth()) { Text("Import from Google Photos") }
-                    TextButton(onClick = { page = 6 }, Modifier.fillMaxWidth()) { Text("Skip for now") }
+                    TextButton(onClick = { page = 7 }, Modifier.fillMaxWidth()) { Text("Skip for now") }
                 }
                 else -> Button(onClick = { onDone(false) }, Modifier.fillMaxWidth()) { Text("Start") }
             }

@@ -13,6 +13,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import org.maplibre.android.MapLibre
 import java.io.File
@@ -169,6 +170,16 @@ class StampApp : Application(), androidx.work.Configuration.Provider {
         return true
     }
 
+    /**
+     * Adds what a backup holds that the phone lacks, places seen included, and keeps all that is
+     * here. Null and nothing changed when it is no Stamp backup; otherwise how much came in.
+     */
+    fun mergeText(text: String): Int? {
+        val n = visits.merge(text) ?: return null
+        runCatching { org.json.JSONObject(text).optJSONArray("seen")?.let { seen.merge(it) } }
+        return n
+    }
+
     /** Whether a country's separate land masses, such as Corsica or Hawaii, are marked on their own. */
     val split by lazy { Toggle(FLAG_WHOLE) }
 
@@ -243,6 +254,83 @@ class StampApp : Application(), androidx.work.Configuration.Provider {
         scope.launch(lookWriter) { runCatching { java.io.File(filesDir, BACKUP_FILE).writeText("$at") } }
     }
 
+    /**
+     * When the last automatic backup went into the folder, epoch ms, 0 for never. Kept apart from
+     * [lastBackup], so a copy saved by hand somewhere else never stands in for the folder's.
+     */
+    val lastAutoBackup: kotlinx.coroutines.flow.MutableStateFlow<Long> by lazy {
+        kotlinx.coroutines.flow.MutableStateFlow(
+            runCatching { File(filesDir, AUTO_BACKUP_FILE).readText().trim().toLong() }.getOrDefault(0L),
+        )
+    }
+
+    /** An automatic backup was saved: on disk before returning, since a worker's process may end right after. */
+    suspend fun autoBackedUp(at: Long) {
+        lastBackup.value = at
+        lastAutoBackup.value = at
+        kotlinx.coroutines.withContext(lookWriter) {
+            runCatching { File(filesDir, BACKUP_FILE).writeText("$at") }
+            runCatching { File(filesDir, AUTO_BACKUP_FILE).writeText("$at") }
+        }
+    }
+
+    /**
+     * The folder automatic backups go to, or null while they are off. The tree's uri and its name
+     * are kept in a two-line file, so Settings can show the name without asking Android again.
+     */
+    val backupFolder: kotlinx.coroutines.flow.MutableStateFlow<com.marcusrosado.stamp.data.BackupFolder?> by lazy {
+        kotlinx.coroutines.flow.MutableStateFlow(
+            runCatching { File(filesDir, BACKUP_FOLDER_FILE).readLines() }.getOrNull()
+                ?.takeIf { it.isNotEmpty() && it[0].isNotBlank() }
+                ?.let { com.marcusrosado.stamp.data.BackupFolder(it[0].trim(), it.getOrNull(1)?.trim().orEmpty()) },
+        )
+    }
+
+    /**
+     * Turns automatic backups on into the folder [tree] the user just picked, or off with null.
+     * On holds on to Android's grant for the folder and saves a first backup right away; off
+     * hands the grant back and cancels what was to come.
+     */
+    fun setBackupFolder(tree: android.net.Uri?) {
+        val flags = android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+        val before = backupFolder.value
+        if (tree == null) {
+            backupFolder.value = null
+            com.marcusrosado.stamp.data.AutoBackup.schedule(this, false)
+            scope.launch(lookWriter) {
+                File(filesDir, BACKUP_FOLDER_FILE).delete()
+                before?.let { runCatching { contentResolver.releasePersistableUriPermission(android.net.Uri.parse(it.uri), flags) } }
+            }
+            return
+        }
+        // Without a lasting grant the folder is gone the next time the phone restarts.
+        if (runCatching { contentResolver.takePersistableUriPermission(tree, flags) }.isFailure) return
+        scope.launch(lookWriter) {
+            val name = com.marcusrosado.stamp.data.AutoBackup.nameOf(this@StampApp, tree) ?: tree.lastPathSegment?.substringAfterLast(':').orEmpty()
+            val folder = com.marcusrosado.stamp.data.BackupFolder(tree.toString(), name)
+            runCatching { File(filesDir, BACKUP_FOLDER_FILE).writeText("${folder.uri}\n${folder.name}\n") }
+            // A new folder replaces the old one, whose grant goes back.
+            if (before != null && before.uri != folder.uri) {
+                runCatching { contentResolver.releasePersistableUriPermission(android.net.Uri.parse(before.uri), flags) }
+            }
+            backupFolder.value = folder
+            com.marcusrosado.stamp.data.AutoBackup.schedule(this@StampApp, true)
+            com.marcusrosado.stamp.data.AutoBackup.now(this@StampApp)
+        }
+    }
+
+    /** When a backup after a change was last asked for, so a run of edits asks once. */
+    @Volatile private var backupAskedAt = 0L
+
+    /** After a change, a backup on its way once the last one is a day old. */
+    private fun changed() {
+        if (backupFolder.value == null) return
+        val now = System.currentTimeMillis()
+        if (now - lastAutoBackup.value < com.marcusrosado.stamp.data.AutoBackup.DAY_MS || now - backupAskedAt < 3_600_000L) return
+        backupAskedAt = now
+        com.marcusrosado.stamp.data.AutoBackup.afterChange(this)
+    }
+
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     private val lookWriter = Dispatchers.IO.limitedParallelism(1)
 
@@ -290,6 +378,11 @@ class StampApp : Application(), androidx.work.Configuration.Provider {
             listOf(split, mapPhotos, routes, followLines, fetchOutlines, here, heatMap, updateCheck)
             mapView.value
             lastBackup.value
+            // Like the hourly look: WorkManager starts only for a user who turned backups on.
+            if (backupFolder.value != null) {
+                lastAutoBackup.value
+                com.marcusrosado.stamp.data.AutoBackup.schedule(this@StampApp, true)
+            }
             // The schedule outlives the app, but a permission taken back in Android's settings
             // ends it. Turning the switch off cancels it then, so with the switch off there is
             // nothing to cancel, and WorkManager need not start at all.
@@ -328,6 +421,8 @@ class StampApp : Application(), androidx.work.Configuration.Provider {
         cityAreas.start()
         scope.launch(Dispatchers.IO) { cityOutlines.start() }
         scope.launch(Dispatchers.IO) { seen.load() }
+        // Every change after the marks are read may call for a backup.
+        scope.launch { visitsLoading.await().visits.drop(1).collect { changed() } }
         // Grants for photos of removed memories, visits or countries go back to Android.
         // Never while a file that could not be read is still set aside: an empty store would hand
         // every grant back, and restoring that file would then point at photos Stamp may no longer open.
@@ -361,5 +456,7 @@ class StampApp : Application(), androidx.work.Configuration.Provider {
         private const val MAP_VIEW_FILE = "map_view.txt"
         private const val RECENT_CITIES_FILE = "recent_cities.txt"
         private const val BACKUP_FILE = "last_backup.txt"
+        private const val BACKUP_FOLDER_FILE = "backup_folder.txt"
+        private const val AUTO_BACKUP_FILE = "last_auto_backup.txt"
     }
 }

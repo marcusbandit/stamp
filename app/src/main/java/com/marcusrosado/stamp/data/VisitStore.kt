@@ -1104,6 +1104,37 @@ class VisitStore(private val file: File) {
         flush()
         return true
     }
+
+    /**
+     * Adds what [text] holds that this phone does not, and changes nothing that is here: a place
+     * marked in the file and not on the phone comes in with its mark, and a trip whose id the
+     * phone lacks comes in with the pins it goes to. A place the phone has keeps its mark, its
+     * notes and its trips as they are; a pin the phone has keeps its spot. A trip in the file
+     * that says nothing beyond being there is left out where the phone already has a trip to
+     * that place, since all it says is said. Returns how many places and trips came in, or null
+     * and changes nothing when the text cannot be read.
+     */
+    @Synchronized
+    fun merge(text: String): Int? {
+        val read = runCatching { parse(text) }.getOrNull() ?: return null
+        val newMarks = read.marks.filterKeys { it !in marks }
+        val haveIds = trips.mapTo(HashSet()) { it.id }
+        val reached = trips.flatMapTo(HashSet()) { it.lands }
+        val newTrips = read.trips.filter { t ->
+            t.id !in haveIds && !(t.isBlank && t.lands.isNotEmpty() && t.lands.all { it in reached })
+        }
+        val used = newTrips.flatMapTo(HashSet()) { it.places + listOfNotNull(it.start, it.end) }
+        val newPins = read.pins.filterKeys { it in used && it !in pins }
+        if (newMarks.isEmpty() && newTrips.isEmpty() && newPins.isEmpty()) return 0
+        marks = marks + newMarks
+        trips = trips + newTrips
+        pins = pins + newPins
+        // A place coming back cancels what was waiting to be taken off it.
+        pendingDrops = pendingDrops.filterKeys { it !in newMarks }
+        save()
+        flush()
+        return newMarks.size + newTrips.size
+    }
 }
 
 /** The save file layout this app writes, and the newest it reads. */
