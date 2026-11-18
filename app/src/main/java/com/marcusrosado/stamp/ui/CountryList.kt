@@ -57,6 +57,7 @@ fun CountryListScreen(
     onClose: () -> Unit,
     split: Boolean,
 ) {
+    val undoable = LocalUndo.current != null
     BackHandler(onBack = onClose)
     var query by rememberSaveable { mutableStateOf("") }
     var mineOnly by rememberSaveable { mutableStateOf(false) }
@@ -122,7 +123,7 @@ fun CountryListScreen(
                                 val to = if (on) s else null
                                 // Whole, clearing a country clears its parts too, so their loss counts.
                                 val parts = if (split) emptyList() else atlas.partsOf(c.id).mapNotNull { visits[it.id] }
-                                val loss = lossOf(c.id, c.name, visits[c.id], to, parts)
+                                val loss = if (undoable) null else lossOf(c.id, c.name, visits[c.id], to, parts)
                                 if (loss != null) asking = Triple(c.id, to, loss) else onSet(c.id, to)
                             }) {
                                 Icon(

@@ -140,6 +140,7 @@ fun CountryDetail(
     /** Whether a trip's stop, or the trip itself with null, is in this country: its memories show here. */
     inCountry: InPlace = { _, _ -> true },
 ) {
+    val undoable = LocalUndo.current != null
     // A change of mark that would throw something away, waiting for the user to say yes.
     var asking by remember(country.id) { mutableStateOf<Pair<TravelState?, Loss>?>(null) }
     // The visit a city is being picked for.
@@ -193,8 +194,8 @@ fun CountryDetail(
             }
         }
         StateButtons(visit?.state, { s ->
-            // A change that drops visits, stars or other trips' stops asks first.
-            val loss = lossOf(country.id, country.name, visit, s, partVisits)
+            // A change that drops visits, stars or other trips' stops asks first, unless it can be undone.
+            val loss = if (undoable) null else lossOf(country.id, country.name, visit, s, partVisits)
             if (loss != null) asking = s to loss else onSet(s)
         })
         if (visit != null && visit.state.counts) {

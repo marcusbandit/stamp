@@ -717,7 +717,8 @@ private fun BackupPage(state: AppState) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var pending by remember { mutableStateOf<Pair<String, Int>?>(null) }
-    fun say(text: String) = Toast.makeText(context, text, Toast.LENGTH_SHORT).show()
+    val undo = LocalUndo.current
+    fun say(text: String) = undo?.say(text) ?: Toast.makeText(context, text, Toast.LENGTH_SHORT).show()
 
     val save = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         uri ?: return@rememberLauncherForActivityResult

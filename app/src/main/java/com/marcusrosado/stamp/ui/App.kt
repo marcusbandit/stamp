@@ -21,6 +21,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.marcusrosado.stamp.Posture
 import com.marcusrosado.stamp.StampApp
@@ -304,6 +305,7 @@ private fun App(
     var focus by remember { mutableStateOf<Focus?>(null) }
     var me by remember { mutableStateOf<Pair<Double, Double>?>(null) }
     val locating = androidx.compose.runtime.rememberCoroutineScope()
+    val undo = remember(app) { Undo(app.visits, locating) }
     val camera = remember { CameraSpot() }
     val visits by app.visits.visits.collectAsStateWithLifecycle()
     val home by app.visits.home.collectAsStateWithLifecycle()
@@ -416,6 +418,7 @@ private fun App(
         }
     }
 
+    androidx.compose.runtime.CompositionLocalProvider(LocalUndo provides undo) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val postureNow by rememberUpdatedState(postureFor(maxWidth.value.toInt(), maxHeight.value.toInt()))
         val state = AppState(
@@ -445,8 +448,16 @@ private fun App(
             },
             // Islands counted as part of their country: clearing the country clears its islands too.
             onSet = { id, s ->
-                if (s == null && !split) app.visits.clearAll(listOf(id) + atlas.partsOf(id).map { it.id })
-                else app.visits.set(id, s)
+                val name = atlas.byId[id]?.name ?: id
+                val was = app.visits.visits.value[id]?.state
+                when {
+                    s == null -> undo.run("$name cleared") {
+                        if (!split) app.visits.clearAll(listOf(id) + atlas.partsOf(id).map { it.id }) else app.visits.set(id, null)
+                    }
+                    // Want to go can take stops off trips; anything else only changes the colour.
+                    s == TravelState.Want && was != null && was != TravelState.Want -> undo.run("$name marked want to go") { app.visits.set(id, s) }
+                    else -> app.visits.set(id, s)
+                }
             },
             details = remember(app) { DetailActions(
                 onLoved = app.visits::setLoved,
@@ -454,7 +465,7 @@ private fun App(
                 onAddTrip = app.visits::addTrip,
                 onUpdateTrip = app.visits::updateTrip,
                 onRenameTrip = app.visits::renameTrip,
-                onRemoveTrip = app.visits::removeTrip,
+                onRemoveTrip = { a, b -> undo.run("Visit removed") { app.visits.removeTrip(a, b) } },
                 onAddCity = app.visits::addCity,
                 onAddPin = app.visits::addPin,
                 onRenamePin = app.visits::renamePin,
@@ -471,20 +482,20 @@ private fun App(
                 onTripStart = app.visits::setTripStart,
                 onAddDayPlace = app.visits::addDayPlace,
                 onAddDayPin = app.visits::addDayPin,
-                onRemoveDayPlace = app.visits::removeDayPlace,
+                onRemoveDayPlace = { a, b, c -> undo.run("Stop removed") { app.visits.removeDayPlace(a, b, c) } },
                 onSlept = app.visits::setSlept,
                 onTripEnd = app.visits::setTripEnd,
                 onAddMemories = app.visits::addMemories,
                 onUpdateMemory = app.visits::updateMemory,
-                onRemoveMemory = app.visits::removeMemory,
+                onRemoveMemory = { a, b -> undo.run("Memory removed") { app.visits.removeMemory(a, b) } },
                 onAddPlaceMemories = app.visits::addPlaceMemories,
                 onUpdatePlaceMemory = app.visits::updatePlaceMemory,
-                onRemovePlaceMemory = app.visits::removePlaceMemory,
-                onRemoveCity = app.visits::removeCity,
+                onRemovePlaceMemory = { a, b -> undo.run("Memory removed") { app.visits.removePlaceMemory(a, b) } },
+                onRemoveCity = { a, b -> undo.run("Place removed") { app.visits.removeCity(a, b) } },
                 onSplitRegions = app.visits::setSplitRegions,
                 onCityNote = app.visits::setCityNote,
                 onAddRegion = app.visits::addRegion,
-                onRemoveRegion = app.visits::removeRegion,
+                onRemoveRegion = { a, b -> undo.run("Region removed") { app.visits.removeRegion(a, b) } },
             ) },
             onOpenList = { showList = true },
             onFindCity = { cityHunt = "find" },
@@ -565,7 +576,7 @@ private fun App(
                 locating.launch {
                     val at = com.marcusrosado.stamp.data.Here.find(context, com.marcusrosado.stamp.data.Here.TWO_MINUTES)
                     if (at == null) {
-                        android.widget.Toast.makeText(context, "Can't tell where you are right now", android.widget.Toast.LENGTH_SHORT).show()
+                        undo.say("Can't tell where you are right now")
                         return@launch
                     }
                     me = at
@@ -680,7 +691,8 @@ private fun App(
                     home = home,
                     onStartDevice = { app.flags.set(FLAG_SCANNED, true); app.scanner.start() },
                     onAdd = { found, mark ->
-                        app.visits.addFromPhotos(found, mark)
+                        if (mark.isEmpty()) app.visits.addFromPhotos(found, mark)
+                        else undo.run(if (mark.size == 1) "1 country added" else "${mark.size} countries added") { app.visits.addFromPhotos(found, mark) }
                         app.scanner.cancel()
                         onScanOpen(false)
                         destination = Destination.Passport
@@ -692,6 +704,8 @@ private fun App(
                 )
             }
         }
+        UndoHost(undo, aboveBar = if (state.posture == Posture.Portrait) 80.dp else 0.dp)
+    }
     }
 }
 

@@ -251,6 +251,9 @@ fun VisitTimeline(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
     ) {
+        // The timeline is a window of its own, over the app's snackbar: it shows the same one.
+        val undo = LocalUndo.current
+        Box(Modifier.fillMaxSize()) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
           BoxWithConstraints(Modifier.fillMaxSize()) {
             val wide = maxWidth >= 600.dp
@@ -485,6 +488,8 @@ fun VisitTimeline(
                 timeline(Modifier.fillMaxSize())
             }
           }
+        }
+        undo?.let { UndoHost(it, aboveBar = 0.dp) }
         }
         if (naming) {
             NameDialog(
@@ -1150,6 +1155,7 @@ private fun BigChoice(icon: androidx.compose.ui.graphics.vector.ImageVector, lab
 /** A memory full size: the photo, a video's frame with a play button, and its note. */
 @Composable
 private fun MemoryViewer(memory: Memory, onSave: (Memory) -> Unit, onRemove: () -> Unit, onDismiss: () -> Unit) {
+    val undoable = LocalUndo.current != null
     val context = LocalContext.current
     var text by remember(memory.id) { mutableStateOf(memory.text) }
     var removing by remember(memory.id) { mutableStateOf(false) }
@@ -1203,7 +1209,7 @@ private fun MemoryViewer(memory: Memory, onSave: (Memory) -> Unit, onRemove: () 
                         placeholder = { Text(if (memory.media == null) "What happened here?" else "Add a note") },
                     )
                     Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(onClick = { removing = true }) { Icon(Icons.Filled.Delete, contentDescription = "Remove memory") }
+                        IconButton(onClick = { if (undoable) onRemove() else removing = true }) { Icon(Icons.Filled.Delete, contentDescription = "Remove memory") }
                         Spacer(Modifier.weight(1f))
                         TextButton(onClick = ::finish) { Text("Done") }
                     }
