@@ -139,7 +139,10 @@ fun WorldMap(
     LaunchedEffect(Unit) { fine = (context.applicationContext as StampApp).fineShapes.await() }
     // The map view below is built once; it reads these through the updated state.
     val outlineScope = androidx.compose.runtime.rememberCoroutineScope()
-    val outline by rememberUpdatedState(remember(atlas, split, fine) { Outline(atlas, split, fine, outlineScope) })
+    val outlineNow = remember(atlas, split, fine) { Outline(atlas, split, fine, outlineScope) }
+    // An outline replaced mid-read must not write its country over the new one's.
+    DisposableEffect(outlineNow) { onDispose { outlineNow.reset() } }
+    val outline by rememberUpdatedState(outlineNow)
     val selected by rememberUpdatedState(selectedId)
     val tapKey by rememberUpdatedState(if (split) "id" else "country")
     val routeTap by rememberUpdatedState(onRoute.takeIf { showRoutes })
@@ -969,7 +972,7 @@ private class Outline(
     private fun fineJson(id: String): String? {
         val shapes = fine ?: return null
         val c = atlas.byId[id] ?: return null
-        val features = idsOf(c).mapNotNull { shapes.feature(it) }
+        val features = shapes.features(idsOf(c))
         if (features.isEmpty()) return null
         return features.joinToString(",", "{\"type\":\"FeatureCollection\",\"features\":[", "]}")
     }

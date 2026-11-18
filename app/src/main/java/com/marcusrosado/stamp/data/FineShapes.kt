@@ -36,6 +36,36 @@ class FineShapes private constructor(private val open: () -> InputStream?, priva
         }.getOrNull()
     }
 
+    /**
+     * Several features in one read of the file, in file order, so a country with many parts
+     * does not inflate the compressed asset again from its start for each of them.
+     */
+    fun features(ids: List<String>): List<String> {
+        val wanted = ids.mapNotNull { id -> spans[id]?.let { id to it } }.sortedBy { it.second.first }
+        if (wanted.isEmpty()) return emptyList()
+        return runCatching {
+            open()?.use { input ->
+                var pos = 0L
+                wanted.mapNotNull { (_, span) ->
+                    var skip = span.first - pos
+                    while (skip > 0) {
+                        val n = input.skip(skip)
+                        if (n > 0) skip -= n else if (input.read() < 0) return@use null else skip--
+                    }
+                    val out = ByteArray(span.last - span.first + 1)
+                    var at = 0
+                    while (at < out.size) {
+                        val n = input.read(out, at, out.size - at)
+                        if (n < 0) return@use null
+                        at += n
+                    }
+                    pos = span.last + 1L
+                    String(out, Charsets.UTF_8)
+                }
+            }
+        }.getOrNull().orEmpty()
+    }
+
     companion object {
         val EMPTY = FineShapes({ null }, emptyMap())
 

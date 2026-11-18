@@ -224,8 +224,9 @@ class Atlas(val countries: List<Country>) {
             }
             @Suppress("UNCHECKED_CAST")
             val shapes = when (type) {
-                "Polygon" -> listOf(shape(coords as List<Ring>))
-                "MultiPolygon" -> (coords as List<List<Ring>>).map { shape(it) }
+                // An empty ring reads as an empty list, not a Ring: leave it out.
+                "Polygon" -> listOf(shape((coords as List<*>).filterIsInstance<Ring>()))
+                "MultiPolygon" -> (coords as List<*>).map { p -> shape((p as List<*>).filterIsInstance<Ring>()) }
                 else -> emptyList()
             }
             fun string(k: String): String = props[k] as? String ?: throw IllegalArgumentException("no $k")

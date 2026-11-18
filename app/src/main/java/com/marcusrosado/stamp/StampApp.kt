@@ -272,6 +272,8 @@ class StampApp : Application(), androidx.work.Configuration.Provider {
         // so composing it does not wait on the disk. The look is read on the main thread on
         // purpose, before the first frame.
         scope.launch(Dispatchers.IO) {
+            // Each of these is lazy and reads its file on first touch: touching them here is what
+            // moves those reads off the main thread. Do not remove as unused.
             listOf(split, mapPhotos, routes, followLines, fetchOutlines, here, heatMap, updateCheck)
             mapView.value
             lastBackup.value

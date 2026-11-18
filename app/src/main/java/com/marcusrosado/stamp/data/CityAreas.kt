@@ -104,7 +104,9 @@ class CityAreas private constructor(
         val EMPTY = CityAreas(ByteArray(0), LongArray(0))
 
         /** Decoded outlines kept for the cities asked for most recently, such as those on the map. */
-        private const val KEEP = 64
+        // Enough for every city a well-travelled user has logged: the map asks for all of them
+        // again on every edit, and an LRU smaller than that misses on every one.
+        private const val KEEP = 2048
 
         private fun zigzag(n: Long): Long = (n ushr 1) xor -(n and 1)
 
