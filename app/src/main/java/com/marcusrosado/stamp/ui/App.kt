@@ -436,13 +436,18 @@ private fun App(
             else -> app.visits.set(id, s)
         }
     }
-    // A long press marks the country under the finger, or clears it when it is marked, with undo.
+    // A long press marks the country under the finger visited, with undo; on one already been to
+    // it opens the card, so a still finger can never clear a country and all it holds. It reads the
+    // mark the map shows: with islands counted as part of their country, their strongest.
     val longPressMap: (String?) -> Unit = { id ->
         if (id != null) {
-            val was = app.visits.visits.value[id]?.state
+            val was = atlas.markOf(id, app.visits.visits.value, split)
             if (was == null || was == TravelState.Want) {
                 undo.run("${atlas.byId[id]?.name ?: id} marked visited") { app.visits.set(id, TravelState.Visited) }
-            } else setMark(id, null)
+            } else {
+                selectedId = id
+                spot = null
+            }
         }
     }
     // Tapping the tab that is open: the map fits every place marked, the passport goes to its top.
@@ -452,6 +457,9 @@ private fun App(
             Destination.Map -> {
                 selectedId = null
                 spot = null
+                pendingTrip = null
+                showList = false
+                cameFrom = null
                 focus = markedBox(atlas, app.visits.visits.value)?.let { b -> Focus((b[0] + b[2]) / 2, (b[1] + b[3]) / 2, 5.0, box = b) }
                     ?: Focus(20.0, 0.0, 0.0)
             }

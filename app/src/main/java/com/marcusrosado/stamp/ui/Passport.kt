@@ -82,7 +82,10 @@ fun PassportScreen(
     val years = remember(trips, thisYear) { tripYears(trips, thisYear) }
 
     val list = androidx.compose.foundation.lazy.rememberLazyListState()
-    LaunchedEffect(toTop) { if (toTop != 0L) list.animateScrollToItem(0) }
+    // Only a tap that came after this page was shown scrolls it: coming back to the page with an
+    // older tap still in the state must not.
+    val handled = androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableLongStateOf(toTop) }
+    LaunchedEffect(toTop) { if (toTop != handled.longValue) { handled.longValue = toTop; list.animateScrollToItem(0) } }
     Box(modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         LazyColumn(
             Modifier.widthIn(max = 680.dp).fillMaxSize(),

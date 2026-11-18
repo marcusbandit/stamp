@@ -308,9 +308,10 @@ fun PlaceCard(
 }
 
 /**
- * The area holding every place been to or lived in, as south, west, north and east, for the map
- * to fit; null with none marked. A country that spans the date line counts by its label point,
- * and marks spread over more than half the world fit the whole world.
+ * The area holding every place been to or lived in, or with none of those the places wanted, as
+ * south, west, north and east, for the map to fit; null with nothing marked. A country across the
+ * date line counts by its own longitudes turned to run on past 180 from its label, and marks
+ * spread over more than half the world fit the whole world.
  */
 fun markedBox(atlas: Atlas, visits: Map<String, Visit>): List<Double>? {
     val ids = visits.filter { it.value.state.counts }.keys.ifEmpty { visits.keys }
@@ -318,11 +319,19 @@ fun markedBox(atlas: Atlas, visits: Map<String, Visit>): List<Double>? {
     if (cs.isEmpty()) return null
     var s = 90.0; var w = 180.0; var n = -90.0; var e = -180.0
     for (c in cs) {
-        val wide = c.maxLon - c.minLon > 180
-        s = minOf(s, if (wide) c.labelLat - 8 else c.minLat)
-        n = maxOf(n, if (wide) c.labelLat + 8 else c.maxLat)
-        w = minOf(w, if (wide) c.labelLon - 12 else c.minLon)
-        e = maxOf(e, if (wide) c.labelLon + 12 else c.maxLon)
+        s = minOf(s, c.minLat)
+        n = maxOf(n, c.maxLat)
+        if (c.maxLon - c.minLon <= 180) {
+            w = minOf(w, c.minLon); e = maxOf(e, c.maxLon)
+        } else {
+            // Russia runs from 19 E to 169 W: seen from its label, that is 19 to 191.
+            var lo = Double.MAX_VALUE; var hi = -Double.MAX_VALUE
+            for (sh in c.shapes) for (x in sh.outer.xs) {
+                val u = if (x < c.labelLon - 180) x + 360 else if (x > c.labelLon + 180) x - 360 else x
+                lo = minOf(lo, u); hi = maxOf(hi, u)
+            }
+            w = minOf(w, lo); e = maxOf(e, hi)
+        }
     }
     if (e - w > 200) return listOf(-60.0, -180.0, 75.0, 180.0)
     return listOf(s.coerceAtLeast(-85.0), w.coerceAtLeast(-180.0), n.coerceAtMost(85.0), e.coerceAtMost(180.0))

@@ -160,6 +160,12 @@ fun CountryDetail(
     var dayPinning by remember(country.id) { mutableStateOf<Triple<String, String, String>?>(null) }
     // The visit open as a timeline.
     var timelineFor by remember(country.id) { mutableStateOf<String?>(null) }
+    // A copy just made, opened once it shows on the card: the store has it before this frame does.
+    var copyFor by remember(country.id) { mutableStateOf<String?>(null) }
+    LaunchedEffect(copyFor, visit) {
+        val id = copyFor ?: return@LaunchedEffect
+        if (visit?.trips?.any { it.id == id } == true) { timelineFor = id; copyFor = null }
+    }
     LaunchedEffect(openTrip, visit) {
         if (openTrip != null && visit?.trips?.any { it.id == openTrip } == true) {
             timelineFor = openTrip
@@ -318,7 +324,7 @@ fun CountryDetail(
                 onUpdateMemory = { actions.onUpdateMemory(tripId, it) },
                 onRemoveMemory = { actions.onRemoveMemory(tripId, it) },
                 onDuplicate = if (v.state == TravelState.Lived) null else {
-                    { actions.onDuplicateTrip(tripId)?.let { timelineFor = it } }
+                    { actions.onDuplicateTrip(tripId)?.let { copyFor = it } }
                 },
                 // A visited or lived country always keeps one trip.
                 onDelete = if (v.trips.size > 1 || !v.state.counts) {
