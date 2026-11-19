@@ -106,6 +106,23 @@ fun countriesInView(atlas: Atlas, viewport: DoubleArray?): List<String> {
 /** How close the map must be before every country in sight draws as its regions. */
 const val REGIONS_FROM_ZOOM = 3.0
 private const val MOST_IN_VIEW = 30
+private const val MOST_KEPT_IN_VIEW = MOST_IN_VIEW
+
+/**
+ * The countries drawn as regions as the map moves: those in sight [now], then those [kept] from
+ * before that have left it, most recently seen first, up to [most]. Every change sends the map
+ * every region again, so one panned out of sight and back costs nothing. Zoomed out, [now] is
+ * empty and so is this.
+ */
+fun keepInView(kept: List<String>, now: List<String>, most: Int = MOST_KEPT_IN_VIEW): List<String> {
+    if (now.isEmpty()) return emptyList()
+    val out = LinkedHashSet(now)
+    for (id in kept) {
+        if (out.size >= most) break
+        out += id
+    }
+    return out.toList()
+}
 
 /** What the map needs to draw countries as their regions, worked out together off the main thread. */
 class RegionView(

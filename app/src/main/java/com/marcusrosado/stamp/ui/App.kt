@@ -26,6 +26,8 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.scan
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.marcusrosado.stamp.Posture
 import com.marcusrosado.stamp.StampApp
@@ -383,6 +385,11 @@ private fun App(
         val inView = if (mapView == com.marcusrosado.stamp.data.MapView.Regions) {
             androidx.compose.runtime.snapshotFlow { viewport.value }
                 .map { countriesInView(atlas, it) }
+                // A country panned out of sight stays drawn a while, so panning back and forth
+                // sends the map no regions again; only a country coming into view does.
+                .scan(emptyList<String>()) { kept, now -> keepInView(kept, now) }
+                .drop(1)
+                .map { it.sorted() }
                 .distinctUntilChanged()
                 .flowOn(kotlinx.coroutines.Dispatchers.Default)
         } else kotlinx.coroutines.flow.flowOf(emptyList())
@@ -664,22 +671,26 @@ private fun App(
             // after a cold start with no network finds them still there.
             if (!followOn) { app.routePacks.clear(); return@LaunchedEffect }
             if (!follow) return@LaunchedEffect
-            val plain = Journey(visits, places, airports)
-            val codes = visits.values.filter { it.state == TravelState.Visited }.flatMap { v -> v.trips.map { it to v } }.distinctBy { it.first.id }
-                .flatMap { (t, v) ->
-                    t.legEnds.mapNotNull { (a, b) -> t.legBetween(a, b) }.flatMap { l ->
-                        // Stop k of the leg: its start, the end of each step, its end.
-                        fun stop(k: Int): Pair<Double, Double>? = when (k) {
-                            0 -> plain.endPoint(t, v, l.from)?.let { it.lat to it.lon }
-                            l.steps.size -> plain.endPoint(t, v, l.to)?.let { it.lat to it.lon }
-                            else -> l.steps[k - 1].to?.let { plain.stopPoint(it, v) }
+            // Every stop of every rail or road step looked up in the world's shapes: off the main
+            // thread, since it runs again after every change to any visit.
+            val codes = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                val plain = Journey(visits, places, airports)
+                visits.values.filter { it.state == TravelState.Visited }.flatMap { v -> v.trips.map { it to v } }.distinctBy { it.first.id }
+                    .flatMap { (t, v) ->
+                        t.legEnds.mapNotNull { (a, b) -> t.legBetween(a, b) }.flatMap { l ->
+                            // Stop k of the leg: its start, the end of each step, its end.
+                            fun stop(k: Int): Pair<Double, Double>? = when (k) {
+                                0 -> plain.endPoint(t, v, l.from)?.let { it.lat to it.lon }
+                                l.steps.size -> plain.endPoint(t, v, l.to)?.let { it.lat to it.lon }
+                                else -> l.steps[k - 1].to?.let { plain.stopPoint(it, v) }
+                            }
+                            l.steps.indices.filter { i -> l.steps[i].way?.let { com.marcusrosado.stamp.data.RouteNet.kindOf(it) } != null }
+                                .flatMap { i -> listOfNotNull(stop(i), stop(i + 1)) }
                         }
-                        l.steps.indices.filter { i -> l.steps[i].way?.let { com.marcusrosado.stamp.data.RouteNet.kindOf(it) } != null }
-                            .flatMap { i -> listOfNotNull(stop(i), stop(i + 1)) }
                     }
-                }
-                .mapNotNull { (lat, lon) -> atlas.locate(lat, lon)?.let { land -> land.alpha2.ifEmpty { null } ?: atlas.byId[land.country]?.alpha2?.ifEmpty { null } } }
-                .toSet()
+                    .mapNotNull { (lat, lon) -> atlas.locate(lat, lon)?.let { land -> land.alpha2.ifEmpty { null } ?: atlas.byId[land.country]?.alpha2?.ifEmpty { null } } }
+                    .toSet()
+            }
             if (codes.isNotEmpty()) app.routePacks.want(codes)
         }
         val journey = remember(visits, places, airports, lines, follow) { Journey(visits, places, airports, lines.takeIf { follow }) }

@@ -113,9 +113,14 @@ fun WorldMap(
     wantCities: List<Pair<Double, Double>> = emptyList(),
     /** A tapped region, as its country id and region id; null leaves taps to the countries. */
     onRegion: ((String, String) -> Unit)? = null,
-    /** Every city worth a dot, for the cities view: more of them as the map zooms in. */
-    allCities: List<CityDot> = emptyList(),
-    /** A tapped city of [allCities], by id; null leaves taps to the countries. */
+    /**
+     * Every city worth a dot, as GeoJSON text from [citiesJson], for the cities view: more of
+     * them as the map zooms in. Sent to the map once and kept there; they draw while [plain].
+     */
+    allCities: String? = null,
+    /** The cities on a visit or wanted, whatever their size, as [citiesJson] text, dotted from the start. */
+    myCities: String? = null,
+    /** A tapped city of [allCities] or [myCities], by id; null leaves taps to the countries. */
     onCity: ((String) -> Unit)? = null,
     /** The region picked, outlined as a picked country is. */
     selectedRegion: String? = null,
@@ -150,9 +155,11 @@ fun WorldMap(
     val outline by rememberUpdatedState(outlineNow)
     val selected by rememberUpdatedState(selectedId)
     val tapKey by rememberUpdatedState(if (split) "id" else "country")
-    val routeTap by rememberUpdatedState(onRoute.takeIf { showRoutes })
-    val regionTap by rememberUpdatedState(onRegion.takeIf { regionLayer != null })
-    val cityTap by rememberUpdatedState(onCity.takeIf { allCities.isNotEmpty() })
+    // Each tap asks the map what lies under the finger, on the main thread: only ask a layer
+    // that is drawn and has something in it.
+    val routeTap by rememberUpdatedState(onRoute.takeIf { showRoutes && routes.isNotEmpty() })
+    val regionTap by rememberUpdatedState(onRegion.takeIf { regionLayer?.shapes?.isNotEmpty() == true })
+    val cityTap by rememberUpdatedState(onCity.takeIf { plain && (allCities != null || myCities != null) })
     val viewport by rememberUpdatedState(onViewport)
     val longPress by rememberUpdatedState(onLongPress.takeIf { selectable })
 
@@ -472,19 +479,22 @@ fun WorldMap(
         val filter = Expression.`in`(Expression.get("country"), Expression.literal(complete.toTypedArray()))
         for (id in COMPLETE_LAYERS) s.getLayerAs<org.maplibre.android.style.layers.LineLayer>(id)?.setFilter(filter)
     }
+    // The 31,000 cities go to the map once per list and stay there, hidden outside the cities
+    // view: sending them again laid out the whole source again on every switch to the view.
+    // They come as one string, which MapLibre reads on its own thread, so a new look sends the
+    // same text to its new style.
     LaunchedEffect(style, allCities) {
         val s = style ?: return@LaunchedEffect
-        val json = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
-            FeatureCollection.fromFeatures(allCities.map { c ->
-                Feature.fromGeometry(Point.fromLngLat(c.lon, c.lat)).apply {
-                    addStringProperty("id", c.id)
-                    addNumberProperty("pop", c.population)
-                    addBooleanProperty("mine", c.mine)
-                    addStringProperty("name", c.name)
-                }
-            })
-        }
-        s.getSourceAs<GeoJsonSource>(SOURCE_ALL_CITIES)?.setGeoJson(json)
+        s.getSourceAs<GeoJsonSource>(SOURCE_ALL_CITIES)?.setGeoJson(allCities ?: return@LaunchedEffect)
+    }
+    LaunchedEffect(style, myCities) {
+        val s = style ?: return@LaunchedEffect
+        s.getSourceAs<GeoJsonSource>(SOURCE_MY_CITIES)?.setGeoJson(myCities ?: EMPTY_DATA)
+    }
+    LaunchedEffect(style, plain) {
+        val s = style ?: return@LaunchedEffect
+        val v = if (plain) org.maplibre.android.style.layers.Property.VISIBLE else org.maplibre.android.style.layers.Property.NONE
+        for (id in ALL_CITY_LAYERS + CITY_LABEL_LAYERS) s.getLayer(id)?.setProperties(PropertyFactory.visibility(v))
     }
     // In the cities view the cities been to carry the visited colour and stand out.
     LaunchedEffect(style, plain, palette) {
@@ -724,46 +734,97 @@ private const val SOURCE_WANT_CITIES = "want-cities"
 private const val LAYER_REGIONS = "regions-fill"
 private val COMPLETE_LAYERS = listOf("complete-glow", "complete-line", "complete-glow-fine", "complete-line-fine")
 private const val SOURCE_ALL_CITIES = "all-cities"
+private const val SOURCE_MY_CITIES = "my-cities"
 private const val SOURCE_SPOT = "spot"
 private const val SOURCE_SPOT_AREA = "spot-area"
 private const val SOURCE_HEAT = "heat"
 
-/** A city as the cities view draws it: a dot, more of them as the map zooms in. */
-class CityDot(val id: String, val lat: Double, val lon: Double, val population: Int, val mine: Boolean, val name: String = "")
+/** The smallest city the cities view dots unless it is on a visit or wanted. */
+internal const val CITY_DOT_FLOOR = 15_000
+
+/**
+ * [cities] as a GeoJSON FeatureCollection of points with their id, population and name, the way
+ * the cities view draws them. Written straight to text: 31,000 cities held as one string cost a
+ * fraction of what a list of them plus their built features did.
+ */
+internal fun citiesJson(cities: Collection<com.marcusrosado.stamp.data.City>): String {
+    val b = StringBuilder(64 + cities.size * 96)
+    b.append("{\"type\":\"FeatureCollection\",\"features\":[")
+    var first = true
+    for (c in cities) {
+        if (!first) b.append(',')
+        first = false
+        b.append("{\"type\":\"Feature\",\"geometry\":{\"type\":\"Point\",\"coordinates\":[")
+            .append(c.lon).append(',').append(c.lat).append("]},\"properties\":{\"id\":")
+        jsonString(b, c.id)
+        b.append(",\"pop\":").append(c.population).append(",\"name\":")
+        jsonString(b, c.name)
+        b.append("}}")
+    }
+    return b.append("]}").toString()
+}
+
+/** [s] as a JSON string, quoted and escaped. */
+private fun jsonString(b: StringBuilder, s: String) {
+    b.append('"')
+    for (ch in s) {
+        when {
+            ch == '"' -> b.append("\\\"")
+            ch == '\\' -> b.append("\\\\")
+            ch < ' ' -> b.append("\\u").append(String.format(java.util.Locale.ROOT, "%04x", ch.code))
+            else -> b.append(ch)
+        }
+    }
+    b.append('"')
+}
 
 // Bigger cities first: a dot for every city over a million from the start, smaller ones as the
-// map zooms in. A city on a visit or wanted shows from the start whatever its size.
+// map zooms in. A city on a visit or wanted shows from the start whatever its size, from its
+// own small source; where it is big enough to be in the other one too, the visited and wanted
+// dots drawn over both hide the second dot.
 private val CITY_STEPS = listOf(0.0 to 1_000_000, 3.0 to 250_000, 4.5 to 80_000, 6.0 to 0)
-private val ALL_CITY_LAYERS = CITY_STEPS.indices.map { "all-cities-$it" }.toTypedArray()
+private const val LAYER_MY_CITIES = "my-city-dots"
+private val ALL_CITY_LAYERS = (CITY_STEPS.indices.map { "all-cities-$it" } + LAYER_MY_CITIES).toTypedArray()
 
-private fun allCityLayersJson(p: MapPalette) = CITY_STEPS.mapIndexed { i, (zoom, least) ->
-    val most = CITY_STEPS.getOrNull(i - 1)?.second
-    val filter = when {
-        i == 0 -> """["any", ["==", ["get", "mine"], true], [">=", ["get", "pop"], $least]]"""
-        else -> """["all", ["!=", ["get", "mine"], true], [">=", ["get", "pop"], $least], ["<", ["get", "pop"], $most]]"""
-    }
-    """    { "id": "all-cities-$i", "type": "circle", "source": "$SOURCE_ALL_CITIES", "minzoom": $zoom, "filter": $filter,
+private fun cityDotJson(id: String, source: String, zoom: Double, filter: String?, p: MapPalette) =
+    """    { "id": "$id", "type": "circle", "source": "$source", "minzoom": $zoom,${filter?.let { " \"filter\": $it," }.orEmpty()}
+      "layout": { "visibility": "none" },
       "paint": { "circle-radius": ["interpolate", ["linear"], ["zoom"], 1, 1.8, 6, 3.2, 9, 4.5],
                  "circle-color": "${hex(p.selected)}", "circle-opacity": 0.55,
                  "circle-stroke-color": "${hex(p.ocean)}", "circle-stroke-width": 0.6 } }"""
-}.joinToString(",\n")
+
+private fun allCityLayersJson(p: MapPalette) = (CITY_STEPS.mapIndexed { i, (zoom, least) ->
+    val most = CITY_STEPS.getOrNull(i - 1)?.second
+    val filter = if (most == null) """[">=", ["get", "pop"], $least]"""
+    else """["all", [">=", ["get", "pop"], $least], ["<", ["get", "pop"], $most]]"""
+    cityDotJson("all-cities-$i", SOURCE_ALL_CITIES, zoom, filter, p)
+} + cityDotJson(LAYER_MY_CITIES, SOURCE_MY_CITIES, 0.0, null, p)).joinToString(",\n")
 
 // City names in the cities view, by size the way the dots are: the biggest first, smaller ones as
 // the map zooms in. Bigger cities sit higher in the stack, so where two names would collide the
 // bigger one is placed and the smaller one waits for more room.
-// The last step has no floor, so a small town the user logged gets its name too.
 private val LABEL_STEPS = listOf(2.5 to 2_000_000, 3.8 to 600_000, 5.0 to 200_000, 6.3 to 60_000, 7.6 to 0)
+
+// The towns too small for the big source take their names from the user's own, at the last
+// step, placed last so any bigger name wins the room.
+private const val LAYER_MY_CITY_LABELS = "my-city-labels"
+private val CITY_LABEL_LAYERS = LABEL_STEPS.indices.map { "city-labels-$it" } + LAYER_MY_CITY_LABELS
 
 private fun cityLabelLayersJson(p: MapPalette): String {
     val ink = if (p.land.luminance() < 0.5f) "#F1F1EE" else "#1D1D1B"
-    return LABEL_STEPS.indices.reversed().joinToString(",\n") { i ->
-        val (zoom, least) = LABEL_STEPS[i]
+    val small = LABEL_STEPS.lastIndex to """["<", ["get", "pop"], $CITY_DOT_FLOOR]"""
+    return (listOf(Triple(LAYER_MY_CITY_LABELS, SOURCE_MY_CITIES, small)) + LABEL_STEPS.indices.reversed().map { i ->
+        val least = LABEL_STEPS[i].second
         val most = LABEL_STEPS.getOrNull(i - 1)?.second
         val filter = if (most == null) """[">=", ["get", "pop"], $least]"""
         else """["all", [">=", ["get", "pop"], $least], ["<", ["get", "pop"], $most]]"""
+        Triple("city-labels-$i", SOURCE_ALL_CITIES, i to filter)
+    }).joinToString(",\n") { (id, source, step) ->
+        val (i, filter) = step
+        val zoom = LABEL_STEPS[i].first
         val size = 13.5 - i * 0.8
-        """    { "id": "city-labels-$i", "type": "symbol", "source": "$SOURCE_ALL_CITIES", "minzoom": $zoom, "filter": $filter,
-      "layout": { "text-field": ["get", "name"], "text-font": ["NotoSansMedium"],
+        """    { "id": "$id", "type": "symbol", "source": "$source", "minzoom": $zoom, "filter": $filter,
+      "layout": { "visibility": "none", "text-field": ["get", "name"], "text-font": ["NotoSansMedium"],
                   "text-size": ["interpolate", ["linear"], ["zoom"], $zoom, $size, ${zoom + 4}, ${size + 3}],
                   "text-anchor": "top", "text-offset": [0, 0.55], "text-max-width": 8,
                   "text-padding": 3, "symbol-sort-key": ["-", 0, ["get", "pop"]] },
@@ -882,6 +943,7 @@ private fun styleJson(p: MapPalette, fineLater: Boolean) = """
     "$SOURCE_REGIONS": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
     "$SOURCE_WANT_CITIES": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
     "$SOURCE_ALL_CITIES": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
+    "$SOURCE_MY_CITIES": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
     "$SOURCE_SPOT": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
     "$SOURCE_SPOT_AREA": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
     "$SOURCE_HEAT": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } }
@@ -984,18 +1046,17 @@ private class Outline(
     private val fine: FineShapes?,
     private val scope: kotlinx.coroutines.CoroutineScope,
 ) {
-    // The last few countries' outlines, so tapping between them builds nothing again. A
-    // session can tap hundreds, and these never shrank before.
-    private val cache = object : LinkedHashMap<String, Feature>(16, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Feature>?) = size > KEEP_OUTLINES
-    }
-
-    // The 1:10m text of the last few, bounded by size: a big country is megabytes, and a
-    // double tap puts the one before straight back.
-    private val fineCache = LinkedHashMap<String, String>(8, 0.75f, true)
-    private var fineChars = 0
+    // The last few countries' outlines as text, so tapping between them builds nothing again,
+    // and a double tap puts the one before straight back. Bounded by size: a big country's 1:10m
+    // outline is megabytes.
+    private val coarseCache = TextCache(KEEP_COARSE_CHARS)
+    private val fineCache = TextCache(KEEP_FINE_CHARS)
+    // Big outlines being written off the main thread. One is never stopped by the next tap: it
+    // lands in the cache, so tapping back to it does not write it out again.
+    private val writing = HashSet<String>()
     private var fineJob: kotlinx.coroutines.Job? = null
     private var shown: String? = null
+    private var style: Style? = null
 
     /** A new style starts with empty sources. */
     fun reset() {
@@ -1006,9 +1067,32 @@ private class Outline(
     fun show(style: Style, id: String?) {
         if (id == shown) return
         shown = id
+        this.style = style
         val src = style.getSourceAs<GeoJsonSource>(SOURCE_SELECTED) ?: return
-        val f = id?.let { cache[it] ?: feature(it)?.also { built -> cache[it] = built } }
-        if (f == null) src.setGeoJson(FeatureCollection.fromFeatures(emptyList())) else src.setGeoJson(f)
+        val shapes = id?.let { shapesOf(it) }.orEmpty()
+        val keptCoarse = id?.let { coarseCache[it] }
+        when {
+            id == null || shapes.isEmpty() -> src.setGeoJson(EMPTY_DATA)
+            keptCoarse != null -> src.setGeoJson(keptCoarse)
+            // A small country is written out on the spot and shows on the next frame. Canada or
+            // Russia is tens of thousands of points: written off the main thread, the tap never
+            // waits on it, and nothing of the country before lingers meanwhile.
+            pointsIn(shapes) <= OUTLINE_NOW_POINTS -> outlineJson(shapes).let { coarseCache.put(id, it); src.setGeoJson(it) }
+            else -> {
+                src.setGeoJson(EMPTY_DATA)
+                if (writing.add(id)) scope.launch {
+                    val json = try {
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { outlineJson(shapes) }
+                    } finally {
+                        writing.remove(id)
+                    }
+                    coarseCache.put(id, json)
+                    if (shown != id) return@launch
+                    // The style it was tapped on may have been replaced meanwhile: the latest one.
+                    runCatching { this@Outline.style?.getSourceAs<GeoJsonSource>(SOURCE_SELECTED)?.setGeoJson(json) }
+                }
+            }
+        }
         val fineSrc = style.getSourceAs<GeoJsonSource>(SOURCE_SELECTED_FINE) ?: return
         fineJob?.cancel()
         val kept = id?.let { fineCache[it] }
@@ -1020,23 +1104,10 @@ private class Outline(
         // reading the file up to it.
         fineJob = scope.launch {
             val json = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { fineJson(id) } ?: return@launch
-            keep(id, json)
+            fineCache.put(id, json)
             if (shown != id) return@launch
             // The style may have been replaced while the file was read.
             runCatching { style.getSourceAs<GeoJsonSource>(SOURCE_SELECTED_FINE)?.setGeoJson(json) }
-        }
-    }
-
-    private fun keep(id: String, json: String) {
-        fineCache.remove(id)?.let { fineChars -= it.length }
-        fineCache[id] = json
-        fineChars += json.length
-        val it = fineCache.entries.iterator()
-        while (fineChars > KEEP_FINE_CHARS && fineCache.size > 1) {
-            val e = it.next()
-            if (e.key == id) continue
-            fineChars -= e.value.length
-            it.remove()
         }
     }
 
@@ -1052,21 +1123,78 @@ private class Outline(
         return features.joinToString(",", "{\"type\":\"FeatureCollection\",\"features\":[", "]}")
     }
 
-    private fun feature(id: String): Feature? {
-        val c = atlas.byId[id] ?: return null
-        val shapes = idsOf(c).flatMap { atlas.byId[it]?.shapes.orEmpty() }
-        val polygons = shapes.map { s ->
-            (listOf(s.outer) + s.holes).map { r -> r.xs.indices.map { i -> Point.fromLngLat(r.xs[i], r.ys[i]) } }
-        }
-        return Feature.fromGeometry(MultiPolygon.fromLngLats(polygons))
+    /** The 1:50m shapes an outline of [id] draws: a lookup, nothing built. */
+    private fun shapesOf(id: String): List<Shape> {
+        val c = atlas.byId[id] ?: return emptyList()
+        return idsOf(c).flatMap { atlas.byId[it]?.shapes.orEmpty() }
     }
 }
 
-/** How many countries' outlines [Outline] keeps built. */
-private const val KEEP_OUTLINES = 16
-
-/** About how much 1:10m outline text [Outline] keeps, in characters. */
+/**
+ * About how much 1:50m and 1:10m outline text [Outline] keeps, in characters. Canada's 1:50m
+ * outline is close to half a million, so going back and forth between the biggest few keeps them.
+ */
+private const val KEEP_COARSE_CHARS = 2_500_000
 private const val KEEP_FINE_CHARS = 2_000_000
+
+/** Up to how many points a tapped country's 1:50m outline is written on the main thread. */
+private const val OUTLINE_NOW_POINTS = 5_000
+
+internal fun pointsIn(shapes: List<Shape>): Int = shapes.sumOf { s -> s.outer.xs.size + s.holes.sumOf { it.xs.size } }
+
+/**
+ * [shapes] as one GeoJSON MultiPolygon feature, written straight to text. MapLibre reads text
+ * on a thread of its own, where a Feature built from boxed points cost an object per number
+ * on the main thread first.
+ */
+internal fun outlineJson(shapes: List<Shape>): String {
+    val b = StringBuilder(32 + pointsIn(shapes) * 40)
+    b.append("{\"type\":\"Feature\",\"properties\":{},\"geometry\":{\"type\":\"MultiPolygon\",\"coordinates\":[")
+    shapes.forEachIndexed { k, s ->
+        if (k > 0) b.append(',')
+        b.append('[')
+        (listOf(s.outer) + s.holes).forEachIndexed { j, r ->
+            if (j > 0) b.append(',')
+            b.append('[')
+            for (i in r.xs.indices) {
+                if (i > 0) b.append(',')
+                b.append('[').append(r.xs[i]).append(',').append(r.ys[i]).append(']')
+            }
+            b.append(']')
+        }
+        b.append(']')
+    }
+    return b.append("]}}").toString()
+}
+
+/**
+ * Text kept by key, dropping the least recently used once the total passes [most] characters.
+ * The one put last always stays, however long it is.
+ */
+internal class TextCache(private val most: Int) {
+    private val map = LinkedHashMap<String, String>(16, 0.75f, true)
+
+    /** The characters held. */
+    var chars = 0
+        private set
+
+    val keys: Set<String> get() = map.keys
+
+    operator fun get(key: String): String? = map[key]
+
+    fun put(key: String, text: String) {
+        map.remove(key)?.let { chars -= it.length }
+        map[key] = text
+        chars += text.length
+        val it = map.entries.iterator()
+        while (chars > most && map.size > 1 && it.hasNext()) {
+            val e = it.next()
+            if (e.key == key) continue
+            chars -= e.value.length
+            it.remove()
+        }
+    }
+}
 
 /**
  * The trips on the line nearest a tap at [x], [y] within 10 dp, and on any line just as near,
