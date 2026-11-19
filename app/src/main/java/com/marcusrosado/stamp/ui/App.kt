@@ -199,7 +199,7 @@ class AppState(
 
 /** Waits for the country data, then shows onboarding once and the app after that. */
 @Composable
-fun Root(app: StampApp) {
+fun Root(app: StampApp, launches: kotlinx.coroutines.flow.MutableStateFlow<com.marcusrosado.stamp.Launch?> = kotlinx.coroutines.flow.MutableStateFlow(null)) {
     val atlas by produceState<Atlas?>(null) { value = app.atlas.await() }
     var onboarded by rememberSaveable { mutableStateOf(app.flags.get(FLAG_ONBOARDED)) }
     var scanOpen by rememberSaveable { mutableStateOf(false) }
@@ -247,6 +247,10 @@ fun Root(app: StampApp) {
                 scanTakeout = scanTakeout,
                 onScanTakeout = { scanTakeout = it },
                 onIntro = { replaying = true },
+                launches = launches,
+                // A shortcut or a shared photo while the introduction is open again: the
+                // introduction steps aside for what was asked.
+                onLaunch = { replaying = false },
             )
             if (!replaying) UnreadableSave(app)
             if (!replaying) UpdatePrompt(app)
@@ -292,6 +296,8 @@ private fun App(
     onIntro: () -> Unit,
     scanTakeout: Boolean = false,
     onScanTakeout: (Boolean) -> Unit = {},
+    launches: kotlinx.coroutines.flow.MutableStateFlow<com.marcusrosado.stamp.Launch?> = kotlinx.coroutines.flow.MutableStateFlow(null),
+    onLaunch: () -> Unit = {},
 ) {
     var destination by rememberSaveable { mutableStateOf(Destination.Map) }
     // The tab a jump came from, such as "show on map" from Settings, so back returns there.
@@ -359,6 +365,9 @@ private fun App(
     // yet (a home stays lived, a wish becomes a visit), and open the map over it.
     val context = androidx.compose.ui.platform.LocalContext.current
     var located by rememberSaveable { mutableStateOf(false) }
+    // A geo link or a shared photo already put the map somewhere: the phone's own country must
+    // not pull it away from there a moment later.
+    var spotFromOutside by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(here) {
         if (!here || located) return@LaunchedEffect
         val (lat, lon) = com.marcusrosado.stamp.data.Here.find(context) ?: return@LaunchedEffect
@@ -370,6 +379,8 @@ private fun App(
         if (now == null || now == TravelState.Want) {
             app.visits.set(markId, TravelState.Visited)
         }
+        val waiting = launches.value
+        if (spotFromOutside || waiting is com.marcusrosado.stamp.Launch.Place || waiting is com.marcusrosado.stamp.Launch.Photo) return@LaunchedEffect
         focus = Focus(country.labelLat, country.labelLon, HERE_ZOOM)
     }
     val lookId by app.look.collectAsStateWithLifecycle()
@@ -498,6 +509,74 @@ private fun App(
             else -> toTop = System.nanoTime()
         }
     }
+    // Finds where the phone is now and flies the map there, with a dot on the spot.
+    val locate: () -> Unit = {
+        locating.launch {
+            val at = com.marcusrosado.stamp.data.Here.find(context, com.marcusrosado.stamp.data.Here.TWO_MINUTES)
+            if (at == null) {
+                undo.say("Can't tell where you are right now")
+                return@launch
+            }
+            me = at
+            jumpToMap()
+            focus = Focus(at.first, at.second, HOME_ZOOM)
+        }
+    }
+    val askLocation = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
+    ) { granted -> if (granted) locate() else undo.say("Stamp needs location access to find you") }
+    // The card a land mass shows: its own when islands are marked apart, else its country's.
+    fun cardOf(land: Country): String = if (app.split.on.value) land.id else atlas.countryOf(land.id)
+    // The map over a spot from outside the app, with the card of the country it is in. Back
+    // from there leaves the app, as from any plain launch: nothing in the app was left for it.
+    fun showSpot(land: Country?, f: Focus) {
+        spotFromOutside = true
+        showList = false
+        cityHunt = null
+        destination = Destination.Map
+        cameFrom = null
+        spot = null
+        pendingTrip = null
+        selectedId = land?.let { cardOf(it) }
+        focus = f
+        if (land == null) undo.say("That spot isn't in any country")
+    }
+    val onScanOpenNow by rememberUpdatedState(onScanOpen)
+    val onLaunchNow by rememberUpdatedState(onLaunch)
+    // A shortcut, a shared photo or a place link, done once the app shows, then forgotten.
+    LaunchedEffect(launches) {
+        launches.collect { l ->
+            l ?: return@collect
+            launches.value = null
+            onLaunchNow()
+            when (l) {
+                com.marcusrosado.stamp.Launch.NewTrip -> { showList = false; destination = Destination.Map; cityHunt = "trip" }
+                com.marcusrosado.stamp.Launch.FindCity -> { showList = false; destination = Destination.Map; cityHunt = "find" }
+                // As the scan button does: a running scan's progress, a finished one's review,
+                // or the choice of where to look.
+                com.marcusrosado.stamp.Launch.Scan -> onScanOpenNow(true)
+                com.marcusrosado.stamp.Launch.Here ->
+                    if (com.marcusrosado.stamp.data.Here.granted(context)) locate()
+                    else askLocation.launch(com.marcusrosado.stamp.data.Here.PERMISSION)
+                is com.marcusrosado.stamp.Launch.Photo -> {
+                    // Read on the phone, while the share's grant lasts; the photo is not kept.
+                    val at = withContext(Dispatchers.IO) {
+                        com.marcusrosado.stamp.scan.Memories.location(context, android.net.Uri.parse(l.uri))
+                    }
+                    if (at == null) undo.say("This photo has no location")
+                    else {
+                        // The country it was taken in, whole, as when its card opens from the map.
+                        val land = atlas.locate(at.first, at.second)
+                        val country = land?.let { atlas.byId[cardOf(it)] }
+                        showSpot(land, country?.let { focusOn(it) } ?: Focus(at.first, at.second, CITY_ZOOM))
+                    }
+                }
+                is com.marcusrosado.stamp.Launch.Place ->
+                    showSpot(atlas.locate(l.lat, l.lon), Focus(l.lat, l.lon, (l.zoom ?: CITY_ZOOM).coerceIn(1.0, HOME_ZOOM)))
+                com.marcusrosado.stamp.Launch.Unreadable -> undo.say("Stamp can't find a place in that link")
+            }
+        }
+    }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val postureNow by rememberUpdatedState(postureFor(maxWidth.value.toInt(), maxHeight.value.toInt()))
         val state = AppState(
@@ -559,6 +638,8 @@ private fun App(
                 onAddMemories = app.visits::addMemories,
                 onUpdateMemory = app.visits::updateMemory,
                 onRemoveMemory = { a, b -> undo.run("Memory removed") { app.visits.removeMemory(a, b) } },
+                onCover = app.visits::setCover,
+                onMoveMemory = app.visits::moveMemory,
                 onAddPlaceMemories = app.visits::addPlaceMemories,
                 onUpdatePlaceMemory = app.visits::updatePlaceMemory,
                 onRemovePlaceMemory = { a, b -> undo.run("Memory removed") { app.visits.removePlaceMemory(a, b) } },
@@ -644,18 +725,7 @@ private fun App(
             here = here,
             onHere = app.here::set,
             me = me,
-            onLocate = {
-                locating.launch {
-                    val at = com.marcusrosado.stamp.data.Here.find(context, com.marcusrosado.stamp.data.Here.TWO_MINUTES)
-                    if (at == null) {
-                        undo.say("Can't tell where you are right now")
-                        return@launch
-                    }
-                    me = at
-                    jumpToMap()
-                    focus = Focus(at.first, at.second, HOME_ZOOM)
-                }
-            },
+            onLocate = locate,
             onShowHome = { lat, lon ->
                 if (postureNow == Posture.Portrait) selectedId = null
                 jumpToMap()

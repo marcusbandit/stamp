@@ -391,7 +391,7 @@ class VisitStore(private val file: File) {
     @Synchronized
     fun duplicateTrip(tripId: String): String? {
         val t = trips.firstOrNull { it.id == tripId } ?: return null
-        val copy = t.copy(id = newTripId(), name = "", date = null, until = null, now = false, arrived = emptyMap(), left = emptyMap(), memories = emptyList())
+        val copy = t.copy(id = newTripId(), name = "", date = null, until = null, now = false, arrived = emptyMap(), left = emptyMap(), memories = emptyList(), cover = null)
         val at = trips.indexOf(t)
         trips = trips.take(at + 1) + copy + trips.drop(at + 1)
         save()
@@ -638,7 +638,22 @@ class VisitStore(private val file: File) {
     }
 
     fun removeMemory(tripId: String, memoryId: String) = changeTrip(tripId) { t ->
-        t.copy(memories = t.memories.filterNot { it.id == memoryId })
+        t.copy(memories = t.memories.filterNot { it.id == memoryId }, cover = t.cover.takeIf { it != memoryId })
+    }
+
+    /** Picks the photo a trip's header shows; null goes back to its first photo. */
+    fun setCover(tripId: String, memoryId: String?) = changeTrip(tripId) { t ->
+        // Only a photo of this trip can be its cover: a video or a written moment has no picture.
+        if (memoryId != null && t.memories.none { it.id == memoryId && it.isPhoto }) t else t.copy(cover = memoryId)
+    }
+
+    /**
+     * Moves a memory to stop [stop] of its trip, or to the trip as a whole when null. A stop
+     * that is not on the trip, such as one removed meanwhile, leaves the memory where it is.
+     */
+    fun moveMemory(tripId: String, memoryId: String, stop: String?) = changeTrip(tripId) { t ->
+        if (stop != null && stop !in t.cities) t
+        else t.copy(memories = t.memories.map { if (it.id == memoryId) it.copy(place = stop) else it })
     }
 
     /**
@@ -900,6 +915,8 @@ class VisitStore(private val file: File) {
         t.start?.let { put("start", it) }
         t.end?.let { put("end", it) }
         if (t.memories.isNotEmpty()) put("memories", memoriesJson(t.memories))
+        // A cover whose memory has gone is not kept: the header already shows the first photo.
+        t.cover?.takeIf { c -> t.memories.any { it.id == c } }?.let { put("cover", it) }
     }
 
     private fun memoriesJson(list: List<Memory>) = JSONArray(list.map { m ->
@@ -982,6 +999,8 @@ class VisitStore(private val file: File) {
         slept = t.optJSONObject("slept")?.let { o -> o.keys().asSequence().associateWith { o.optString(it) }.filterValues { it.isNotEmpty() } }.orEmpty(),
         end = t.optString("end").ifEmpty { null },
         memories = parseMemories(t.optJSONArray("memories")),
+        // Saved before covers could be picked: none, so the header shows the first photo.
+        cover = t.optString("cover").ifEmpty { null },
         lands = lands,
     )
 
