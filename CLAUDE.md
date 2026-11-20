@@ -19,9 +19,11 @@ on it.
   different builds under the same code.
 - **Only the patch number moves (owner's call, 2026-11-20).** The line is 1.5: the next build
   is 1.5.1, then 1.5.2, and so on, whatever the change, so the public release never jumps.
-  Never raise the minor or major unless the owner says so. `versionCode` still goes up by one
-  each time. Check the phone and the open branches first (`adb shell dumpsys package
-  com.marcusrosado.stamp | grep version`): two threads must never ship the same number.
+  Never raise the minor or major unless the owner says so. Two threads must never ship the
+  same number, so take the next code and patch above the highest of main, the phone (`adb shell
+  dumpsys package com.marcusrosado.stamp | grep version`) and every open PR (`gh pr diff <n> |
+  grep -E 'versionCode|versionName'`). A branch that merges after another took its number moves
+  up to the next free one in the merge, never back down.
 - Branches, pushes and PRs are fine: `<type>/<issue>-<slug>`, a `code-review --comment` pass,
   then squash merge.
 
