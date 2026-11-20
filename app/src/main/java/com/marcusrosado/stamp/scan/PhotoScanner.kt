@@ -42,7 +42,7 @@ data class Found(val country: Country, val evidence: PhotoEvidence)
  * Where a part-by-part Takeout import stands: the part numbers read so far, the part just
  * handed over and whether it had been read before. [uri] is that part, to delete once read.
  */
-data class Parts(val numbers: List<Int>, val count: Int, val last: Int?, val again: Boolean, val uri: String)
+data class Parts(val numbers: List<Int>, val count: Int, val last: Int?, val again: Boolean, val uri: String, val next: Int)
 
 sealed interface ScanState {
     data object Idle : ScanState
@@ -102,9 +102,16 @@ class PhotoScanner(
      */
     fun importTakeoutPart(part: Uri): Boolean {
         if (job?.isActive == true) return false
-        launch(ScanSource.Takeout) { readPart(part, it) }
+        // One review across all the parts: ticks changed after an earlier part stay.
+        val picks = (_state.value as? ScanState.Done)?.takeIf { it.parts != null }?.picks.orEmpty()
+        reading = true
+        launch(ScanSource.Takeout) { c -> readPart(part, c).let { if (it is ScanState.Done) it.copy(picks = picks) else it } }
         return true
     }
+
+    /** True while a Takeout part is being read, as opposed to another scan. */
+    @Volatile var reading = false
+        private set
 
     /** Forgets the parts read so far, once their countries are added. */
     fun endParts() {
@@ -138,6 +145,7 @@ class PhotoScanner(
             } catch (e: Exception) {
                 ScanState.Failed(e.message ?: e.javaClass.simpleName, source)
             }
+            reading = false
             publish(gen, result)
         }
     }
@@ -168,7 +176,13 @@ class PhotoScanner(
 
         /** Starts from what earlier parts of the same export found. */
         fun seed(session: Takeout.Session) {
-            session.spans.forEach { (id, s) -> spans[id] = longArrayOf(s.first, s.second) }
+            // Kept the way the earlier parts counted; with separate land masses off now, an
+            // island's span joins its country's.
+            session.spans.forEach { (id, s) ->
+                val span = spans.getOrPut(if (split()) id else atlas.countryOf(id)) { longArrayOf(Long.MAX_VALUE, Long.MIN_VALUE) }
+                span[0] = minOf(span[0], s.first)
+                span[1] = maxOf(span[1], s.second)
+            }
             located = session.located
         }
 
@@ -263,13 +277,15 @@ class PhotoScanner(
 
     private suspend fun readPart(uri: Uri, c: Collector): ScanState {
         val file = partsFile ?: error("No place to keep the parts")
-        val before = Takeout.Session.read(file)
         val name = displayName(uri)
         val key = "$name ${size(uri)}"
         val number = name?.let(Takeout::partNumber) ?: 0
+        val export = name?.let(Takeout::exportOf).orEmpty()
+        // A part of another export starts over, so an old unfinished one never mixes in.
+        val before = Takeout.Session.read(file).takeIf { it.export == export } ?: Takeout.Session(export = export)
         c.seed(before)
         fun parts(s: Takeout.Session, again: Boolean) =
-            Parts(s.numbers, s.parts.size, number.takeIf { it > 0 }, again, uri.toString())
+            Parts(s.numbers, s.parts.size, number.takeIf { it > 0 }, again, uri.toString(), s.next)
         if (before.has(key)) return c.done(before.photos, parts(before, again = true))
         val job = coroutineContext[Job]
         var photos = 0

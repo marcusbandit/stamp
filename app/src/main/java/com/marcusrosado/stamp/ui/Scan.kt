@@ -355,7 +355,10 @@ private fun Review(
     parts?.let { DeletePart(it.uri) }
     val nextPart = { openUrl(context, Takeout.MANAGE_URL) }
     if (state.found.isEmpty() && parts != null) {
-        Message(partsLine(parts), "No photo in the parts so far has a location.", nextLabel(parts), nextPart)
+        Message(
+            partsLine(parts), "No photo in the parts so far has a location.", nextLabel(parts), nextPart,
+            secondary = "Finish" to { onAdd(emptyMap(), emptySet()) },
+        )
         return
     }
     if (state.found.isEmpty()) {
@@ -428,6 +431,14 @@ private fun Review(
                 )
             }
         }
+        if (parts != null && partsGone[parts.uri] == false) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("${parts.last?.let { "Part $it" } ?: "The part"} is still on the phone.", Modifier.weight(1f))
+                TextButton(onClick = {
+                    runCatching { context.startActivity(Intent(android.app.DownloadManager.ACTION_VIEW_DOWNLOADS)) }
+                }) { Text("Open Downloads") }
+            }
+        }
         if (parts != null) {
             OutlinedButton(onClick = nextPart, modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 16.dp)) {
                 Text(nextLabel(parts))
@@ -453,17 +464,35 @@ private fun partsLine(p: Parts): String {
     return if (p.count > 1) "$read ${p.count} parts so far." else read
 }
 
-private fun nextLabel(p: Parts): String {
-    val next = (p.numbers.maxOrNull() ?: 0) + 1
-    return if (p.numbers.isNotEmpty()) "Download part $next" else "Download the next part"
-}
+private fun nextLabel(p: Parts): String =
+    if (p.numbers.isNotEmpty()) "Download part ${p.next}" else "Download the next part"
 
 private fun openUrl(context: android.content.Context, url: String) {
     runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
 }
 
 /** Parts asked about already, so coming back to the review never asks to delete one twice. */
-private val partsDeleted = mutableSetOf<String>()
+private val partsAsked = mutableSetOf<String>()
+
+/** What became of each part Stamp tried to delete, by uri: true once it is gone. */
+private val partsGone = androidx.compose.runtime.mutableStateMapOf<String, Boolean>()
+
+/**
+ * The part as a MediaStore file, which Android's delete question takes: straight from a media
+ * address, or looked up from a document one, as the Files app hands over. Null otherwise.
+ */
+private fun mediaFile(context: android.content.Context, u: Uri): Uri? {
+    val media = when {
+        u.authority == android.provider.MediaStore.AUTHORITY -> u
+        Build.VERSION.SDK_INT >= 29 && android.provider.DocumentsContract.isDocumentUri(context, u) ->
+            runCatching { android.provider.MediaStore.getMediaUri(context, u) }.getOrNull()
+        else -> null
+    } ?: return null
+    // Android refuses a request for a Downloads address; the same item as a file is fine.
+    return runCatching {
+        android.provider.MediaStore.Files.getContentUri(media.pathSegments[0], android.content.ContentUris.parseId(media))
+    }.getOrNull()
+}
 
 /**
  * Deletes a Takeout part once it is read, so the phone only ever holds one. A part Stamp
@@ -472,9 +501,11 @@ private val partsDeleted = mutableSetOf<String>()
 @Composable
 private fun DeletePart(uri: String) {
     val context = LocalContext.current
-    val ask = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) {}
+    val ask = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) {
+        partsGone[uri] = it.resultCode == android.app.Activity.RESULT_OK
+    }
     androidx.compose.runtime.LaunchedEffect(uri) {
-        if (!partsDeleted.add(uri)) return@LaunchedEffect
+        if (!partsAsked.add(uri)) return@LaunchedEffect
         val u = Uri.parse(uri)
         val resolver = context.contentResolver
         val gone = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
@@ -482,14 +513,13 @@ private fun DeletePart(uri: String) {
                 runCatching { android.provider.DocumentsContract.deleteDocument(resolver, u) }.getOrDefault(false)) ||
                 runCatching { resolver.delete(u, null, null) > 0 }.getOrDefault(false)
         }
-        if (!gone && Build.VERSION.SDK_INT >= 30 && u.authority == android.provider.MediaStore.AUTHORITY) {
-            runCatching {
-                // Android refuses a request for a Downloads address; the same item as a file is fine.
-                val item = android.provider.MediaStore.Files.getContentUri(u.pathSegments[0], android.content.ContentUris.parseId(u))
-                val sender = android.provider.MediaStore.createDeleteRequest(resolver, listOf(item)).intentSender
-                ask.launch(androidx.activity.result.IntentSenderRequest.Builder(sender).build())
-            }
-        }
+        if (gone) { partsGone[uri] = true; return@LaunchedEffect }
+        val item = if (Build.VERSION.SDK_INT >= 30) mediaFile(context, u) else null
+        val asked = item != null && runCatching {
+            val sender = android.provider.MediaStore.createDeleteRequest(resolver, listOf(item)).intentSender
+            ask.launch(androidx.activity.result.IntentSenderRequest.Builder(sender).build())
+        }.isSuccess
+        if (!asked) partsGone[uri] = false
     }
 }
 

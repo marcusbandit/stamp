@@ -31,7 +31,7 @@ sealed interface Launch {
         const val SHORTCUT = "com.marcusrosado.stamp.SHORTCUT"
 
         /** What [intent] asks for, or null for a plain launch. */
-        fun of(intent: Intent?): Launch? {
+        fun of(intent: Intent?, typeOf: (Uri) -> String? = { null }): Launch? {
             intent ?: return null
             // Reopened from the recent apps, the activity gets the intent it first came with:
             // a photo shared yesterday must not open again.
@@ -39,7 +39,7 @@ sealed interface Launch {
             intent.getStringExtra(SHORTCUT)?.let { return shortcut(it) }
             return when (intent.action) {
                 Intent.ACTION_SEND -> stream(intent)?.let { Photo(it.toString()) }
-                Intent.ACTION_VIEW -> intent.data?.takeIf { it.scheme == "content" && zip(intent.type) }
+                Intent.ACTION_VIEW -> intent.data?.takeIf { it.scheme == "content" && zip(intent.type ?: typeOf(it)) }
                     ?.let { TakeoutPart(it.toString()) }
                     ?: intent.dataString?.let { geo(it) }
                 else -> null

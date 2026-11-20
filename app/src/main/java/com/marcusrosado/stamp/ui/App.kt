@@ -583,7 +583,7 @@ private fun App(
                 // show what all of them found so far.
                 is com.marcusrosado.stamp.Launch.TakeoutPart ->
                     if (app.scanner.importTakeoutPart(android.net.Uri.parse(l.uri))) { onScanTakeoutNow(true); onScanOpenNow(true) }
-                    else undo.say("Stamp is still reading the last part")
+                    else undo.say(if (app.scanner.reading) "Stamp is still reading the last part" else "Stamp is still scanning your photos")
                 com.marcusrosado.stamp.Launch.Unreadable -> undo.say("Stamp can't find a place in that link")
             }
         }
@@ -853,8 +853,9 @@ private fun App(
                     onAdd = { found, mark ->
                         if (mark.isEmpty()) app.visits.addFromPhotos(found, mark)
                         else undo.run(if (mark.size == 1) "1 country added" else "${mark.size} countries added") { app.visits.addFromPhotos(found, mark) }
+                        // Only a part-by-part review ends its parts; any other scan leaves them waiting.
+                        if ((app.scanner.state.value as? ScanState.Done)?.parts != null) app.scanner.endParts()
                         app.scanner.cancel()
-                        app.scanner.endParts()
                         onScanOpen(false)
                         destination = Destination.Passport
                     },

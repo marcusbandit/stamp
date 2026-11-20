@@ -80,6 +80,13 @@ object Takeout {
      * The part number Google puts at the end of a Takeout zip's name, as in
      * takeout-20240101T000000Z-3-007.zip, or null for a name without one.
      */
+    /**
+     * Which export a part belongs to: its name without the part number, as in
+     * takeout-20240101T000000Z for takeout-20240101T000000Z-007.zip.
+     */
+    fun exportOf(name: String): String =
+        name.replace(Regex("""-\d{1,4}\.zip$""", RegexOption.IGNORE_CASE), "").removeSuffix(".zip")
+
     fun partNumber(name: String): Int? =
         Regex("""-(\d{1,4})\.zip$""", RegexOption.IGNORE_CASE).find(name)?.groupValues?.get(1)?.toIntOrNull()
 
@@ -102,6 +109,8 @@ object Takeout {
         val spans: Map<String, Pair<Long, Long>> = emptyMap(),
         val photos: Int = 0,
         val located: Int = 0,
+        /** The export these parts came from, by [exportOf]; a part of another one starts over. */
+        val export: String = "",
     ) {
         /** True when the part named by [key] was read already. */
         fun has(key: String) = key in parts
@@ -111,7 +120,10 @@ object Takeout {
          * [located] as the scan now holds them, since the scan started from this session's.
          */
         fun plus(key: String, number: Int, photos: Int, located: Int, spans: Map<String, Pair<Long, Long>>) =
-            Session(parts + (key to number), spans, this.photos + photos, located)
+            Session(parts + (key to number), spans, this.photos + photos, located, export)
+
+        /** The lowest part number not read yet, to download next. */
+        val next: Int get() = generateSequence(1) { it + 1 }.first { it !in parts.values }
 
         /** The part numbers read, in order, leaving out parts whose name had none. */
         val numbers: List<Int> get() = parts.values.filter { it > 0 }.sorted()
@@ -121,6 +133,7 @@ object Takeout {
             .put("spans", JSONObject().apply { spans.forEach { (id, s) -> put(id, JSONArray().put(s.first).put(s.second)) } })
             .put("photos", photos)
             .put("located", located)
+            .put("export", export)
             .toString()
 
         companion object {
@@ -133,6 +146,7 @@ object Takeout {
                     spans = s.keys().asSequence().associateWith { s.getJSONArray(it).let { a -> a.getLong(0) to a.getLong(1) } },
                     photos = o.getInt("photos"),
                     located = o.getInt("located"),
+                    export = o.optString("export"),
                 )
             }.getOrNull()
 

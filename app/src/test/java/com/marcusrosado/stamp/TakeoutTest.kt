@@ -80,12 +80,25 @@ class TakeoutTest {
 
     @Test fun aSessionSurvivesTheFile() {
         val file = File.createTempFile("parts", ".json").apply { deleteOnExit() }
-        val s = Takeout.Session(mapOf("takeout-001.zip 2000" to 1, "other.zip 5" to 0), mapOf("JPN" to (100L to 900L)), photos = 40, located = 30)
+        val s = Takeout.Session(mapOf("takeout-001.zip 2000" to 1, "other.zip 5" to 0), mapOf("JPN" to (100L to 900L)), photos = 40, located = 30, export = "takeout-x")
         Takeout.Session.write(file, s)
         assertEquals(s, Takeout.Session.read(file))
         file.writeText("not json")
         assertEquals(Takeout.Session(), Takeout.Session.read(file))
         assertEquals(Takeout.Session(), Takeout.Session.read(File(file.path + ".missing")))
+    }
+
+    @Test fun partsBelongToTheirExport() {
+        assertEquals("takeout-20240101T000000Z", Takeout.exportOf("takeout-20240101T000000Z-007.zip"))
+        assertEquals("takeout-20240101T000000Z-3", Takeout.exportOf("takeout-20240101T000000Z-3-012.zip"))
+        assertEquals("stamp-google-photos", Takeout.exportOf("stamp-google-photos.zip"))
+    }
+
+    @Test fun theNextPartIsTheFirstMissing() {
+        val s = Takeout.Session(parts = mapOf("a 1" to 1, "c 3" to 3))
+        assertEquals(2, s.next)
+        assertEquals(1, Takeout.Session().next)
+        assertEquals(4, s.plus("b 2", 2, 0, 0, emptyMap()).next)
     }
 
     @Test fun partsAddUp() {

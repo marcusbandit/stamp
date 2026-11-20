@@ -20,7 +20,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         // A recreated activity gets the intent it first came with: that was done already.
-        if (savedInstanceState == null) launches.value = Launch.of(intent)
+        if (savedInstanceState == null) launches.value = Launch.of(intent, ::typeOf)
         val app = application as StampApp
         // First: the map data and the marks start reading while the window is set up.
         app.warmUp()
@@ -43,8 +43,11 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        Launch.of(intent)?.let { launches.value = it }
+        Launch.of(intent, ::typeOf)?.let { launches.value = it }
     }
+
+    /** A file handed over with no type on the intent: ask the app that holds it. */
+    private fun typeOf(uri: android.net.Uri): String? = runCatching { contentResolver.getType(uri) }.getOrNull()
 
     private fun show(app: StampApp) {
         setContent {
