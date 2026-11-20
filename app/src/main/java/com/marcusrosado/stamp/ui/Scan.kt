@@ -50,6 +50,7 @@ import androidx.compose.material3.TriStateCheckbox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -130,6 +131,8 @@ fun ScanScreen(
     onImportTakeout: (List<Uri>) -> Unit = {},
     /** Opens straight on the Google Photos steps, as Settings and the introduction do. */
     startInTakeout: Boolean = false,
+    /** The user answered whether to add another zip. */
+    onAnsweredMore: () -> Unit = {},
 ) {
     var mode by rememberSaveable { mutableStateOf(if (startInTakeout) Mode.Takeout else Mode.Choose) }
     val ask = rememberPhotoAccess(onGranted = { mode = Mode.Choose; onStartDevice() }, onDenied = { mode = Mode.Denied })
@@ -164,6 +167,40 @@ fun ScanScreen(
             }
         }
     }
+    if (state is ScanState.Done && state.problem != null) {
+        SeamAlertDialog(
+            onDismissRequest = onAnsweredMore,
+            title = { Text("That zip could not be read") },
+            text = { Text(state.problem) },
+            confirmButton = { TextButton(onClick = onAnsweredMore) { Text("OK") } },
+        )
+    } else if (state is ScanState.Done && state.askMore) {
+        AddAnother(state.parts, onChoose = pickZips, onDone = onAnsweredMore)
+    }
+}
+
+/** Asks for the next zip as soon as one is read, so a second one needs no trip back through Settings. */
+@Composable
+private fun AddAnother(parts: Parts?, onChoose: () -> Unit, onDone: () -> Unit) {
+    val context = LocalContext.current
+    SeamAlertDialog(
+        onDismissRequest = onDone,
+        title = { Text(if (parts != null && parts.numbers.isNotEmpty()) "Add part ${parts.next}?" else "Add another zip?") },
+        confirmButton = {
+            if (parts != null) {
+                TextButton(onClick = { onDone(); openUrl(context, Takeout.MANAGE_URL) }) { Text("Download") }
+            } else {
+                TextButton(onClick = { onDone(); onChoose() }) { Text("Choose a zip") }
+            }
+        },
+        dismissButton = {
+            Row {
+                TextButton(onClick = onDone) { Text("Not now") }
+                // A part already on the phone needs no trip to Google.
+                if (parts != null) TextButton(onClick = { onDone(); onChoose() }) { Text("On this phone") }
+            }
+        },
+    )
 }
 
 @Composable
@@ -352,11 +389,11 @@ private fun Review(
 ) {
     val context = LocalContext.current
     val parts = state.parts
-    parts?.let { DeletePart(it.uri) }
+    parts?.let { DeleteParts(it.uris) }
     val nextPart = { openUrl(context, Takeout.MANAGE_URL) }
     if (state.found.isEmpty() && parts != null) {
         Message(
-            partsLine(parts), "No photo in the parts so far has a location.", nextLabel(parts), nextPart,
+            partsLine(parts, state.skipped), "No photo in the parts so far has a location.", nextLabel(parts), nextPart,
             secondary = "Finish" to { onAdd(emptyMap(), emptySet()) },
         )
         return
@@ -391,7 +428,7 @@ private fun Review(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                (parts?.let { partsLine(it) + " " } ?: "") +
+                (parts?.let { partsLine(it, state.skipped) + " " } ?: "") +
                     "Found ${countries(state.found.size)} in %,d photos with a location.".format(state.located),
                 modifier = Modifier.weight(1f),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -431,9 +468,17 @@ private fun Review(
                 )
             }
         }
-        if (parts != null && partsGone[parts.uri] == false) {
+        val stuck = parts?.uris?.count { partsGone[it] == false } ?: 0
+        if (parts != null && stuck > 0) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("${parts.last?.let { "Part $it" } ?: "The part"} is still on the phone.", Modifier.weight(1f))
+                Text(
+                    when {
+                        stuck > 1 -> "$stuck parts are still on the phone."
+                        parts.uris.size == 1 && parts.last != null -> "Part ${parts.last} is still on the phone."
+                        else -> "A part is still on the phone."
+                    },
+                    Modifier.weight(1f),
+                )
                 TextButton(onClick = {
                     runCatching { context.startActivity(Intent(android.app.DownloadManager.ACTION_VIEW_DOWNLOADS)) }
                 }) { Text("Open Downloads") }
@@ -442,6 +487,10 @@ private fun Review(
         if (parts != null) {
             OutlinedButton(onClick = nextPart, modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 16.dp)) {
                 Text(nextLabel(parts))
+            }
+        } else if (state.source == ScanSource.Takeout) {
+            OutlinedButton(onClick = onAgain, modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 16.dp)) {
+                Text("Add another zip")
             }
         }
         Button(
@@ -457,11 +506,23 @@ private fun Review(
     }
 }
 
-/** "Part 3 read." or, for a part handed over twice, "Part 3 was read before." */
-private fun partsLine(p: Parts): String {
-    val which = p.last?.let { "Part $it" } ?: "That part"
-    val read = if (p.again) "$which was read before." else "$which read."
-    return if (p.count > 1) "$read ${p.count} parts so far." else read
+/**
+ * "Part 3 read." or, for a part handed over twice, "Part 3 was read before." Several picked at
+ * once read "3 parts read."
+ */
+private fun partsLine(p: Parts, skipped: Int = 0): String {
+    val read = when {
+        p.uris.size > 1 -> "${p.uris.size} parts read."
+        p.uris.isEmpty() -> ""
+        else -> (p.last?.let { "Part $it" } ?: "That part").let { if (p.again) "$it was read before." else "$it read." }
+    }
+    val so = if (p.count > 1) "${p.count} parts so far." else ""
+    val other = when (skipped) {
+        0 -> ""
+        1 -> "1 file was not part of this export."
+        else -> "$skipped files were not part of this export."
+    }
+    return listOf(read, so, other).filter { it.isNotEmpty() }.joinToString(" ").ifEmpty { "Nothing new was read." }
 }
 
 private fun nextLabel(p: Parts): String =
@@ -499,27 +560,38 @@ private fun mediaFile(context: android.content.Context, u: Uri): Uri? {
  * may not delete itself, a download another app saved, gets Android's own delete question.
  */
 @Composable
-private fun DeletePart(uri: String) {
+private fun DeleteParts(uris: List<String>) {
     val context = LocalContext.current
-    val ask = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) {
-        partsGone[uri] = it.resultCode == android.app.Activity.RESULT_OK
+    // Parts Android has to ask about, all in one question rather than one sheet each.
+    var asking by remember { mutableStateOf(emptyList<String>()) }
+    val ask = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { r ->
+        asking.forEach { partsGone[it] = r.resultCode == android.app.Activity.RESULT_OK }
     }
-    androidx.compose.runtime.LaunchedEffect(uri) {
-        if (!partsAsked.add(uri)) return@LaunchedEffect
-        val u = Uri.parse(uri)
+    androidx.compose.runtime.LaunchedEffect(uris) {
+        val fresh = uris.filter { partsAsked.add(it) }
+        if (fresh.isEmpty()) return@LaunchedEffect
         val resolver = context.contentResolver
-        val gone = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            (android.provider.DocumentsContract.isDocumentUri(context, u) &&
-                runCatching { android.provider.DocumentsContract.deleteDocument(resolver, u) }.getOrDefault(false)) ||
-                runCatching { resolver.delete(u, null, null) > 0 }.getOrDefault(false)
+        val left = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            fresh.filterNot { uri ->
+                val u = Uri.parse(uri)
+                val gone = (android.provider.DocumentsContract.isDocumentUri(context, u) &&
+                    runCatching { android.provider.DocumentsContract.deleteDocument(resolver, u) }.getOrDefault(false)) ||
+                    runCatching { resolver.delete(u, null, null) > 0 }.getOrDefault(false)
+                if (gone) partsGone[uri] = true
+                gone
+            }
         }
-        if (gone) { partsGone[uri] = true; return@LaunchedEffect }
-        val item = if (Build.VERSION.SDK_INT >= 30) mediaFile(context, u) else null
-        val asked = item != null && runCatching {
-            val sender = android.provider.MediaStore.createDeleteRequest(resolver, listOf(item)).intentSender
+        if (left.isEmpty()) return@LaunchedEffect
+        val items = if (Build.VERSION.SDK_INT >= 30) left.associateWith { mediaFile(context, Uri.parse(it)) } else emptyMap()
+        left.filter { items[it] == null }.forEach { partsGone[it] = false }
+        val askable = left.filter { items[it] != null }
+        if (askable.isEmpty()) return@LaunchedEffect
+        val asked = runCatching {
+            val sender = android.provider.MediaStore.createDeleteRequest(resolver, askable.mapNotNull { items[it] }).intentSender
+            asking = askable
             ask.launch(androidx.activity.result.IntentSenderRequest.Builder(sender).build())
         }.isSuccess
-        if (!asked) partsGone[uri] = false
+        if (!asked) askable.forEach { partsGone[it] = false }
     }
 }
 

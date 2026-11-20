@@ -863,6 +863,7 @@ private fun App(
                     onReset = { app.scanner.cancel() },
                     onClose = { onScanOpen(false); onScanTakeout(false) },
                     onImportTakeout = { app.scanner.importTakeout(it) },
+                    onAnsweredMore = { app.scanner.answeredMore() },
                     startInTakeout = scanTakeout,
                 )
             }
