@@ -61,6 +61,58 @@ class TakeoutTest {
         assertEquals(listOf(GeoPoint(35.68, 139.69, 1_680_000_000_000), GeoPoint(48.85, 2.35, 1_690_000_000_000)), points)
     }
 
+    @Test fun partNumbersComeFromGooglesNames() {
+        assertEquals(7, Takeout.partNumber("takeout-20240101T000000Z-007.zip"))
+        assertEquals(12, Takeout.partNumber("takeout-20240101T000000Z-3-012.ZIP"))
+        assertNull(Takeout.partNumber("stamp-google-photos.zip"))
+        assertNull(Takeout.partNumber("photos.json"))
+    }
+
+    @Test fun partSizeLeavesRoomOnThePhone() {
+        val gb = 1L shl 30
+        assertEquals(1, Takeout.partSizeFor(0))
+        assertEquals(1, Takeout.partSizeFor(3 * gb))
+        assertEquals(2, Takeout.partSizeFor(4 * gb))
+        assertEquals(4, Takeout.partSizeFor(8 * gb))
+        assertEquals(10, Takeout.partSizeFor(20 * gb))
+        assertEquals(50, Takeout.partSizeFor(80 * gb))
+    }
+
+    @Test fun aSessionSurvivesTheFile() {
+        val file = File.createTempFile("parts", ".json").apply { deleteOnExit() }
+        val s = Takeout.Session(mapOf("takeout-001.zip 2000" to 1, "other.zip 5" to 0), mapOf("JPN" to (100L to 900L)), photos = 40, located = 30, export = "takeout-x")
+        Takeout.Session.write(file, s)
+        assertEquals(s, Takeout.Session.read(file))
+        file.writeText("not json")
+        assertEquals(Takeout.Session(), Takeout.Session.read(file))
+        assertEquals(Takeout.Session(), Takeout.Session.read(File(file.path + ".missing")))
+    }
+
+    @Test fun partsBelongToTheirExport() {
+        assertEquals("takeout-20240101T000000Z", Takeout.exportOf("takeout-20240101T000000Z-007.zip"))
+        assertEquals("takeout-20240101T000000Z-3", Takeout.exportOf("takeout-20240101T000000Z-3-012.zip"))
+        assertEquals("stamp-google-photos", Takeout.exportOf("stamp-google-photos.zip"))
+    }
+
+    @Test fun theNextPartIsTheFirstMissing() {
+        val s = Takeout.Session(parts = mapOf("a 1" to 1, "c 3" to 3))
+        assertEquals(2, s.next)
+        assertEquals(1, Takeout.Session().next)
+        assertEquals(4, s.plus("b 2", 2, 0, 0, emptyMap()).next)
+    }
+
+    @Test fun partsAddUp() {
+        val one = Takeout.Session().plus("takeout-001.zip 10", 1, photos = 5, located = 3, spans = mapOf("JPN" to (1L to 2L)))
+        val two = one.plus("takeout-002.zip 12", 2, photos = 4, located = 7, spans = mapOf("JPN" to (1L to 2L), "FRA" to (3L to 4L)))
+        assertEquals(listOf(1, 2), two.numbers)
+        assertEquals(9, two.photos)
+        assertEquals(7, two.located)
+        assertEquals(setOf("JPN", "FRA"), two.spans.keys)
+        assertEquals(true, two.has("takeout-001.zip 10"))
+        assertEquals(false, two.has("takeout-001.zip 11"))
+        assertEquals(listOf(2), Takeout.Session().plus("a.zip 1", 0, 0, 0, emptyMap()).plus("t-002.zip 2", 2, 0, 0, emptyMap()).numbers)
+    }
+
     @Test fun evidenceMergeWidensTheSpan() {
         val a = PhotoEvidence(firstMs = 200, lastMs = 500)
         assertEquals(PhotoEvidence(100, 500), a.merge(PhotoEvidence(100, 300)))
