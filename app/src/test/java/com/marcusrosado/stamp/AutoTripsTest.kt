@@ -158,4 +158,74 @@ class AutoTripsTest {
         val pts = (0 until 30).flatMap { i -> listOf(at(d.plusDays(i * 6L), 10, bay), at(d.plusDays(i * 6L), 11, hill)) }
         assertTrue(AutoTrips.find(pts, towns, utc, homeAt = { home.lat to home.lon }).isEmpty())
     }
+
+    private fun day(y: Int, m: Int, d: Int) = PartialDate(y, m, d)
+
+    /** A found trip with [stops] as (town, first day, last day) in May 2023. */
+    private fun foundOf(vararg stops: Triple<City, Int, Int>): com.marcusrosado.stamp.data.FoundTrip {
+        fun ms(d: Int) = LocalDate.of(2023, 5, d).atTime(12, 0).toInstant(utc).toEpochMilli()
+        val list = stops.map { (c, a, b) -> com.marcusrosado.stamp.data.FoundStop(c, ms(a), ms(b), 3) }
+        return com.marcusrosado.stamp.data.FoundTrip(list.minOf { it.firstMs }, list.maxOf { it.lastMs }, list, 9, "BB", listOf("BB"))
+    }
+
+    @Test fun aTownThatFitsBetweenTwoStopsGoesBetweenThem() {
+        // The user has Baytown 1 to 3 May and Farport 8 to 9 May; the photos show Hillville 4 to 6 May.
+        val mine = Trip(
+            "t", date = day(2023, 5, 1), cities = listOf("2", "4"),
+            arrived = mapOf("2" to day(2023, 5, 1), "4" to day(2023, 5, 8)), left = mapOf("2" to day(2023, 5, 3)),
+            lands = listOf("BB"),
+        )
+        val u = AutoTrips.update(mine, foundOf(Triple(bay, 1, 3), Triple(hill, 4, 6)), utc)!!
+        assertEquals(listOf(1), u.stops.map { it.at })
+        assertEquals("Hillville", u.stops.single().city.name)
+        assertEquals(day(2023, 5, 4), u.stops.single().arrived)
+        // The days the user gave stay; only the missing one is filled.
+        assertTrue(u.arrived.isEmpty())
+        assertTrue(u.left.isEmpty())
+    }
+
+    @Test fun aTownThatOverlapsAStopIsNotClearAndStaysOut() {
+        val mine = Trip(
+            "t", cities = listOf("2", "4"),
+            arrived = mapOf("2" to day(2023, 5, 1), "4" to day(2023, 5, 5)), left = mapOf("2" to day(2023, 5, 4)),
+            lands = listOf("BB"),
+        )
+        // Hillville 3 to 6 May runs into both stops.
+        val u = AutoTrips.update(mine, foundOf(Triple(hill, 3, 6)), utc)
+        assertTrue(u == null || u.stops.isEmpty())
+    }
+
+    @Test fun aStopWithNoDaysGetsThePhotosDays() {
+        val mine = Trip("t", cities = listOf("2"), lands = listOf("BB"))
+        val u = AutoTrips.update(mine, foundOf(Triple(bay, 2, 4)), utc)!!
+        assertEquals(day(2023, 5, 2), u.arrived["2"])
+        assertEquals(day(2023, 5, 4), u.left["2"])
+        assertEquals(day(2023, 5, 2), u.date)
+    }
+
+    @Test fun aTownTheUserTurnedDownStaysOut() {
+        val mine = Trip(
+            "t", cities = listOf("2"), arrived = mapOf("2" to day(2023, 5, 1)), left = mapOf("2" to day(2023, 5, 2)),
+            date = day(2023, 5, 1), lands = listOf("BB"), notStops = setOf("3"),
+        )
+        assertEquals(null, AutoTrips.update(mine, foundOf(Triple(bay, 1, 2), Triple(hill, 3, 4)), utc))
+    }
+
+    @Test fun theStoreFillsATripInAndKeepsWhatTheUserGave() {
+        val dir = java.nio.file.Files.createTempDirectory("stamp").toFile().apply { deleteOnExit() }
+        val s = VisitStore(java.io.File(dir, "visits.json"))
+        s.set("BB", TravelState.Visited)
+        val id = s.visits.value["BB"]!!.trips[0].id
+        s.addCity("BB", id, "2")
+        s.addCity("BB", id, "4")
+        s.setStopDates(id, "2", day(2023, 5, 1), day(2023, 5, 3))
+        s.setStopDates(id, "4", day(2023, 5, 8), null)
+        val mine = s.visits.value["BB"]!!.trips.single()
+        val u = AutoTrips.update(mine, foundOf(Triple(hill, 4, 6), Triple(far, 8, 9)), utc)!!
+        s.applyTripUpdates(listOf(u))
+        val t = s.visits.value["BB"]!!.trips.single()
+        assertEquals(listOf("2", "3", "4"), t.cities)
+        assertEquals(day(2023, 5, 8), t.arrived["4"])
+        assertEquals(day(2023, 5, 9), t.left["4"])
+    }
 }

@@ -418,6 +418,31 @@ class VisitStore(private val file: File) {
     /** Names a trip; an empty name gives it back its number. Only the name changes. */
     fun renameTrip(tripId: String, name: String) = changeTrip(tripId) { it.copy(name = name.trim()) }
 
+    /**
+     * Fills in trips the user has from their photos: towns that fit between the stops go in,
+     * with their days, and days the user left out are filled. What they gave stays.
+     */
+    @Synchronized
+    fun applyTripUpdates(updates: List<TripUpdate>) {
+        if (updates.isEmpty()) return
+        val by = updates.associateBy { it.tripId }
+        trips = trips.map { t ->
+            val u = by[t.id] ?: return@map t
+            var n = t
+            for (s in u.stops) {
+                if (n.places.any { placeIdOf(it) == s.city.id }) continue
+                n = n.withStop(s.city.id, s.at)
+                n = n.copy(arrived = n.arrived + (s.city.id to s.arrived), left = n.left + (s.city.id to s.left))
+            }
+            n.copy(
+                arrived = u.arrived.filterKeys { it in n.cities && it !in n.arrived } + n.arrived,
+                left = u.left.filterKeys { it in n.cities && it !in n.left } + n.left,
+                date = n.date ?: u.date,
+            )
+        }
+        save()
+    }
+
     /** The user saw the photos of a trip made from them, and picked or turned them down. */
     fun photosPicked(tripId: String) = changeTrip(tripId) { it.copy(pickPhotos = false) }
 

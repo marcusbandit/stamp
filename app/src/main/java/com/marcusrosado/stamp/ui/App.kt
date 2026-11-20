@@ -852,10 +852,14 @@ private fun App(
                     visits = visits,
                     home = home,
                     onStartDevice = { app.flags.set(FLAG_SCANNED, true); app.scanner.start() },
-                    onAdd = { found, mark, trips ->
-                        val add = { app.visits.addFromPhotos(found, mark); app.visits.addFoundTrips(trips) }
-                        if (mark.isEmpty() && trips.isEmpty()) add()
-                        else undo.run(addedLine(mark.size, trips.size)) { add() }
+                    onAdd = { found, mark, trips, updates ->
+                        val add = {
+                            app.visits.addFromPhotos(found, mark)
+                            app.visits.addFoundTrips(trips)
+                            app.visits.applyTripUpdates(updates)
+                        }
+                        if (mark.isEmpty() && trips.isEmpty() && updates.isEmpty()) add()
+                        else undo.run(addedLine(mark.size, trips.size, updates.size)) { add() }
                         // Only a part-by-part review ends its parts; any other scan leaves them waiting.
                         if ((app.scanner.state.value as? ScanState.Done)?.parts != null) app.scanner.endParts()
                         app.scanner.cancel()
@@ -876,12 +880,15 @@ private fun App(
     }
 }
 
-/** "2 countries and 3 trips added". */
-private fun addedLine(countries: Int, trips: Int): String =
-    listOfNotNull(
+/** "2 countries and 3 trips added", or "2 trips updated". */
+private fun addedLine(countries: Int, trips: Int, updates: Int): String {
+    val added = listOfNotNull(
         countries.takeIf { it > 0 }?.let { if (it == 1) "1 country" else "$it countries" },
         trips.takeIf { it > 0 }?.let { if (it == 1) "1 trip" else "$it trips" },
-    ).joinToString(" and ") + " added"
+    )
+    return if (added.isNotEmpty()) added.joinToString(" and ") + " added"
+    else if (updates == 1) "1 trip updated" else "$updates trips updated"
+}
 
 /** Centre on the country's label point, zoomed so most of it fits. */
 /** Keeps the open region's or city's card across a recreation, an unfold or a theme change. */
