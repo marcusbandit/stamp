@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.outlined.AddLocationAlt
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -46,6 +47,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.marcusrosado.stamp.data.Airport
 import com.marcusrosado.stamp.data.Airports
@@ -64,7 +67,17 @@ import com.marcusrosado.stamp.data.Visit
  * carries on from the stop above.
  */
 @Composable
-fun LegLine(leg: Leg?, stops: List<String?>, question: String, where: String, lit: Boolean, onClick: () -> Unit) {
+fun LegLine(
+    leg: Leg?,
+    stops: List<String?>,
+    question: String,
+    where: String,
+    lit: Boolean,
+    onClick: () -> Unit,
+    /** Puts a new stop of the trip on this leg, between the stops it runs between. */
+    onInsert: (() -> Unit)? = null,
+    insertLabel: String = "Add a stop here",
+) {
     // Drawn down from the stop above as the journey reaches the stop below, like the stops' own lines.
     val drawn by androidx.compose.animation.core.animateFloatAsState(
         if (lit) 1f else 0f,
@@ -74,13 +87,32 @@ fun LegLine(leg: Leg?, stops: List<String?>, question: String, where: String, li
     val line = MaterialTheme.colorScheme.outlineVariant
     val primary = MaterialTheme.colorScheme.primary
     Row(
-        Modifier.fillMaxWidth().padding(start = 20.dp, end = 16.dp).drawBehind {
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 16.dp).drawBehind {
             val x = 20.dp.toPx()
             drawLine(line, Offset(x, 0f), Offset(x, size.height), strokeWidth = 2.dp.toPx())
             if (drawn > 0f) drawLine(primary, Offset(x, 0f), Offset(x, size.height * drawn), strokeWidth = 3.dp.toPx())
         },
     ) {
-        Spacer(Modifier.width(52.dp))
+        // A plus sits on the line itself, where the new stop will go.
+        Box(Modifier.width(52.dp).padding(bottom = 12.dp)) {
+            if (onInsert != null) {
+                Box(
+                    Modifier.size(40.dp).clip(CircleShape).clickable(onClick = onInsert)
+                        .semantics { contentDescription = insertLabel },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Box(
+                        Modifier.size(24.dp).clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+                            .border(2.dp, line, CircleShape),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(Icons.Outlined.AddLocationAlt, contentDescription = null, modifier = Modifier.size(15.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+        }
         Column(
             Modifier.weight(1f).padding(bottom = 12.dp).clip(RoundedCornerShape(12.dp)).clickable(onClick = onClick)
                 .padding(horizontal = 8.dp, vertical = 6.dp),
@@ -242,7 +274,7 @@ fun LegPicker(
                 }
                 StepEnd(if (toHome) "Home" else shortName(toName))
                 Spacer(Modifier.height(12.dp))
-                Pill(text = "Add a stop", color = MaterialTheme.colorScheme.primary, onClick = { picking = StopSlot.New })
+                Pill(text = "Add a stop on the way", color = MaterialTheme.colorScheme.primary, onClick = { picking = StopSlot.New })
                 if (farFlight) {
                     Row(
                         Modifier.fillMaxWidth().padding(top = 12.dp).clip(RoundedCornerShape(12.dp)).clickable { around = !around },
