@@ -130,6 +130,8 @@ fun ScanScreen(
     onImportTakeout: (List<Uri>) -> Unit = {},
     /** Opens straight on the Google Photos steps, as Settings and the introduction do. */
     startInTakeout: Boolean = false,
+    /** The user answered whether to add another zip. */
+    onAnsweredMore: () -> Unit = {},
 ) {
     var mode by rememberSaveable { mutableStateOf(if (startInTakeout) Mode.Takeout else Mode.Choose) }
     val ask = rememberPhotoAccess(onGranted = { mode = Mode.Choose; onStartDevice() }, onDenied = { mode = Mode.Denied })
@@ -164,6 +166,25 @@ fun ScanScreen(
             }
         }
     }
+    if (state is ScanState.Done && state.askMore) AddAnother(state.parts, onChoose = pickZips, onDone = onAnsweredMore)
+}
+
+/** Asks for the next zip as soon as one is read, so a second one needs no trip back through Settings. */
+@Composable
+private fun AddAnother(parts: Parts?, onChoose: () -> Unit, onDone: () -> Unit) {
+    val context = LocalContext.current
+    SeamAlertDialog(
+        onDismissRequest = onDone,
+        title = { Text(if (parts != null && parts.numbers.isNotEmpty()) "Add part ${parts.next}?" else "Add another zip?") },
+        confirmButton = {
+            if (parts != null) {
+                TextButton(onClick = { onDone(); openUrl(context, Takeout.MANAGE_URL) }) { Text("Download") }
+            } else {
+                TextButton(onClick = { onDone(); onChoose() }) { Text("Choose a zip") }
+            }
+        },
+        dismissButton = { TextButton(onClick = onDone) { Text("Not now") } },
+    )
 }
 
 @Composable

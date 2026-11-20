@@ -65,6 +65,10 @@ sealed interface ScanState {
         val picks: Map<String, Boolean> = emptyMap(),
         /** Set when the export is being read one part at a time. */
         val parts: Parts? = null,
+        /** The picked zips read into this review, by name and size, so one picked twice counts once. */
+        val zips: Set<String> = emptySet(),
+        /** True until the user answers whether to add another zip. */
+        val askMore: Boolean = false,
     ) : ScanState
 
     data class Failed(val message: String, val source: ScanSource = ScanSource.Device) : ScanState
@@ -93,8 +97,19 @@ class PhotoScanner(
     /** Scans the photos on this phone. */
     fun start() = launch(ScanSource.Device) { scanDevice(it) }
 
-    /** Reads the Google Takeout zips the user picked. */
-    fun importTakeout(zips: List<Uri>) = launch(ScanSource.Takeout) { readTakeout(zips, it) }
+    /**
+     * Reads the Google Takeout zips the user picked. With a review of picked zips still open,
+     * they add to it, ticks and all.
+     */
+    fun importTakeout(zips: List<Uri>) {
+        val before = (_state.value as? ScanState.Done)?.takeIf { it.source == ScanSource.Takeout && it.parts == null }
+        launch(ScanSource.Takeout) { c -> readTakeout(zips, c, before) }
+    }
+
+    /** The user answered whether to add another zip; the review stops asking. */
+    fun answeredMore() {
+        _state.update { s -> if (s is ScanState.Done) s.copy(askMore = false) else s }
+    }
 
     /**
      * Reads one part of a Takeout export, handed over as the user downloads it, and adds what
@@ -186,6 +201,16 @@ class PhotoScanner(
             located = session.located
         }
 
+        /** Starts from a review the new zips add to. */
+        fun seed(done: ScanState.Done) {
+            done.found.forEach { f ->
+                val span = spans.getOrPut(f.country.id) { longArrayOf(Long.MAX_VALUE, Long.MIN_VALUE) }
+                if (f.evidence.firstMs > 0) span[0] = minOf(span[0], f.evidence.firstMs)
+                if (f.evidence.lastMs > 0) span[1] = maxOf(span[1], f.evidence.lastMs)
+            }
+            located = done.located
+        }
+
         fun spans(): Map<String, Pair<Long, Long>> = spans.mapValues { (_, s) -> s[0] to s[1] }
 
         fun add(lat: Double, lon: Double, ms: Long) {
@@ -252,12 +277,16 @@ class PhotoScanner(
         return c.done(photos.size)
     }
 
-    private suspend fun readTakeout(zips: List<Uri>, c: Collector): ScanState {
+    private suspend fun readTakeout(picked: List<Uri>, c: Collector, before: ScanState.Done? = null): ScanState {
         val job = coroutineContext[Job]
+        before?.let(c::seed)
+        val keys = picked.associateWith { "${displayName(it)} ${size(it)}" }
+        val read = before?.zips.orEmpty()
+        val zips = picked.filter { keys[it] !in read }.distinctBy { keys[it] }
         // First pass reads only the central directories, so progress has a real total.
         val total = zips.sumOf { uri -> withChannel(uri) { Takeout.countJson(it) } }
         var checked = 0
-        var photos = 0
+        var photos = before?.total ?: 0
         for (uri in zips) {
             withChannel(uri) { ch ->
                 Takeout.readZip(ch) { entry ->
@@ -272,7 +301,12 @@ class PhotoScanner(
             coroutineContext.ensureActive()
             c.progress(checked, total)
         }
-        return c.done(photos)
+        // A review with photos asks for the next zip; one with none says the files were wrong.
+        return c.done(photos).copy(
+            picks = before?.picks.orEmpty(),
+            zips = read + zips.mapNotNull { keys[it] },
+            askMore = photos > 0,
+        )
     }
 
     private suspend fun readPart(uri: Uri, c: Collector): ScanState {
@@ -286,7 +320,7 @@ class PhotoScanner(
         c.seed(before)
         fun parts(s: Takeout.Session, again: Boolean) =
             Parts(s.numbers, s.parts.size, number.takeIf { it > 0 }, again, uri.toString(), s.next)
-        if (before.has(key)) return c.done(before.photos, parts(before, again = true))
+        if (before.has(key)) return c.done(before.photos, parts(before, again = true)).copy(askMore = true)
         val job = coroutineContext[Job]
         var photos = 0
         var checked = 0
@@ -303,7 +337,7 @@ class PhotoScanner(
         coroutineContext.ensureActive()
         val after = before.plus(key, number, photos, c.located, c.spans())
         Takeout.Session.write(file, after)
-        return c.done(after.photos, parts(after, again = false))
+        return c.done(after.photos, parts(after, again = false)).copy(askMore = true)
     }
 
     private fun displayName(uri: Uri): String? = runCatching {
