@@ -405,7 +405,7 @@ private fun Review(
     fun tripTicked(t: FoundTrip) = (state.picks[t.key] ?: true) && t.lands.all { !tickable(it) || ticked(it) }
     val tripCount = state.trips.count(::tripTicked)
     // Trips the user has that the photos fill in go in too, unless unticked here.
-    fun updateTicked(u: TripUpdate) = state.picks[u.key] ?: true
+    fun updateTicked(u: TripUpdate) = (state.picks[u.key] ?: true) && u.lands.all { !tickable(it) || ticked(it) }
     val updateCount = state.updates.count(::updateTicked)
     Column(Modifier.fillMaxSize()) {
         Row(
@@ -449,7 +449,9 @@ private fun Review(
             if (state.updates.isNotEmpty()) {
                 item(key = "updates") { SectionLabel("Your trips") }
                 items(state.updates, key = { it.key }) { u ->
-                    UpdateRow(u, updateTicked(u)) { onPick(mapOf(u.key to !updateTicked(u))) }
+                    UpdateRow(u, updateTicked(u)) {
+                        onPick(if (updateTicked(u)) mapOf(u.key to false) else mapOf(u.key to true) + u.lands.associateWith { true })
+                    }
                 }
             }
             if (state.trips.isNotEmpty() || state.updates.isNotEmpty()) {
@@ -611,9 +613,11 @@ internal fun addLabel(countries: Int, trips: Int, updates: Int = 0): String {
         countries.takeIf { it > 0 }?.let { if (it == 1) "1 country" else "$it countries" },
         trips.takeIf { it > 0 }?.let { if (it == 1) "1 trip" else "$it trips" },
     )
+    val update = if (updates == 1) "update 1 trip" else "update $updates trips"
     return when {
+        parts.isNotEmpty() && updates > 0 -> "Add " + parts.joinToString(" and ") + ", " + update
         parts.isNotEmpty() -> "Add " + parts.joinToString(" and ")
-        updates > 0 -> if (updates == 1) "Update 1 trip" else "Update $updates trips"
+        updates > 0 -> update.replaceFirstChar { it.uppercase() }
         else -> "Done"
     }
 }

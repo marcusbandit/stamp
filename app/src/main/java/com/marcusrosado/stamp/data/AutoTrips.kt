@@ -94,6 +94,8 @@ data class TripUpdate(
     val date: PartialDate?,
     /** The trip as it was, for the review to name it. */
     val trip: Trip,
+    /** The lands the added towns are in, the way the review counts countries. */
+    val lands: List<String> = emptyList(),
 ) {
     val key: String get() = "update-$tripId"
 }
@@ -236,18 +238,13 @@ object AutoTrips {
 
     /**
      * What [found] adds to [trip], or null when it adds nothing. A town goes in only where its
-     * days clearly fit: after every stop before it has ended and before every stop after it has
-     * begun, by the days the user gave. A stop with no day of its own leaves the gaps around it
-     * unclear, so nothing goes next to it. Dates the user gave are never changed, and a town they
-     * said was no stop, or one the trip already has, is left out.
+     * days clearly fit, by [slot]. A stop the user gave no days gets the photos' days, as far as
+     * they agree with the days the user did give and with the stops on either side; a trip with
+     * no date gets the first day it covers. Days the user gave never change, and a town they said
+     * was no stop, or one the trip already has, is left out.
      */
     fun update(trip: Trip, found: FoundTrip, zone: ZoneId = ZoneId.systemDefault()): TripUpdate? {
-        fun pd(d: LocalDate) = PartialDate(d.year, d.monthValue, d.dayOfMonth)
-        fun known(d: PartialDate?): LocalDate? = d?.takeIf { it.month != null && it.day != null }?.let { LocalDate.of(it.year, it.month!!, it.day!!) }
-        val stops = trip.cities.toMutableList()
-        val arrivedBy = HashMap<String, LocalDate>()
-        val leftBy = HashMap<String, LocalDate>()
-        stops.forEach { s -> known(trip.arrived[s])?.let { arrivedBy[s] = it }; known(trip.left[s])?.let { leftBy[s] = it } }
+        var work = trip
         val fillArrived = LinkedHashMap<String, PartialDate>()
         val fillLeft = LinkedHashMap<String, PartialDate>()
         val added = ArrayList<NewStop>()
@@ -255,31 +252,69 @@ object AutoTrips {
         for (f in found.stops.sortedBy { it.firstMs }) {
             val a = day(f.firstMs, zone)
             val b = day(f.lastMs, zone)
-            val same = stops.filter { placeIdOf(it) == f.city.id }
+            val same = work.cities.filter { placeIdOf(it) == f.city.id }
             if (same.size == 1) {
-                // A stop the user has: its days, where they left them out.
+                // A stop the user has: its days, where they left them out and the photos agree.
                 val s = same[0]
-                if (trip.arrived[s] == null) { fillArrived[s] = pd(a); arrivedBy[s] = a }
-                if (trip.left[s] == null) { fillLeft[s] = pd(b); leftBy[s] = b }
+                val k = work.cities.indexOf(s)
+                val prevEnd = (0 until k).mapNotNull { endOf(work, it) }.maxOrNull()
+                val nextStart = (k + 1 until work.cities.size).mapNotNull { startOf(work, it) }.minOrNull()
+                val myStart = dayOf(work.arrived[s])
+                val myEnd = dayOf(work.left[s])
+                if (work.arrived[s] == null && (prevEnd == null || !a.isBefore(prevEnd)) && (myEnd == null || !a.isAfter(myEnd))) {
+                    fillArrived[s] = pd(a)
+                    work = work.copy(arrived = work.arrived + (s to pd(a)))
+                }
+                if (work.left[s] == null && (nextStart == null || !b.isAfter(nextStart)) && (myStart == null || !b.isBefore(myStart))) {
+                    fillLeft[s] = pd(b)
+                    work = work.copy(left = work.left + (s to pd(b)))
+                }
                 continue
             }
             if (same.isNotEmpty() || f.city.id in have || f.city.id in trip.notStops) continue
-            fun start(s: String) = arrivedBy[s]
-            fun end(s: String) = leftBy[s] ?: arrivedBy[s]
-            // Every stop before it had ended by its first day, and every one after began after its last.
-            val at = (0..stops.size).firstOrNull { i ->
-                stops.take(i).all { s -> end(s)?.let { !it.isAfter(a) } == true } &&
-                    stops.drop(i).all { s -> start(s)?.let { !it.isBefore(b) } == true }
-            } ?: continue
-            stops.add(at, f.city.id)
-            arrivedBy[f.city.id] = a
-            leftBy[f.city.id] = b
+            val at = slot(work, pd(a), pd(b)) ?: continue
+            work = work.copy(
+                cities = work.cities.take(at) + f.city.id + work.cities.drop(at),
+                arrived = work.arrived + (f.city.id to pd(a)),
+                left = work.left + (f.city.id to pd(b)),
+            )
             added += NewStop(f.city, at, pd(a), pd(b))
         }
-        val date = if (trip.date == null) pd(day(found.startMs, zone)) else null
+        // The trip began on the first day anything puts the user there, the photos or a stop.
+        val date = if (trip.date == null) {
+            listOfNotNull(day(found.startMs, zone), span(work)?.first).min().let(::pd)
+        } else null
         if (added.isEmpty() && fillArrived.isEmpty() && fillLeft.isEmpty() && date == null) return null
         return TripUpdate(trip.id, added, fillArrived, fillLeft, date, trip)
     }
+
+    /**
+     * Where a town seen from [arrived] to [left] clearly goes among [trip]'s stops, counted from
+     * 0: after every stop that had ended by its first day and before every stop that began after
+     * its last. A stop with no arrival day, or no leaving day and no next stop to bound it, leaves
+     * the gaps next to it unclear: null.
+     */
+    fun slot(trip: Trip, arrived: PartialDate, left: PartialDate): Int? {
+        val a = dayOf(arrived) ?: return null
+        val b = dayOf(left) ?: a
+        val n = trip.cities.size
+        return (0..n).firstOrNull { i ->
+            (0 until i).all { k -> endOf(trip, k)?.let { !it.isAfter(a) } == true } &&
+                (i until n).all { k -> startOf(trip, k)?.let { !it.isBefore(b) } == true }
+        }
+    }
+
+    private fun pd(d: LocalDate) = PartialDate(d.year, d.monthValue, d.dayOfMonth)
+
+    /** A date given to the day, as a day; null for a month, a year or none. */
+    private fun dayOf(d: PartialDate?): LocalDate? =
+        d?.takeIf { it.month != null && it.day != null }?.let { LocalDate.of(it.year, it.month!!, it.day!!) }
+
+    private fun startOf(t: Trip, k: Int): LocalDate? = dayOf(t.arrived[t.cities[k]])
+
+    /** When stop [k] ended: the day the user left, or else the next stop's arrival. */
+    private fun endOf(t: Trip, k: Int): LocalDate? =
+        dayOf(t.left[t.cities[k]]) ?: t.cities.getOrNull(k + 1)?.let { dayOf(t.arrived[it]) }
 
     private fun day(ms: Long, zone: ZoneId) = Instant.ofEpochMilli(ms).atZone(zone).toLocalDate()
 

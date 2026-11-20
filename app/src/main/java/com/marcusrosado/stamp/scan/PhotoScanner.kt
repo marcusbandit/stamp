@@ -266,7 +266,6 @@ class PhotoScanner(
         }
     }
 
-    /** The trips in [points] the user does not have yet. */
     /** The trips in [points] the user does not have yet, and what the rest add to trips they have. */
     private suspend fun findTrips(points: PhotoPoints, atlas: Atlas): Pair<List<FoundTrip>, List<TripUpdate>> {
         val p = places() ?: return emptyList<FoundTrip>() to emptyList()
@@ -300,17 +299,24 @@ class PhotoScanner(
         // the dates they left out. Two found trips on one of theirs fill it in one after the other.
         val fresh = ArrayList<FoundTrip>()
         val filled = LinkedHashMap<String, TripUpdate>()
+        // A stay in a place the user lived is never filled in: its towns are homes.
+        val stays = v.values.filter { it.state == com.marcusrosado.stamp.data.TravelState.Lived }.flatMapTo(HashSet()) { it.trips.map { t -> t.id } }
+        val visits = existing.filter { it.id !in stays }
         for (t in found) {
-            val mine = AutoTrips.overlapping(t, t.lands.toSet(), existing)
-            if (mine == null) { fresh += t; continue }
+            val mine = AutoTrips.overlapping(t, t.lands.toSet(), visits)
+            if (mine == null) {
+                if (!AutoTrips.known(t, t.lands.toSet(), existing)) fresh += t
+                continue
+            }
             val before = filled[mine.id]
             val base = before?.let { applied(mine, it) } ?: mine
-            val u = AutoTrips.update(base, t) ?: continue
+            val u = AutoTrips.update(base, t)?.let { u -> u.copy(lands = u.stops.mapNotNull { land(it.city.lat, it.city.lon) }.distinct()) } ?: continue
             filled[mine.id] = if (before == null) u else before.copy(
                 stops = before.stops + u.stops,
                 arrived = before.arrived + u.arrived,
                 left = before.left + u.left,
                 date = before.date ?: u.date,
+                lands = (before.lands + u.lands).distinct(),
             )
         }
         return fresh to filled.values.toList()

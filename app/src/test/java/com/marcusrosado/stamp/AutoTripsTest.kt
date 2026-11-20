@@ -228,4 +228,26 @@ class AutoTripsTest {
         assertEquals(day(2023, 5, 8), t.arrived["4"])
         assertEquals(day(2023, 5, 9), t.left["4"])
     }
+
+    @Test fun aStopWithNoLeavingDayLeavesTheGapAfterItUnclear() {
+        // The user arrived in Baytown on 1 May and never said when they left.
+        val mine = Trip("t", date = day(2023, 5, 1), cities = listOf("2"), arrived = mapOf("2" to day(2023, 5, 1)), lands = listOf("BB"))
+        val u = AutoTrips.update(mine, foundOf(Triple(hill, 3, 3)), utc)
+        assertTrue(u == null || u.stops.isEmpty())
+    }
+
+    @Test fun theTripDateIsTheFirstDayAnythingShows() {
+        val mine = Trip("t", cities = listOf("2"), arrived = mapOf("2" to day(2023, 5, 1)), left = mapOf("2" to day(2023, 5, 2)), lands = listOf("BB"))
+        assertEquals(day(2023, 5, 1), AutoTrips.update(mine, foundOf(Triple(hill, 3, 4)), utc)!!.date)
+    }
+
+    @Test fun aFilledArrivalNeverComesAfterTheLeavingDayTheUserGave() {
+        val mine = Trip("t", date = day(2023, 5, 1), cities = listOf("2"), left = mapOf("2" to day(2023, 5, 3)), lands = listOf("BB"))
+        assertEquals(null, AutoTrips.update(mine, foundOf(Triple(bay, 4, 5)), utc))
+    }
+
+    @Test fun theButtonNamesTheUpdatesToo() {
+        assertEquals("Add 2 countries, update 3 trips", addLabel(2, 0, 3))
+        assertEquals("Update 1 trip", addLabel(0, 0, 1))
+    }
 }

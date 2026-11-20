@@ -886,8 +886,12 @@ private fun addedLine(countries: Int, trips: Int, updates: Int): String {
         countries.takeIf { it > 0 }?.let { if (it == 1) "1 country" else "$it countries" },
         trips.takeIf { it > 0 }?.let { if (it == 1) "1 trip" else "$it trips" },
     )
-    return if (added.isNotEmpty()) added.joinToString(" and ") + " added"
-    else if (updates == 1) "1 trip updated" else "$updates trips updated"
+    val updated = if (updates == 1) "1 trip updated" else "$updates trips updated"
+    return when {
+        added.isNotEmpty() && updates > 0 -> added.joinToString(" and ") + " added, " + updated
+        added.isNotEmpty() -> added.joinToString(" and ") + " added"
+        else -> updated
+    }
 }
 
 /** Centre on the country's label point, zoomed so most of it fits. */

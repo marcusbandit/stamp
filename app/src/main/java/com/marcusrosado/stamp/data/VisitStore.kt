@@ -431,7 +431,10 @@ class VisitStore(private val file: File) {
             var n = t
             for (s in u.stops) {
                 if (n.places.any { placeIdOf(it) == s.city.id }) continue
-                n = n.withStop(s.city.id, s.at)
+                // Placed by its days against the trip as it is now: the user may have changed it
+                // since the photos were read.
+                val at = AutoTrips.slot(n, s.arrived, s.left) ?: continue
+                n = n.withStop(s.city.id, at)
                 n = n.copy(arrived = n.arrived + (s.city.id to s.arrived), left = n.left + (s.city.id to s.left))
             }
             n.copy(
