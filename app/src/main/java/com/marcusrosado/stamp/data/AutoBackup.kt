@@ -59,7 +59,7 @@ class AutoBackup(context: Context, params: WorkerParameters) : CoroutineWorker(c
          * (owner's call, 2026-11-20): a cloud folder would upload the whole map every week with
          * nobody pressing anything. A backup saved by hand may still go anywhere.
          */
-        val phoneRoot: android.net.Uri = android.provider.DocumentsContract.buildRootUri(PHONE_STORAGE, "primary")
+        val phoneRoot: android.net.Uri get() = android.provider.DocumentsContract.buildRootUri(PHONE_STORAGE, "primary")
 
         /** Whether a picked folder is on the phone itself, not in a cloud drive or another app. */
         fun onPhone(tree: android.net.Uri): Boolean = tree.authority == PHONE_STORAGE
