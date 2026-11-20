@@ -29,8 +29,8 @@ android {
         applicationId = "com.marcusrosado.stamp"
         minSdk = 26
         targetSdk = 36
-        versionCode = 102
-        versionName = "1.2.0"
+        versionCode = 103
+        versionName = "1.3.0"
         buildConfigField("boolean", "SELF_UPDATE", "${!playBuild}")
         // Only the Play build sells Pro. A build from source has every feature (LICENSE.md).
         buildConfigField("boolean", "PRO_SOLD", "$playBuild")
