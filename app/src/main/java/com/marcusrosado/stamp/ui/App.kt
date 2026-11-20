@@ -547,6 +547,7 @@ private fun App(
         if (land == null) undo.say("That spot isn't in any country")
     }
     val onScanOpenNow by rememberUpdatedState(onScanOpen)
+    val onScanTakeoutNow by rememberUpdatedState(onScanTakeout)
     val onLaunchNow by rememberUpdatedState(onLaunch)
     // A shortcut, a shared photo or a place link, done once the app shows, then forgotten.
     LaunchedEffect(launches) {
@@ -578,6 +579,11 @@ private fun App(
                 }
                 is com.marcusrosado.stamp.Launch.Place ->
                     showSpot(atlas.locate(l.lat, l.lon), Focus(l.lat, l.lon, (l.zoom ?: CITY_ZOOM).coerceIn(1.0, HOME_ZOOM)))
+                // A Takeout part from the browser: read it on top of the parts before, then
+                // show what all of them found so far.
+                is com.marcusrosado.stamp.Launch.TakeoutPart ->
+                    if (app.scanner.importTakeoutPart(android.net.Uri.parse(l.uri))) { onScanTakeoutNow(true); onScanOpenNow(true) }
+                    else undo.say("Stamp is still reading the last part")
                 com.marcusrosado.stamp.Launch.Unreadable -> undo.say("Stamp can't find a place in that link")
             }
         }
@@ -848,6 +854,7 @@ private fun App(
                         if (mark.isEmpty()) app.visits.addFromPhotos(found, mark)
                         else undo.run(if (mark.size == 1) "1 country added" else "${mark.size} countries added") { app.visits.addFromPhotos(found, mark) }
                         app.scanner.cancel()
+                        app.scanner.endParts()
                         onScanOpen(false)
                         destination = Destination.Passport
                     },

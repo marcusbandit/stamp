@@ -1,7 +1,9 @@
 package com.marcusrosado.stamp.scan
 
 import org.apache.commons.compress.archivers.zip.ZipFile
+import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import java.nio.channels.SeekableByteChannel
 
 /** One located photo: where and when it was taken. [takenMs] is 0 when unknown. */
@@ -70,6 +72,81 @@ object Takeout {
         }
 
     private const val MAX_SIDECAR = 64 * 1024L
+
+    /** Google Takeout's list of the user's exports, where each part has its own Download button. */
+    const val MANAGE_URL = "https://takeout.google.com/manage"
+
+    /**
+     * The part number Google puts at the end of a Takeout zip's name, as in
+     * takeout-20240101T000000Z-3-007.zip, or null for a name without one.
+     */
+    fun partNumber(name: String): Int? =
+        Regex("""-(\d{1,4})\.zip$""", RegexOption.IGNORE_CASE).find(name)?.groupValues?.get(1)?.toIntOrNull()
+
+    /**
+     * The part size to pick in Takeout so one part fits in [freeBytes] with room to spare, in GB:
+     * one of the sizes Takeout offers, never below its smallest.
+     */
+    fun partSizeFor(freeBytes: Long): Int {
+        val gb = 1L shl 30
+        return listOf(50, 10, 4, 2).firstOrNull { it * gb + it * gb / 4 + gb <= freeBytes } ?: 1
+    }
+
+    /**
+     * An export read one part at a time, kept in a small file between parts, since the user
+     * leaves Stamp to download each one. [parts] maps each part read, by name and size, to its
+     * number; [spans] holds the first and last time per country id, as a scan collects them.
+     */
+    data class Session(
+        val parts: Map<String, Int> = emptyMap(),
+        val spans: Map<String, Pair<Long, Long>> = emptyMap(),
+        val photos: Int = 0,
+        val located: Int = 0,
+    ) {
+        /** True when the part named by [key] was read already. */
+        fun has(key: String) = key in parts
+
+        /**
+         * This session with one more part read: its [photos] counted on top, and [spans] and
+         * [located] as the scan now holds them, since the scan started from this session's.
+         */
+        fun plus(key: String, number: Int, photos: Int, located: Int, spans: Map<String, Pair<Long, Long>>) =
+            Session(parts + (key to number), spans, this.photos + photos, located)
+
+        /** The part numbers read, in order, leaving out parts whose name had none. */
+        val numbers: List<Int> get() = parts.values.filter { it > 0 }.sorted()
+
+        fun toJson(): String = JSONObject()
+            .put("parts", JSONObject().apply { parts.forEach { (k, n) -> put(k, n) } })
+            .put("spans", JSONObject().apply { spans.forEach { (id, s) -> put(id, JSONArray().put(s.first).put(s.second)) } })
+            .put("photos", photos)
+            .put("located", located)
+            .toString()
+
+        companion object {
+            fun parse(json: String): Session? = runCatching {
+                val o = JSONObject(json)
+                val p = o.getJSONObject("parts")
+                val s = o.getJSONObject("spans")
+                Session(
+                    parts = p.keys().asSequence().associateWith { p.getInt(it) },
+                    spans = s.keys().asSequence().associateWith { s.getJSONArray(it).let { a -> a.getLong(0) to a.getLong(1) } },
+                    photos = o.getInt("photos"),
+                    located = o.getInt("located"),
+                )
+            }.getOrNull()
+
+            fun read(file: File): Session =
+                runCatching { file.readText() }.getOrNull()?.let(::parse) ?: Session()
+
+            /** Writes beside the file and moves it over, so a kill mid-write keeps the last good one. */
+            fun write(file: File, session: Session) {
+                val part = File(file.path + ".part")
+                part.writeText(session.toJson())
+                if (!part.renameTo(file)) { file.delete(); part.renameTo(file) }
+            }
+        }
+    }
 
     /** Google Takeout, opened on the export page with only Google Photos selected. */
     const val TAKEOUT_URL = "https://takeout.google.com/settings/takeout/custom/photos"

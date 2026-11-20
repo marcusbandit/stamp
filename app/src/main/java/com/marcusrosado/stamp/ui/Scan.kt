@@ -7,6 +7,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material3.OutlinedButton
+import com.marcusrosado.stamp.scan.Parts
 import com.marcusrosado.stamp.scan.ScanSource
 import com.marcusrosado.stamp.scan.Takeout
 import android.os.Build
@@ -217,10 +218,14 @@ fun TakeoutGuide(onPick: () -> Unit) {
         verticalArrangement = Arrangement.spacedBy(20.dp),
     ) {
         PhotoPreview()
+        // Big enough for few parts, small enough that one fits on this phone with room to spare.
+        val size = androidx.compose.runtime.remember {
+            Takeout.partSizeFor(runCatching { android.os.StatFs(android.os.Environment.getDataDirectory().path).availableBytes }.getOrDefault(0L))
+        }
         Step(1, "Ask Google for an export") {
             Text(
                 "Open Google Takeout with only Google Photos picked. Tap Next step, keep Send download link " +
-                    "via email and Export once, choose .zip and 50 GB, then tap Create export.",
+                    "via email and Export once, choose .zip and $size GB, then tap Create export.",
                 style = MaterialTheme.typography.bodyMedium,
             )
             Spacer(Modifier.height(8.dp))
@@ -234,11 +239,19 @@ fun TakeoutGuide(onPick: () -> Unit) {
                 style = MaterialTheme.typography.bodyMedium,
             )
         }
-        Step(3, "Download the zips") {
+        Step(3, "Download one part at a time") {
             Text(
-                "A small export can come to this phone: open the email here and tap Download for every part. " +
-                    "For one too big for the phone, download the parts on a computer and open Stamp's Google " +
-                    "Photos page there. It reads them in the browser and saves one small file for this phone.",
+                "Open your export and tap Download on part 1. When it finishes, tap Open and pick Stamp. " +
+                    "Stamp reads it, deletes it and brings you back for the next part, so only one part is " +
+                    "ever on the phone. The countries from every part wait for you in one list.",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Spacer(Modifier.height(8.dp))
+            Button(onClick = { openUrl(context, Takeout.MANAGE_URL) }) { Text("Open your export") }
+            Spacer(Modifier.height(16.dp))
+            Text(
+                "Rather use a computer? Download the parts there and open Stamp's Google Photos page. It " +
+                    "reads them in the browser and saves one small file for this phone.",
                 style = MaterialTheme.typography.bodyMedium,
             )
             Spacer(Modifier.height(8.dp))
@@ -247,15 +260,14 @@ fun TakeoutGuide(onPick: () -> Unit) {
                 runCatching { context.startActivity(Intent.createChooser(send, null)) }
             }) { Text("Send the page to a computer") }
         }
-        Step(4, "Choose them here") {
+        Step(4, "Or choose them here") {
             Text(
-                "Select every zip at once, or the stamp-google-photos.zip the computer saved. Only the place " +
-                    "and date of each photo are kept, and they stay after you delete the zips. The countries " +
-                    "go through the same review as a phone scan.",
+                "Zips already on this phone, or the stamp-google-photos.zip the computer saved. Only the " +
+                    "place and date of each photo are kept, and they stay after the zips are gone.",
                 style = MaterialTheme.typography.bodyMedium,
             )
             Spacer(Modifier.height(8.dp))
-            Button(onClick = onPick) { Text("Choose the zip files") }
+            OutlinedButton(onClick = onPick) { Text("Choose the zip files") }
         }
     }
 }
@@ -338,6 +350,14 @@ private fun Review(
     onPick: (Map<String, Boolean>) -> Unit,
     onAgain: () -> Unit,
 ) {
+    val context = LocalContext.current
+    val parts = state.parts
+    parts?.let { DeletePart(it.uri) }
+    val nextPart = { openUrl(context, Takeout.MANAGE_URL) }
+    if (state.found.isEmpty() && parts != null) {
+        Message(partsLine(parts), "No photo in the parts so far has a location.", nextLabel(parts), nextPart)
+        return
+    }
     if (state.found.isEmpty()) {
         val body = when {
             state.source == ScanSource.Takeout && state.total == 0 ->
@@ -368,7 +388,8 @@ private fun Review(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                "Found ${countries(state.found.size)} in %,d photos with a location.".format(state.located),
+                (parts?.let { partsLine(it) + " " } ?: "") +
+                    "Found ${countries(state.found.size)} in %,d photos with a location.".format(state.located),
                 modifier = Modifier.weight(1f),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -407,6 +428,11 @@ private fun Review(
                 )
             }
         }
+        if (parts != null) {
+            OutlinedButton(onClick = nextPart, modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 16.dp)) {
+                Text(nextLabel(parts))
+            }
+        }
         Button(
             onClick = {
                 // Dates go onto every found country that is or will be marked.
@@ -416,6 +442,53 @@ private fun Review(
             modifier = Modifier.fillMaxWidth().padding(16.dp),
         ) {
             Text(if (newCount == 0) "Done" else if (newCount == 1) "Add 1 country" else "Add $newCount countries")
+        }
+    }
+}
+
+/** "Part 3 read." or, for a part handed over twice, "Part 3 was read before." */
+private fun partsLine(p: Parts): String {
+    val which = p.last?.let { "Part $it" } ?: "That part"
+    val read = if (p.again) "$which was read before." else "$which read."
+    return if (p.count > 1) "$read ${p.count} parts so far." else read
+}
+
+private fun nextLabel(p: Parts): String {
+    val next = (p.numbers.maxOrNull() ?: 0) + 1
+    return if (p.numbers.isNotEmpty()) "Download part $next" else "Download the next part"
+}
+
+private fun openUrl(context: android.content.Context, url: String) {
+    runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+}
+
+/** Parts asked about already, so coming back to the review never asks to delete one twice. */
+private val partsDeleted = mutableSetOf<String>()
+
+/**
+ * Deletes a Takeout part once it is read, so the phone only ever holds one. A part Stamp
+ * may not delete itself, a download another app saved, gets Android's own delete question.
+ */
+@Composable
+private fun DeletePart(uri: String) {
+    val context = LocalContext.current
+    val ask = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) {}
+    androidx.compose.runtime.LaunchedEffect(uri) {
+        if (!partsDeleted.add(uri)) return@LaunchedEffect
+        val u = Uri.parse(uri)
+        val resolver = context.contentResolver
+        val gone = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            (android.provider.DocumentsContract.isDocumentUri(context, u) &&
+                runCatching { android.provider.DocumentsContract.deleteDocument(resolver, u) }.getOrDefault(false)) ||
+                runCatching { resolver.delete(u, null, null) > 0 }.getOrDefault(false)
+        }
+        if (!gone && Build.VERSION.SDK_INT >= 30 && u.authority == android.provider.MediaStore.AUTHORITY) {
+            runCatching {
+                // Android refuses a request for a Downloads address; the same item as a file is fine.
+                val item = android.provider.MediaStore.Files.getContentUri(u.pathSegments[0], android.content.ContentUris.parseId(u))
+                val sender = android.provider.MediaStore.createDeleteRequest(resolver, listOf(item)).intentSender
+                ask.launch(androidx.activity.result.IntentSenderRequest.Builder(sender).build())
+            }
         }
     }
 }

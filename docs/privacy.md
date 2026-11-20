@@ -27,6 +27,10 @@ When you import from Google Photos, you download a Google Takeout export yoursel
 zip files in Stamp. Stamp reads only the small location files inside, the place and date of each
 photo, and never the pictures. Stamp never signs in to your Google account.
 
+A big export can also come to the phone one part at a time. When a part finishes downloading
+and you open it in Stamp, Stamp reads its location files and then deletes the part, asking
+Android first when another app saved it, so the phone only ever holds one part.
+
 An export too big for the phone can be read on a computer instead, on Stamp's page at
 marcusbandit.github.io/stamp/takeout. The page reads the zips inside your browser, uploads
 nothing and is not allowed to reach the network. It saves the place and date of each photo as

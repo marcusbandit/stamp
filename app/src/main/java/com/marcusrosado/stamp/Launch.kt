@@ -20,6 +20,9 @@ sealed interface Launch {
     /** A geo: link with a position, and how close it asked to look, if it said. */
     data class Place(val lat: Double, val lon: Double, val zoom: Double?) : Launch
 
+    /** A Google Takeout part opened in Stamp once the browser downloaded it, as its content uri. */
+    data class TakeoutPart(val uri: String) : Launch
+
     /** A geo: link with no position Stamp can read, such as a street address to search. */
     data object Unreadable : Launch
 
@@ -36,10 +39,17 @@ sealed interface Launch {
             intent.getStringExtra(SHORTCUT)?.let { return shortcut(it) }
             return when (intent.action) {
                 Intent.ACTION_SEND -> stream(intent)?.let { Photo(it.toString()) }
-                Intent.ACTION_VIEW -> intent.dataString?.let { geo(it) }
+                Intent.ACTION_VIEW -> intent.data?.takeIf { it.scheme == "content" && zip(intent.type) }
+                    ?.let { TakeoutPart(it.toString()) }
+                    ?: intent.dataString?.let { geo(it) }
                 else -> null
             }
         }
+
+        /** The types a browser or a file manager gives a zip it opens. */
+        val ZIP_TYPES = setOf("application/zip", "application/x-zip-compressed", "application/x-zip")
+
+        private fun zip(type: String?) = type?.lowercase() in ZIP_TYPES
 
         private fun stream(intent: Intent): Uri? =
             if (Build.VERSION.SDK_INT >= 33) intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)

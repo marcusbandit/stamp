@@ -382,7 +382,7 @@ class StampApp : Application(), androidx.work.Configuration.Provider {
         // One writer at a time, so two quick picks land in the order they were made.
         scope.launch(lookWriter) { runCatching { java.io.File(filesDir, LOOK_FILE).writeText(look.value) } }
     }
-    val scanner by lazy { PhotoScanner(this, scope, { atlas.await() }, { split.on.value }, onPoints = { seen.add(it) }) }
+    val scanner by lazy { PhotoScanner(this, scope, { atlas.await() }, { split.on.value }, onPoints = { seen.add(it) }, partsFile = File(filesDir, TAKEOUT_PARTS_FILE)) }
 
     override fun onCreate() {
         super.onCreate()
@@ -481,6 +481,8 @@ class StampApp : Application(), androidx.work.Configuration.Provider {
 
     companion object {
         private const val VISITS_FILE = "visits.json"
+        /** A Google Photos export being read one part at a time; outside the backup. */
+        private const val TAKEOUT_PARTS_FILE = "takeout-parts.json"
         const val COUNTRIES_ASSET = "countries.geojson"
         const val FINE_COUNTRIES_ASSET = "countries_10m.geojson"
         const val CITIES_ASSET = "cities.tsv"
