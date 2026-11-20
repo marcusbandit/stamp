@@ -52,6 +52,10 @@ on it.
   The Play bundle (`scripts/bundle.sh`, `-Pstamp.play=true`) drops the install permission and the
   check, since Play forbids self-updating apps. Every release must carry `stamp.apk`, or no copy
   sees it.
+- **Automatic backups stay on the phone (owner's call, 2026-11-20).** Settings, Backup can
+  save a backup by itself, but only to a folder on the phone's own storage; a cloud folder is
+  turned down, since it would upload the whole map every week with nobody pressing anything. A
+  backup saved by hand may still go wherever the user chooses.
 - Every input beyond the country itself is optional: dates (year, month or day), ratings,
   visit counts, cities. A country with no other details is a complete entry.
 - Onboarding introduces every feature that needs setup: the photo scan, and the photo access

@@ -172,6 +172,8 @@ fun SettingsScreen(state: AppState, contentPadding: PaddingValues, modifier: Mod
     val been = remember(state.atlas, state.visits) { state.atlas.countedCountries(state.visits).size }
     val stamp = state.app
     val update by stamp.updates.state.collectAsStateWithLifecycle()
+    val autoBackup by stamp.backupFolder.collectAsStateWithLifecycle()
+    val lastAuto by stamp.lastAutoBackup.collectAsStateWithLifecycle()
 
     // The hourly look counts as on only while Android still lets it run.
     val hourlyOn = state.hourly && com.marcusrosado.stamp.data.Hourly.allowed(LocalContext.current)
@@ -184,7 +186,14 @@ fun SettingsScreen(state: AppState, contentPadding: PaddingValues, modifier: Mod
             hourlyOn -> "Every hour · ${placesLabel(state.seen.size)}"
             else -> placesLabel(state.seen.size)
         }
-        Page.Backup -> if (state.lastBackup > 0) "Last backup ${date(state.lastBackup)}" else "Not backed up yet"
+        Page.Backup -> {
+            // Either kind of backup is a backup here; the page itself tells them apart.
+            val last = maxOf(state.lastBackup, if (autoBackup != null) lastAuto else 0L)
+            listOfNotNull(
+                if (autoBackup != null) "Automatic" else null,
+                if (last > 0) "Last backup ${date(last)}" else "Not backed up yet",
+            ).joinToString(" · ")
+        }
         Page.About -> when (val u = update) {
             is com.marcusrosado.stamp.data.Update.Available -> "Version ${BuildConfig.VERSION_NAME} · ${u.release.version} is out"
             is com.marcusrosado.stamp.data.Update.Downloading -> "Downloading ${u.release.version}"
@@ -208,7 +217,8 @@ fun SettingsScreen(state: AppState, contentPadding: PaddingValues, modifier: Mod
         Found("Show the heat map", Page.Heat, "heat map heatmap density where i have been places"),
         Found("Clear the heat map", Page.Heat, "delete remove location history forget"),
         Found("Save a backup", Page.Backup, "export file json copy"),
-        Found("Restore from a backup", Page.Backup, "import file json"),
+        Found("Restore from a backup", Page.Backup, "import file json merge"),
+        Found("Back up automatically", Page.Backup, "auto automatic folder weekly schedule save"),
         Found("Spreadsheet", Page.Backup, "export csv excel sheets"),
         Found("Where you live", Page.Home, "home country lived address moved"),
         Found("Addresses", Page.Home, "home address street house apartment flat lived moved"),
@@ -762,8 +772,36 @@ private fun BackupPage(state: AppState) {
         }
     }
 
+    // The folder automatic backups go to. Android hands the tree back once the user picks one.
+    val folder by state.app.backupFolder.collectAsStateWithLifecycle()
+    val lastAuto by state.app.lastAutoBackup.collectAsStateWithLifecycle()
+    val failed by state.app.autoBackupFailed.collectAsStateWithLifecycle()
+    val pickUndo = LocalUndo.current
+    val pickFolder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        when {
+            uri == null -> Unit
+            com.marcusrosado.stamp.data.AutoBackup.onPhone(uri) -> state.app.setBackupFolder(uri)
+            else -> pickUndo?.say("Pick a folder on this phone")
+        }
+    }
+
     val today = LocalDate.now()
     Category("Backup")
+    SwitchPref(
+        "Back up automatically",
+        folder?.let { f ->
+            listOfNotNull(
+                f.name.ifEmpty { null },
+                when {
+                    // A folder that stopped taking backups says so where the last date would be.
+                    failed > 0 -> "Couldn't save there on ${date(failed)}"
+                    lastAuto > 0 -> "Last backup ${date(lastAuto)}"
+                    else -> null
+                },
+            ).joinToString(" · ").ifEmpty { null }
+        },
+        folder != null,
+    ) { on -> if (on) pickFolder.launch(com.marcusrosado.stamp.data.AutoBackup.phoneRoot) else state.app.setBackupFolder(null) }
     Pref("Save a backup", if (state.lastBackup > 0) "Last saved ${date(state.lastBackup)}" else "Never saved", onClick = { save.launch("stamp-backup-$today.json") })
     Pref("Restore from a backup", onClick = { open.launch(arrayOf("application/json", "text/plain", "application/octet-stream")) })
     Category("Export")
@@ -783,18 +821,53 @@ private fun BackupPage(state: AppState) {
                 }
             },
             onCancel = { pending = null },
+            onMerge = {
+                pending = null
+                restoring.launch {
+                    val added = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { state.app.mergeText(text) }
+                    say(
+                        when (added) {
+                            null -> "That file isn't a Stamp backup"
+                            0 -> "Nothing new in that backup"
+                            else -> "Backup merged"
+                        },
+                    )
+                }
+            },
         )
     }
 }
 
-/** Asks before the [now] places on the phone are replaced by the [incoming] ones in a file. */
+/**
+ * Asks before the [now] places on the phone are replaced by the [incoming] ones in a file. With
+ * [onMerge] it offers to merge instead: keep what is on the phone and add what only the file has.
+ */
 @Composable
-internal fun RestoreConfirm(now: Int, incoming: Int, onRestore: () -> Unit, onCancel: () -> Unit, what: String = "backup") {
+internal fun RestoreConfirm(
+    now: Int,
+    incoming: Int,
+    onRestore: () -> Unit,
+    onCancel: () -> Unit,
+    what: String = "backup",
+    onMerge: (() -> Unit)? = null,
+) {
     SeamAlertDialog(
         onDismissRequest = onCancel,
         title = { Text("Restore this $what?") },
-        text = { Text("The ${places(now)} on this phone are replaced by the ${places(incoming)} in the $what.") },
-        confirmButton = { TextButton(onClick = onRestore) { Text("Restore") } },
+        text = {
+            Text(
+                if (onMerge == null) "The ${places(now)} on this phone are replaced by the ${places(incoming)} in the $what."
+                else "Replace swaps the ${places(now)} on this phone for the ${places(incoming)} in the $what. " +
+                    "Merge keeps everything on this phone and adds what only the $what has.",
+            )
+        },
+        confirmButton = {
+            if (onMerge == null) TextButton(onClick = onRestore) { Text("Restore") }
+            else Row {
+                TextButton(onClick = onMerge) { Text("Merge") }
+                TextButton(onClick = onRestore) { Text("Replace") }
+            }
+        },
         dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } },
     )
 }
