@@ -17,6 +17,8 @@ import com.marcusrosado.stamp.data.PartialDate
 import com.marcusrosado.stamp.data.PhotoPoints
 import com.marcusrosado.stamp.data.Places
 import com.marcusrosado.stamp.data.TownIndex
+import com.marcusrosado.stamp.data.Trip
+import com.marcusrosado.stamp.data.TripUpdate
 import com.marcusrosado.stamp.data.Visit
 import com.marcusrosado.stamp.data.placeIdOf
 import com.marcusrosado.stamp.data.PhotoEvidence
@@ -91,6 +93,8 @@ sealed interface ScanState {
         val skipped: Int = 0,
         /** Trips the photos show that the user does not have yet, oldest first. */
         val trips: List<FoundTrip> = emptyList(),
+        /** What the photos fill in on trips the user has already. */
+        val updates: List<TripUpdate> = emptyList(),
     ) : ScanState
 
     data class Failed(val message: String, val source: ScanSource = ScanSource.Device) : ScanState
@@ -243,11 +247,12 @@ class PhotoScanner(
                     // comes back as it was, trips and all.
                     is ScanState.Done -> if (c.all.size == 0) r else {
                         reviewPoints = c.all
-                        r.copy(trips = runCatching { findTrips(c.all, a) }.getOrElse { e ->
+                        val (trips, updates) = runCatching { findTrips(c.all, a) }.getOrElse { e ->
                             if (e is CancellationException) throw e
                             android.util.Log.w("Stamp", "Could not find trips", e)
-                            emptyList()
-                        })
+                            emptyList<FoundTrip>() to emptyList()
+                        }
+                        r.copy(trips = trips, updates = updates)
                     }
                     else -> r
                 }
@@ -261,9 +266,9 @@ class PhotoScanner(
         }
     }
 
-    /** The trips in [points] the user does not have yet. */
-    private suspend fun findTrips(points: PhotoPoints, atlas: Atlas): List<FoundTrip> {
-        val p = places() ?: return emptyList()
+    /** The trips in [points] the user does not have yet, and what the rest add to trips they have. */
+    private suspend fun findTrips(points: PhotoPoints, atlas: Atlas): Pair<List<FoundTrip>, List<TripUpdate>> {
+        val p = places() ?: return emptyList<FoundTrip>() to emptyList()
         val index = towns ?: TownIndex(p.byId.values).also { towns = it }
         val v = visits()
         val homes = Homes.all(v)
@@ -280,16 +285,56 @@ class PhotoScanner(
         val now = homes.firstOrNull { it.now }?.let { spot(it.place, it.visit) }
         val existing = v.values.flatMap { it.trips }.distinctBy { it.id }
         fun land(lat: Double, lon: Double) = atlas.locate(lat, lon)?.id?.let { if (split()) it else atlas.countryOf(it) }
-        return AutoTrips.find(points.toList(), index, homeAt = homeAt, fallback = now).mapNotNull { t ->
+        val found = AutoTrips.find(points.toList(), index, homeAt = homeAt, fallback = now).mapNotNull { t ->
             val lands = t.stops.mapNotNull { land(it.city.lat, it.city.lon) }.distinct()
             when {
-                lands.isEmpty() || AutoTrips.known(t, lands.toSet(), existing) -> null
+                lands.isEmpty() -> null
                 // Every trip of a place the user lived in is a stay there, its towns homes: a
                 // trip found inside it would turn into one.
                 v[lands.first()]?.state == com.marcusrosado.stamp.data.TravelState.Lived -> null
                 else -> t.copy(land = lands.first(), lands = lands)
             }
         }
+        // One the user has already is filled in instead: towns that fit between its stops, and
+        // the dates they left out. Two found trips on one of theirs fill it in one after the other.
+        val fresh = ArrayList<FoundTrip>()
+        val filled = LinkedHashMap<String, TripUpdate>()
+        // A stay in a place the user lived is never filled in: its towns are homes.
+        val stays = v.values.filter { it.state == com.marcusrosado.stamp.data.TravelState.Lived }.flatMapTo(HashSet()) { it.trips.map { t -> t.id } }
+        val visits = existing.filter { it.id !in stays }
+        for (t in found) {
+            val mine = AutoTrips.overlapping(t, t.lands.toSet(), visits)
+            if (mine == null) {
+                if (!AutoTrips.known(t, t.lands.toSet(), existing)) fresh += t
+                continue
+            }
+            val before = filled[mine.id]
+            val base = before?.let { applied(mine, it) } ?: mine
+            // A town the user put on another trip of those days stays on it.
+            val elsewhere = visits.filter { it.id != mine.id && AutoTrips.known(t, t.lands.toSet(), listOf(it)) }
+                .flatMapTo(HashSet()) { o -> o.places.map(::placeIdOf) }
+            val u = AutoTrips.update(base, t, elsewhere = elsewhere)?.let { u -> u.copy(lands = u.stops.mapNotNull { land(it.city.lat, it.city.lon) }.distinct()) } ?: continue
+            filled[mine.id] = if (before == null) u else before.copy(
+                stops = before.stops + u.stops,
+                arrived = before.arrived + u.arrived,
+                left = before.left + u.left,
+                date = before.date ?: u.date,
+                lands = (before.lands + u.lands).distinct(),
+            )
+        }
+        return fresh to filled.values.toList()
+    }
+
+    /** [trip] with [u] in, only as far as working out the next update needs. */
+    private fun applied(trip: Trip, u: TripUpdate): Trip {
+        var cities = trip.cities
+        for (s in u.stops) cities = cities.take(s.at) + s.city.id + cities.drop(s.at)
+        return trip.copy(
+            cities = cities,
+            arrived = trip.arrived + u.arrived + u.stops.associate { it.city.id to it.arrived },
+            left = trip.left + u.left + u.stops.associate { it.city.id to it.left },
+            date = trip.date ?: u.date,
+        )
     }
 
     private fun publish(gen: Int, s: ScanState) {
