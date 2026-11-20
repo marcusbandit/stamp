@@ -453,31 +453,55 @@ class VisitStore(private val file: File) {
         )
     }
 
-    /** Puts a city on a trip. With no trip given, it goes on a new one starting at [id]. */
+    /**
+     * Puts a city on a trip, as its stop number [at] counted from 0, or last when null. With no
+     * trip given, it goes on a new one starting at [id].
+     */
     @Synchronized
-    fun addCity(id: String, tripId: String?, cityId: String) {
+    fun addCity(id: String, tripId: String?, cityId: String, at: Int? = null) {
         trips = if (tripId == null) {
             trips + Trip(newTripId(), cities = listOf(cityId), lands = listOf(id))
         } else {
             // Back to a place the trip already stopped at: a new stop of its own, with a count.
-            trips.map { if (it.id == tripId) it.copy(cities = it.cities + nextStopId(it, cityId)) else it }
+            trips.map { if (it.id == tripId) it.withStop(nextStopId(it, cityId), at) else it }
         }
         save()
     }
 
     /** Puts a hand-pinned place on a trip, the way [addCity] puts a city there. */
     @Synchronized
-    fun addPin(id: String, tripId: String?, pin: Pin) {
+    fun addPin(id: String, tripId: String?, pin: Pin, at: Int? = null) {
         if (tripId != null && trips.none { it.id == tripId }) return
         val pinId = PIN_PREFIX + newTripId()
         pins = pins + (pinId to pin)
         trips = if (tripId == null) {
             trips + Trip(newTripId(), cities = listOf(pinId), lands = listOf(id))
         } else {
-            trips.map { if (it.id == tripId) it.copy(cities = it.cities + pinId) else it }
+            trips.map { if (it.id == tripId) it.withStop(pinId, at) else it }
         }
         save()
     }
+
+    /**
+     * [stop] put in as stop number [at], or last when null. The leg told across the gap it fills
+     * is told again from the new stop to the one after it, so the way the user reached that stop,
+     * or went home, is still said. The old leg stays, unseen, the way a reorder leaves one, and is
+     * back if the new stop goes again.
+     */
+    private fun Trip.withStop(stop: String, at: Int?): Trip {
+        val i = at?.coerceIn(0, cities.size) ?: cities.size
+        val before = cities.getOrNull(i - 1) ?: Leg.START
+        val after = cities.getOrNull(i) ?: Leg.END
+        val across = legs.firstOrNull { it.from == before && it.to == after }
+        return copy(
+            cities = cities.take(i) + stop + cities.drop(i),
+            legs = if (across == null) legs
+                else legs.filterNot { it.from == stop && it.to == after } + across.copy(from = stop),
+        )
+    }
+
+    /** Says a town the trip's photos showed was no stop, so it is not offered again. */
+    fun notAStop(tripId: String, cityId: String) = changeTrip(tripId) { t -> t.copy(notStops = t.notStops + cityId) }
 
     private fun nextStopId(t: Trip, place: String): String {
         if (t.cities.none { placeIdOf(it) == place }) return place
@@ -917,6 +941,7 @@ class VisitStore(private val file: File) {
         if (t.memories.isNotEmpty()) put("memories", memoriesJson(t.memories))
         // A cover whose memory has gone is not kept: the header already shows the first photo.
         t.cover?.takeIf { c -> t.memories.any { it.id == c } }?.let { put("cover", it) }
+        if (t.notStops.isNotEmpty()) put("notStops", JSONArray(t.notStops.sorted()))
     }
 
     private fun memoriesJson(list: List<Memory>) = JSONArray(list.map { m ->
@@ -1001,6 +1026,7 @@ class VisitStore(private val file: File) {
         memories = parseMemories(t.optJSONArray("memories")),
         // Saved before covers could be picked: none, so the header shows the first photo.
         cover = t.optString("cover").ifEmpty { null },
+        notStops = strings(t.optJSONArray("notStops")).toSet(),
         lands = lands,
     )
 

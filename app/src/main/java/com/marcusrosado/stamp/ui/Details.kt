@@ -90,12 +90,14 @@ class DetailActions(
     val onSetHome: (id: String) -> Unit = {},
     /** Copies a trip with its route and no dates; the copy's id. */
     val onDuplicateTrip: (tripId: String) -> String? = { null },
-    /** A null trip puts the city on a new visit. */
-    val onAddCity: (id: String, tripId: String?, cityId: String) -> Unit,
+    /** A null trip puts the city on a new visit; a null place puts it last. */
+    val onAddCity: (id: String, tripId: String?, cityId: String, at: Int?) -> Unit,
     val onRemoveCity: (tripId: String, cityId: String) -> Unit,
+    /** Says a town the trip's photos showed was no stop. */
+    val onNotAStop: (tripId: String, cityId: String) -> Unit = { _, _ -> },
     val onCityNote: (id: String, cityId: String, note: Note) -> Unit,
     /** A null trip puts the pin on a new visit, as with cities. */
-    val onAddPin: (id: String, tripId: String?, pin: Pin) -> Unit,
+    val onAddPin: (id: String, tripId: String?, pin: Pin, at: Int?) -> Unit,
     val onRenamePin: (pinId: String, name: String) -> Unit,
     /** Flies the map to a city or pin, close enough to see its outline. */
     val onShowOnMap: (lat: Double, lon: Double) -> Unit,

@@ -155,5 +155,8 @@ class Journey(
 
 val LocalJourney = compositionLocalOf { Journey(emptyMap(), null, null) }
 
+/** Every place the user is known to have been, for the stops a trip's photos show. */
+val LocalSeen = compositionLocalOf { emptyList<com.marcusrosado.stamp.data.SeenPoint>() }
+
 /** Every trip's lines as the maps draw them, worked out once for all of them. */
 val LocalMapRoutes = compositionLocalOf { emptyList<MapRoute>() }

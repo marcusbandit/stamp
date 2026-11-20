@@ -1095,7 +1095,7 @@ private fun HomePage(state: AppState) {
             // Where a street typed on its own goes: by the latest address or town on the stay.
             near = stay?.cities?.reversed()?.firstNotNullOfOrNull { placeOf(it, visit, state.places) }?.let { it.lat to it.lon },
             onSave = { pin ->
-                state.details.onAddPin(home.id, stay?.id, pin)
+                state.details.onAddPin(home.id, stay?.id, pin, null)
                 adding = false
             },
             onDismiss = { adding = false },

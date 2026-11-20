@@ -638,6 +638,7 @@ private fun App(
                     focus = Focus(lat, lon, CITY_ZOOM)
                 },
                 onStopDates = app.visits::setStopDates,
+                onNotAStop = app.visits::notAStop,
                 onStopOrder = app.visits::setStopOrder,
                 onLeg = { t, from, to, steps, around -> app.visits.setLeg(t, from, to, steps, around) },
                 onTripStart = app.visits::setTripStart,
@@ -791,7 +792,7 @@ private fun App(
             if (value.isEmpty() && journey.lines != null) value = draw(Journey(journey.visits, journey.places, journey.airports))
             value = draw(journey)
         }
-        androidx.compose.runtime.CompositionLocalProvider(LocalJourney provides journey, LocalMapRoutes provides mapRoutes) {
+        androidx.compose.runtime.CompositionLocalProvider(LocalJourney provides journey, LocalMapRoutes provides mapRoutes, LocalSeen provides seen) {
             when (state.posture) {
                 Posture.Portrait -> PortraitLayout(state)
                 // One layout for the big screen, flat or bent, so bending it never swaps the tree.

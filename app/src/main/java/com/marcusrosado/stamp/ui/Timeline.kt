@@ -120,6 +120,7 @@ import com.marcusrosado.stamp.data.Country
 import com.marcusrosado.stamp.data.Memory
 import com.marcusrosado.stamp.data.Note
 import com.marcusrosado.stamp.data.PartialDate
+import com.marcusrosado.stamp.data.PhotoStop
 import com.marcusrosado.stamp.data.Places
 import com.marcusrosado.stamp.data.Trip
 import com.marcusrosado.stamp.data.Visit
@@ -152,6 +153,12 @@ class TimelineActions(
     /** Says where the user slept at a stop: its own place or one of its day places. */
     val onSlept: (stop: String, place: String) -> Unit = { _, _ -> },
     val onAddStop: () -> Unit,
+    /** Opens the search for a stop that goes in as stop number [at], counted from 0. */
+    val onAddStopAt: (at: Int) -> Unit = {},
+    /** Adds a town the photos showed as stop number [at], with the days they were taken. */
+    val onAddPhotoStop: (at: Int, cityId: String, arrived: PartialDate?, left: PartialDate?) -> Unit = { _, _, _, _ -> },
+    /** Says a town the photos showed was no stop. */
+    val onNotAStop: (cityId: String) -> Unit = {},
     val onOpenPlace: (place: String) -> Unit,
     val onAddMemories: (List<Memory>) -> Unit,
     val onUpdateMemory: (Memory) -> Unit,
@@ -226,6 +233,15 @@ fun VisitTimeline(
     val at = (reached?.takeIf { it.startsWith("stop-") }?.removePrefix("stop-")
         ?: stops.lastOrNull()?.takeIf { reached == "end" } ?: stops.firstOrNull())
         ?.let { placeOf(it, visit, places) }?.let { it.lat to it.lon }
+    // Towns the photos show the user in during the trip that are not on it, by where they go.
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val seen = LocalSeen.current
+    val journeyNow = LocalJourney.current
+    val photoStops by produceState(emptyList<PhotoStop>(), trip, seen, places, lived) {
+        value = if (lived || places == null) emptyList()
+            else withContext(Dispatchers.IO) { photoStopsOf(context, trip, visit, places, seen, citiesCountry(country), journeyNow) }
+    }
+    val photoStopsAt = photoStops.groupBy { it.at }
     var editingDates by remember { mutableStateOf(false) }
     var naming by remember { mutableStateOf(false) }
     var stopDates by remember { mutableStateOf<String?>(null) }
@@ -247,7 +263,7 @@ fun VisitTimeline(
         else -> placeOf(id, visit, places)?.name ?: journey.place(id)?.name ?: "the next stop"
     }
     @Composable
-    fun legRow(from: String, to: String, key: String) {
+    fun legRow(from: String, to: String, key: String, insertAt: Int? = null) {
         val l = trip.legBetween(from, to)
         LegLine(
             leg = l,
@@ -257,6 +273,8 @@ fun VisitTimeline(
             where = if (to == com.marcusrosado.stamp.data.Leg.END && trip.end == null) "home" else "to ${nameOf(to)}",
             lit = passed(key),
             onClick = { leg = from to to },
+            onInsert = insertAt?.let { at -> { actions.onAddStopAt(at) } },
+            insertLabel = "Add a stop before ${nameOf(to)}",
         )
     }
     // The stop a memory is being added to; "" is the visit as a whole.
@@ -354,9 +372,12 @@ fun VisitTimeline(
                         MemoryRow(loose, onOpen = { viewing = it.id }, onAdd = { adding = "" }, menu = memoryMenu)
                     }
                 }
+                photoStopsAt[0]?.takeIf { stops.isNotEmpty() }?.forEach { s ->
+                    item(key = "photo-${s.city.id}") { PhotoStopRow(s, actions) }
+                }
                 if (journeyed && trip.cities.isNotEmpty()) {
                     val first = trip.cities.first()
-                    item(key = "leg-start-$first") { legRow(com.marcusrosado.stamp.data.Leg.START, first, "leg-start-$first") }
+                    item(key = "leg-start-$first") { legRow(com.marcusrosado.stamp.data.Leg.START, first, "leg-start-$first", insertAt = 0) }
                 }
                 stops.forEachIndexed { i, place ->
                     item(key = "stop-$place") {
@@ -431,9 +452,15 @@ fun VisitTimeline(
                             MemoryRow(kept, onOpen = { viewing = it.id }, onAdd = { adding = place }, menu = memoryMenu)
                         }
                     }
-                    if (!lived) stops.getOrNull(i + 1)?.let { next ->
-                        item(key = "leg-$place-$next") { legRow(place, next, "leg-$place-$next") }
+                    photoStopsAt[i + 1]?.forEach { s ->
+                        item(key = "photo-${s.city.id}") { PhotoStopRow(s, actions) }
                     }
+                    if (!lived) stops.getOrNull(i + 1)?.let { next ->
+                        item(key = "leg-$place-$next") { legRow(place, next, "leg-$place-$next", insertAt = i + 1) }
+                    }
+                }
+                if (stops.isEmpty()) photoStopsAt[0]?.forEach { s ->
+                    item(key = "photo-${s.city.id}") { PhotoStopRow(s, actions) }
                 }
                 item(key = "add-stop") {
                     Node(
@@ -1647,6 +1674,103 @@ fun rangeLabel(from: PartialDate?, to: PartialDate?, now: Boolean = false): Stri
     from != null -> from.label
     to != null -> "Until ${to.label}"
     else -> null
+}
+
+/**
+ * The towns the user's photos show during [trip] that it does not stop at: the places seen in
+ * the trip's dates from the photo scan and a Google Photos import, and where its own photos
+ * were taken. Only towns in the trip's countries count, and nothing near home. A
+ * trip with no dates, or dates as loose as a whole year, has too wide a window to tell.
+ */
+private fun photoStopsOf(
+    context: android.content.Context,
+    trip: Trip,
+    visit: Visit,
+    places: Places,
+    seen: List<com.marcusrosado.stamp.data.SeenPoint>,
+    alpha2: String,
+    journey: Journey,
+): List<PhotoStop> {
+    val taken = trip.memories.map { it.takenMs }.filter { it > 0 }
+    val span = window(trip.date, trip.until)
+        ?: if (taken.isEmpty()) return emptyList() else taken.min() - DAY_MS to taken.max() + DAY_MS
+    if (span.second - span.first > PHOTO_STOP_SPAN_MS) return emptyList()
+    val points = seen.filter { it.from != com.marcusrosado.stamp.data.SeenFrom.Hourly && it.ms in span.first..span.second }.toMutableList()
+    // The trip's own photos say where they were taken too, read from the phone.
+    for (m in trip.memories) {
+        if (!m.isPhoto || m.takenMs <= 0) continue
+        val at = runCatching { com.marcusrosado.stamp.scan.Memories.location(context, android.net.Uri.parse(m.media)) }.getOrNull() ?: continue
+        points += com.marcusrosado.stamp.data.SeenPoint(m.takenMs, at.first, at.second, com.marcusrosado.stamp.data.SeenFrom.Photo)
+    }
+    if (points.isEmpty()) return emptyList()
+    val countries = (trip.places.mapNotNull { places.byId[placeIdOf(it)]?.country } + alpha2).filter { it.isNotEmpty() }.distinct()
+    val towns = countries.flatMap { places.citiesIn(it) }
+    val on = trip.places.map(::placeIdOf).toSet()
+    val stops = trip.cities.map { s ->
+        com.marcusrosado.stamp.data.PhotoStops.Stop(
+            trip.placesAt(s).mapNotNull { placeOf(it, visit, places) }.map { it.lat to it.lon },
+            trip.arrived[s]?.let { window(it, it)?.first?.plus(14 * 3_600_000L) },
+        )
+    }
+    return com.marcusrosado.stamp.data.PhotoStops.find(
+        points, stops,
+        cityAt = { lat, lon -> com.marcusrosado.stamp.data.PhotoStops.townOf(lat, lon, towns) },
+        skip = { it.id in on || it.id in trip.notStops },
+        avoid = listOfNotNull(journey.startOf(trip), journey.endOf(trip)).map { it.lat to it.lon },
+    )
+}
+
+private const val DAY_MS = 86_400_000L
+
+/** A trip longer than this, or dated only by its year, could hold photos from anywhere. */
+private const val PHOTO_STOP_SPAN_MS = 62 * DAY_MS
+
+/** The day [ms] fell on, on this phone's clock. */
+private fun dayOf(ms: Long): PartialDate {
+    val d = java.time.Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault()).toLocalDate()
+    return PartialDate(d.year, d.monthValue, d.dayOfMonth)
+}
+
+/**
+ * A town the photos show between two stops, on the line where it would go: its name, when the
+ * photos were taken, and the buttons that add it or turn it down.
+ */
+@Composable
+private fun PhotoStopRow(stop: PhotoStop, actions: TimelineActions) {
+    val line = MaterialTheme.colorScheme.outlineVariant
+    val first = dayOf(stop.firstMs)
+    val last = dayOf(stop.lastMs).takeIf { it != first }
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 16.dp).drawBehind {
+            val x = 20.dp.toPx()
+            drawLine(line, Offset(x, 0f), Offset(x, size.height), strokeWidth = 2.dp.toPx())
+        },
+    ) {
+        Box(Modifier.width(40.dp), contentAlignment = Alignment.Center) {
+            Box(
+                Modifier.size(28.dp).clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.surface)
+                    .border(2.dp, line, CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Outlined.PhotoLibrary, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f).padding(vertical = 10.dp)) {
+            Text(stop.city.name, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(
+                "In your photos · ${rangeLabel(first, last)}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        TextButton(onClick = { actions.onAddPhotoStop(stop.at, stop.city.id, first, last) }) { Text("Add") }
+        IconButton(onClick = { actions.onNotAStop(stop.city.id) }, modifier = Modifier.size(40.dp)) {
+            Icon(Icons.Filled.Close, contentDescription = "Not a stop", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
 }
 
 /** The span of time a loose date range covers, in epoch ms, for finding photos from it. */
