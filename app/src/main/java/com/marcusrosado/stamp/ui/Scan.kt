@@ -1,5 +1,7 @@
 package com.marcusrosado.stamp.ui
 
+import androidx.compose.material.icons.outlined.Luggage
+import com.marcusrosado.stamp.data.FoundTrip
 import android.Manifest
 import android.content.Intent
 import android.net.Uri
@@ -122,7 +124,7 @@ fun ScanScreen(
     visits: Map<String, Visit>,
     home: String?,
     onStartDevice: () -> Unit,
-    onAdd: (found: Map<String, PhotoEvidence>, mark: Set<String>) -> Unit,
+    onAdd: (found: Map<String, PhotoEvidence>, mark: Set<String>, trips: List<FoundTrip>) -> Unit,
     onReset: () -> Unit,
     onClose: () -> Unit,
     /** Ticks changed in the review, by country id, to keep with the finished scan. */
@@ -383,7 +385,7 @@ private fun Review(
     state: ScanState.Done,
     visits: Map<String, Visit>,
     home: String?,
-    onAdd: (found: Map<String, PhotoEvidence>, mark: Set<String>) -> Unit,
+    onAdd: (found: Map<String, PhotoEvidence>, mark: Set<String>, trips: List<FoundTrip>) -> Unit,
     onPick: (Map<String, Boolean>) -> Unit,
     onAgain: () -> Unit,
 ) {
@@ -394,7 +396,7 @@ private fun Review(
     if (state.found.isEmpty() && parts != null) {
         Message(
             partsLine(parts, state.skipped), "No photo in the parts so far has a location.", nextLabel(parts), nextPart,
-            secondary = "Finish" to { onAdd(emptyMap(), emptySet()) },
+            secondary = "Finish" to { onAdd(emptyMap(), emptySet(), emptyList()) },
         )
         return
     }
@@ -421,6 +423,9 @@ private fun Review(
     fun ticked(id: String) = tickable(id) && (state.picks[id] ?: true)
     val open = state.found.map { it.country.id }.filter(::tickable)
     val newCount = open.count(::ticked)
+    // Found trips start ticked too, under their own key in the same picks.
+    fun tripTicked(t: FoundTrip) = state.picks[t.key] ?: true
+    val tripCount = state.trips.count(::tripTicked)
     Column(Modifier.fillMaxSize()) {
         Row(
             // The end padding lines the box up with the row boxes under it.
@@ -451,6 +456,13 @@ private fun Review(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
+            if (state.trips.isNotEmpty()) {
+                item(key = "trips") { SectionLabel(if (state.trips.size == 1) "1 trip" else "${state.trips.size} trips") }
+                items(state.trips, key = { it.key }) { t ->
+                    TripRow(t, tripTicked(t)) { onPick(mapOf(t.key to !tripTicked(t))) }
+                }
+                item(key = "countries") { SectionLabel(countries(state.found.size).replaceFirstChar { it.uppercase() }) }
+            }
             items(state.found, key = { it.country.id }) { f ->
                 val existing = visits[f.country.id]
                 val note = when {
@@ -497,11 +509,11 @@ private fun Review(
             onClick = {
                 // Dates go onto every found country that is or will be marked.
                 val mark = open.filter(::ticked).toSet()
-                onAdd(state.found.associate { it.country.id to it.evidence }, mark)
+                onAdd(state.found.associate { it.country.id to it.evidence }, mark, state.trips.filter(::tripTicked))
             },
             modifier = Modifier.fillMaxWidth().padding(16.dp),
         ) {
-            Text(if (newCount == 0) "Done" else if (newCount == 1) "Add 1 country" else "Add $newCount countries")
+            Text(addLabel(newCount, tripCount))
         }
     }
 }
@@ -593,6 +605,60 @@ private fun DeleteParts(uris: List<String>) {
         }.isSuccess
         if (!asked) askable.forEach { partsGone[it] = false }
     }
+}
+
+/** "Add 3 countries and 2 trips", or "Done" when nothing is ticked. */
+internal fun addLabel(countries: Int, trips: Int): String {
+    val parts = listOfNotNull(
+        countries.takeIf { it > 0 }?.let { if (it == 1) "1 country" else "$it countries" },
+        trips.takeIf { it > 0 }?.let { if (it == 1) "1 trip" else "$it trips" },
+    )
+    return if (parts.isEmpty()) "Done" else "Add " + parts.joinToString(" and ")
+}
+
+@Composable
+private fun SectionLabel(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(start = 4.dp, top = 12.dp, bottom = 4.dp),
+    )
+}
+
+/** A trip the photos show: its towns in order, and when. */
+@Composable
+private fun TripRow(t: FoundTrip, checked: Boolean, onToggle: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onToggle)
+            .padding(vertical = 8.dp, horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.Outlined.Luggage, contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.width(36.dp),
+        )
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(townsLine(t.stops.map { it.city.name }), fontWeight = FontWeight.Medium)
+            Text(
+                evidenceLine(PhotoEvidence(t.startMs, t.endMs)),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Checkbox(checked = checked, onCheckedChange = { onToggle() })
+    }
+}
+
+/** "Baytown, Hillville and 3 more": the first towns, then how many others. */
+internal fun townsLine(names: List<String>): String = when {
+    names.size <= 3 -> names.joinToString(", ")
+    else -> names.take(2).joinToString(", ") + " and ${names.size - 2} more"
 }
 
 @Composable

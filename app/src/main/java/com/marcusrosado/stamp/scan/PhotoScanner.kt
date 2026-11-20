@@ -9,7 +9,16 @@ import android.os.Build
 import android.provider.MediaStore
 import androidx.exifinterface.media.ExifInterface
 import com.marcusrosado.stamp.data.Atlas
+import com.marcusrosado.stamp.data.AutoTrips
 import com.marcusrosado.stamp.data.Country
+import com.marcusrosado.stamp.data.FoundTrip
+import com.marcusrosado.stamp.data.Homes
+import com.marcusrosado.stamp.data.PartialDate
+import com.marcusrosado.stamp.data.PhotoPoints
+import com.marcusrosado.stamp.data.Places
+import com.marcusrosado.stamp.data.TownIndex
+import com.marcusrosado.stamp.data.Visit
+import com.marcusrosado.stamp.data.placeIdOf
 import com.marcusrosado.stamp.data.PhotoEvidence
 import com.marcusrosado.stamp.data.SeenFrom
 import com.marcusrosado.stamp.data.SeenPoint
@@ -82,6 +91,8 @@ sealed interface ScanState {
         val problem: String? = null,
         /** Picked files that were not parts of the export being read, left alone. */
         val skipped: Int = 0,
+        /** Trips the photos show that the user does not have yet, oldest first. */
+        val trips: List<FoundTrip> = emptyList(),
     ) : ScanState
 
     data class Failed(val message: String, val source: ScanSource = ScanSource.Device) : ScanState
@@ -102,7 +113,16 @@ class PhotoScanner(
     private val onPoints: (List<SeenPoint>) -> Unit = {},
     /** Where an export read one part at a time is kept between parts. */
     private val partsFile: java.io.File? = null,
+    /** The bundled cities, for the towns trips stop at; null leaves trips out. */
+    private val places: suspend () -> Places? = { null },
+    /** The user's marks: where they live, and the trips they have already. */
+    private val visits: () -> Map<String, Visit> = { emptyMap() },
 ) {
+    /** Every photo place of the review that is open, so a zip added to it finds trips across both. */
+    private var reviewPoints = PhotoPoints()
+    private var towns: TownIndex? = null
+    private val pointsFile get() = partsFile?.let { java.io.File(it.path.removeSuffix(".json") + "-points.bin") }
+
     private val _state = MutableStateFlow<ScanState>(ScanState.Idle)
     val state: StateFlow<ScanState> = _state.asStateFlow()
     private var job: Job? = null
@@ -194,6 +214,7 @@ class PhotoScanner(
     /** Forgets the parts read so far, once their countries are added. */
     fun endParts() {
         partsFile?.delete()
+        pointsFile?.delete()
     }
 
     /** Stops a running scan, or clears a finished or failed one, back to Idle. */
@@ -217,7 +238,20 @@ class PhotoScanner(
         _state.value = ScanState.Running(0, 0, emptyList())
         job = scope.launch(Dispatchers.IO) {
             val result = try {
-                body(Collector(atlas(), gen, source))
+                val a = atlas()
+                val c = Collector(a, gen, source)
+                when (val r = body(c)) {
+                    // A zip that failed hands back the review as it was, trips and all.
+                    is ScanState.Done -> if (r.problem != null) r else {
+                        reviewPoints = c.all
+                        r.copy(trips = runCatching { findTrips(c.all, a) }.getOrElse { e ->
+                            if (e is CancellationException) throw e
+                            android.util.Log.w("Stamp", "Could not find trips", e)
+                            emptyList()
+                        })
+                    }
+                    else -> r
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -225,6 +259,31 @@ class PhotoScanner(
             }
             reading = false
             publish(gen, result)
+        }
+    }
+
+    /** The trips in [points] the user does not have yet. */
+    private suspend fun findTrips(points: PhotoPoints, atlas: Atlas): List<FoundTrip> {
+        val p = places() ?: return emptyList()
+        val index = towns ?: TownIndex(p.byId.values).also { towns = it }
+        val v = visits()
+        val homes = Homes.all(v)
+        fun spot(place: String, visit: Visit): Pair<Double, Double>? =
+            visit.pins[place]?.let { it.lat to it.lon } ?: p.byId[placeIdOf(place)]?.let { it.lat to it.lon }
+        // A home the user gave counts on the days it holds; one with no dates only where the
+        // photos show no home of their own.
+        val dated = homes.filter { it.from != null || it.to != null }
+        val homeAt = { d: java.time.LocalDate ->
+            val day = PartialDate(d.year, d.monthValue, d.dayOfMonth)
+            dated.firstOrNull { h -> (h.from == null || !day.endsBefore(h.from)) && (h.to == null || !h.to.endsBefore(day)) }
+                ?.let { spot(it.place, it.visit) }
+        }
+        val now = homes.firstOrNull { it.now }?.let { spot(it.place, it.visit) }
+        val existing = v.values.flatMap { it.trips }.distinctBy { it.id }
+        fun land(lat: Double, lon: Double) = atlas.locate(lat, lon)?.id?.let { if (split()) it else atlas.countryOf(it) }
+        return AutoTrips.find(points.toList(), index, homeAt = homeAt, fallback = now).mapNotNull { t ->
+            val lands = t.stops.mapNotNull { land(it.city.lat, it.city.lon) }
+            if (lands.isEmpty() || AutoTrips.known(t, lands.toSet(), existing)) null else t.copy(land = lands.first())
         }
     }
 
@@ -236,6 +295,8 @@ class PhotoScanner(
     private inner class Collector(private val atlas: Atlas, private val gen: Int, private val source: ScanSource) {
         private val spans = HashMap<String, LongArray>()
         private val points = ArrayList<SeenPoint>()
+        /** This read's photo places on top of [base], for trips. */
+        val all = PhotoPoints()
         private val from = if (source == ScanSource.Takeout) SeenFrom.GooglePhotos else SeenFrom.Photo
 
         /** Hands the positions found so far to be kept. */
@@ -262,7 +323,12 @@ class PhotoScanner(
                 span[1] = maxOf(span[1], s.second)
             }
             located = session.located
+            // Several parts read in one go share this collector: the file is read once.
+            if (!pointsRead) pointsFile?.let { all.addAll(PhotoPoints.read(it)) }
+            pointsRead = true
         }
+
+        private var pointsRead = false
 
         /** Starts from a review the new zips add to. */
         fun seed(done: ScanState.Done) {
@@ -274,6 +340,7 @@ class PhotoScanner(
                 if (f.evidence.lastMs > 0) span[1] = maxOf(span[1], f.evidence.lastMs)
             }
             located = done.located
+            all.addAll(reviewPoints)
         }
 
         fun spans(): Map<String, Pair<Long, Long>> = spans.mapValues { (_, s) -> s[0] to s[1] }
@@ -281,6 +348,7 @@ class PhotoScanner(
         fun add(lat: Double, lon: Double, ms: Long) {
             located++
             points += SeenPoint(ms, lat, lon, from)
+            if (ms > 0) all.add(ms, lat, lon)
             val key = (lat * 1000).roundToInt().toLong() * 1_000_000 + (lon * 1000).roundToInt()
             val id = if (cache.containsKey(key)) cache[key] else atlas.locate(lat, lon)?.id.also { cache[key] = it }
             id ?: return
@@ -381,7 +449,8 @@ class PhotoScanner(
         val number = name?.let(Takeout::partNumber) ?: 0
         val export = name?.let(Takeout::exportOf).orEmpty()
         // A part of another export starts over, so an old unfinished one never mixes in.
-        val before = Takeout.Session.read(file).takeIf { it.export == export } ?: Takeout.Session(export = export)
+        val before = Takeout.Session.read(file).takeIf { it.export == export }
+            ?: Takeout.Session(export = export).also { pointsFile?.delete() }
         c.seed(before)
         fun parts(s: Takeout.Session, again: Boolean) =
             Parts(s.numbers, s.parts.size, number.takeIf { it > 0 }, again, uri.toString(), s.next)
@@ -401,6 +470,7 @@ class PhotoScanner(
         }
         coroutineContext.ensureActive()
         val after = before.plus(key, number, photos, c.located, c.spans())
+        pointsFile?.let { c.all.write(it) }
         Takeout.Session.write(file, after)
         return c.done(after.photos, parts(after, again = false)).copy(askMore = true)
     }

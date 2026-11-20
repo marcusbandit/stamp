@@ -418,6 +418,9 @@ class VisitStore(private val file: File) {
     /** Names a trip; an empty name gives it back its number. Only the name changes. */
     fun renameTrip(tripId: String, name: String) = changeTrip(tripId) { it.copy(name = name.trim()) }
 
+    /** The user saw the photos of a trip made from them, and picked or turned them down. */
+    fun photosPicked(tripId: String) = changeTrip(tripId) { it.copy(pickPhotos = false) }
+
     /** Removes a trip everywhere. A Visited or Lived place always keeps at least one. */
     @Synchronized
     fun removeTrip(id: String, tripId: String) {
@@ -451,6 +454,19 @@ class VisitStore(private val file: File) {
             dayPlaces = days,
             slept = (slept - gone).filter { (stop, bed) -> bed in days[stop].orEmpty() },
         )
+    }
+
+    /**
+     * Puts trips a scan found on the map, with their stops and dates. A country that only had
+     * the empty trip every marked country holds gets the found one in its place.
+     */
+    @Synchronized
+    fun addFoundTrips(found: List<FoundTrip>) {
+        if (found.isEmpty()) return
+        val made = found.filter { it.land.isNotEmpty() }.map { AutoTrips.toTrip(it, newTripId(), it.land) }
+        val lands = made.flatMapTo(HashSet()) { it.lands }
+        trips = trips.filterNot { it.isBlank && it.lands.size == 1 && it.lands[0] in lands } + made
+        save()
     }
 
     /** Puts a city on a trip. With no trip given, it goes on a new one starting at [id]. */
@@ -917,6 +933,7 @@ class VisitStore(private val file: File) {
         if (t.memories.isNotEmpty()) put("memories", memoriesJson(t.memories))
         // A cover whose memory has gone is not kept: the header already shows the first photo.
         t.cover?.takeIf { c -> t.memories.any { it.id == c } }?.let { put("cover", it) }
+        if (t.pickPhotos) put("pickPhotos", true)
     }
 
     private fun memoriesJson(list: List<Memory>) = JSONArray(list.map { m ->
@@ -1001,6 +1018,7 @@ class VisitStore(private val file: File) {
         memories = parseMemories(t.optJSONArray("memories")),
         // Saved before covers could be picked: none, so the header shows the first photo.
         cover = t.optString("cover").ifEmpty { null },
+        pickPhotos = t.optBoolean("pickPhotos"),
         lands = lands,
     )
 
