@@ -319,6 +319,8 @@ class StampApp : Application(), androidx.work.Configuration.Provider {
         val choice = backupChoice.incrementAndGet()
         // Off shows at once; on shows once the folder is kept, a moment later.
         if (tree == null) backupFolder.value = null
+        // Only a folder on the phone takes automatic backups; the pickers check before calling.
+        if (tree != null && !com.marcusrosado.stamp.data.AutoBackup.onPhone(tree)) return
         scope.launch(lookWriter) {
             if (choice != backupChoice.get()) return@launch
             val flags = android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION

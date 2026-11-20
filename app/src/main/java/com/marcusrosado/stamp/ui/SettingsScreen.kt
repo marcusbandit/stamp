@@ -776,8 +776,13 @@ private fun BackupPage(state: AppState) {
     val folder by state.app.backupFolder.collectAsStateWithLifecycle()
     val lastAuto by state.app.lastAutoBackup.collectAsStateWithLifecycle()
     val failed by state.app.autoBackupFailed.collectAsStateWithLifecycle()
+    val pickUndo = LocalUndo.current
     val pickFolder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
-        uri?.let { state.app.setBackupFolder(it) }
+        when {
+            uri == null -> Unit
+            com.marcusrosado.stamp.data.AutoBackup.onPhone(uri) -> state.app.setBackupFolder(uri)
+            else -> pickUndo?.say("Pick a folder on this phone")
+        }
     }
 
     val today = LocalDate.now()
@@ -796,7 +801,7 @@ private fun BackupPage(state: AppState) {
             ).joinToString(" · ").ifEmpty { null }
         },
         folder != null,
-    ) { on -> if (on) pickFolder.launch(null) else state.app.setBackupFolder(null) }
+    ) { on -> if (on) pickFolder.launch(com.marcusrosado.stamp.data.AutoBackup.phoneRoot) else state.app.setBackupFolder(null) }
     Pref("Save a backup", if (state.lastBackup > 0) "Last saved ${date(state.lastBackup)}" else "Never saved", onClick = { save.launch("stamp-backup-$today.json") })
     Pref("Restore from a backup", onClick = { open.launch(arrayOf("application/json", "text/plain", "application/octet-stream")) })
     Category("Export")

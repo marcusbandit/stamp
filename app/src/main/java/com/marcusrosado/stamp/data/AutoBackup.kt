@@ -51,6 +51,19 @@ class AutoBackup(context: Context, params: WorkerParameters) : CoroutineWorker(c
     }
 
     companion object {
+        /** The phone's own storage, where the folder picker should open. */
+        private const val PHONE_STORAGE = "com.android.externalstorage.documents"
+
+        /**
+         * Where the picker opens: the phone's own storage. Automatic backups stay on the phone
+         * (owner's call, 2026-11-20): a cloud folder would upload the whole map every week with
+         * nobody pressing anything. A backup saved by hand may still go anywhere.
+         */
+        val phoneRoot: android.net.Uri = android.provider.DocumentsContract.buildRootUri(PHONE_STORAGE, "primary")
+
+        /** Whether a picked folder is on the phone itself, not in a cloud drive or another app. */
+        fun onPhone(tree: android.net.Uri): Boolean = tree.authority == PHONE_STORAGE
+
         private const val WEEKLY = "auto-backup-weekly"
         private const val SOON = "auto-backup-soon"
         private const val KEY_MIN_AGE = "min_age"

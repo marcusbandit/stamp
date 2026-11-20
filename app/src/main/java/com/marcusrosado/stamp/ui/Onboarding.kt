@@ -108,9 +108,17 @@ fun Onboarding(
     ) { granted -> onHere(granted); page = 4 }
     val askHourly = rememberHourlyAsk { granted -> onHourly(granted); page = 5 }
     // A cancelled pick stays on the page, to choose again or skip.
+    val pickContext = androidx.compose.ui.platform.LocalContext.current
     val pickFolder = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.OpenDocumentTree(),
-    ) { uri -> if (uri != null) { onBackupFolder(uri); page = 6 } }
+    ) { uri ->
+        when {
+            uri == null -> Unit
+            com.marcusrosado.stamp.data.AutoBackup.onPhone(uri) -> { onBackupFolder(uri); page = 6 }
+            // A cloud folder is turned down; the page stays to choose again or skip.
+            else -> android.widget.Toast.makeText(pickContext, "Pick a folder on this phone", android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
     if (picking) {
         HomePicker(atlas, home, onPick = { onHome(it); picking = false }, onClose = { picking = false })
         return
@@ -279,11 +287,11 @@ fun Onboarding(
                     TextButton(onClick = { page = 5 }, Modifier.fillMaxWidth()) { Text("Skip for now") }
                 }
                 5 -> if (backupFolder == null) {
-                    Button(onClick = { pickFolder.launch(null) }, Modifier.fillMaxWidth()) { Text("Choose a folder") }
+                    Button(onClick = { pickFolder.launch(com.marcusrosado.stamp.data.AutoBackup.phoneRoot) }, Modifier.fillMaxWidth()) { Text("Choose a folder") }
                     TextButton(onClick = { page = 6 }, Modifier.fillMaxWidth()) { Text("Skip for now") }
                 } else {
                     Button(onClick = { page = 6 }, Modifier.fillMaxWidth()) { Text("Continue") }
-                    TextButton(onClick = { pickFolder.launch(null) }, Modifier.fillMaxWidth()) { Text("Change") }
+                    TextButton(onClick = { pickFolder.launch(com.marcusrosado.stamp.data.AutoBackup.phoneRoot) }, Modifier.fillMaxWidth()) { Text("Change") }
                 }
                 6 -> {
                     Button(onClick = ask, Modifier.fillMaxWidth()) { Text("Scan this phone") }
