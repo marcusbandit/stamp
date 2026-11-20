@@ -102,6 +102,12 @@ class AutoTripsTest {
         assertTrue(AutoTrips.known(trip, lands, listOf(Trip("a", date = PartialDate(2023, 5), lands = listOf("CC"))), utc))
         assertFalse(AutoTrips.known(trip, lands, listOf(Trip("a", date = PartialDate(2023, 7), lands = listOf("CC"))), utc))
         assertFalse(AutoTrips.known(trip, lands, listOf(Trip("a", date = PartialDate(2023, 5, 3), lands = listOf("BB"))), utc))
+        // A logged trip whose stay runs across the found one, though none of its dates is inside it.
+        val around = Trip(
+            "a", date = PartialDate(2023, 4, 20), cities = listOf("4"),
+            arrived = mapOf("4" to PartialDate(2023, 4, 20)), left = mapOf("4" to PartialDate(2023, 5, 20)), lands = listOf("CC"),
+        )
+        assertTrue(AutoTrips.known(trip, lands, listOf(around), utc))
     }
 
     @Test fun aFoundTripTakesThePlaceOfTheEmptyOne() {
@@ -129,5 +135,27 @@ class AutoTripsTest {
         assertEquals("Add 3 trips", addLabel(0, 3))
         assertEquals("Baytown, Hillville", townsLine(listOf("Baytown", "Hillville")))
         assertEquals("A, B and 3 more", townsLine(listOf("A", "B", "C", "D", "E")))
+    }
+
+    @Test fun visitsCountedByHandStay() {
+        val dir = java.nio.file.Files.createTempDirectory("stamp").toFile().apply { deleteOnExit() }
+        val s = VisitStore(java.io.File(dir, "visits.json"))
+        s.set("BBB", TravelState.Visited)
+        val blank = s.visits.value["BBB"]!!.trips[0].id
+        s.addTrip("BBB")
+        s.addTrip("BBB")
+        assertEquals(3, s.visits.value["BBB"]!!.trips.size)
+        val d = LocalDate.of(2023, 4, 1)
+        val pts = homeDays(d, 30) + listOf(at(d.plusDays(31), 10, bay), at(d.plusDays(31), 11, bay))
+        s.addFoundTrips(AutoTrips.find(pts, towns, utc).map { it.copy(land = "BBB") })
+        assertEquals(4, s.visits.value["BBB"]!!.trips.size)
+        assertTrue(s.visits.value["BBB"]!!.trips.any { it.id == blank })
+    }
+
+    @Test fun monthsAwayWithFewPhotosAreAStay() {
+        val d = LocalDate.of(2023, 1, 1)
+        // A photo pair every six days for half a year in one country, home never seen.
+        val pts = (0 until 30).flatMap { i -> listOf(at(d.plusDays(i * 6L), 10, bay), at(d.plusDays(i * 6L), 11, hill)) }
+        assertTrue(AutoTrips.find(pts, towns, utc, homeAt = { home.lat to home.lon }).isEmpty())
     }
 }

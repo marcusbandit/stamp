@@ -116,7 +116,7 @@ class PhotoScanner(
     /** The bundled cities, for the towns trips stop at; null leaves trips out. */
     private val places: suspend () -> Places? = { null },
     /** The user's marks: where they live, and the trips they have already. */
-    private val visits: () -> Map<String, Visit> = { emptyMap() },
+    private val visits: suspend () -> Map<String, Visit> = { emptyMap() },
 ) {
     /** Every photo place of the review that is open, so a zip added to it finds trips across both. */
     private var reviewPoints = PhotoPoints()
@@ -241,8 +241,9 @@ class PhotoScanner(
                 val a = atlas()
                 val c = Collector(a, gen, source)
                 when (val r = body(c)) {
-                    // A zip that failed hands back the review as it was, trips and all.
-                    is ScanState.Done -> if (r.problem != null) r else {
+                    // Nothing read, as when no file picked was a part of the export: the review
+                    // comes back as it was, trips and all.
+                    is ScanState.Done -> if (c.all.size == 0) r else {
                         reviewPoints = c.all
                         r.copy(trips = runCatching { findTrips(c.all, a) }.getOrElse { e ->
                             if (e is CancellationException) throw e
@@ -282,8 +283,14 @@ class PhotoScanner(
         val existing = v.values.flatMap { it.trips }.distinctBy { it.id }
         fun land(lat: Double, lon: Double) = atlas.locate(lat, lon)?.id?.let { if (split()) it else atlas.countryOf(it) }
         return AutoTrips.find(points.toList(), index, homeAt = homeAt, fallback = now).mapNotNull { t ->
-            val lands = t.stops.mapNotNull { land(it.city.lat, it.city.lon) }
-            if (lands.isEmpty() || AutoTrips.known(t, lands.toSet(), existing)) null else t.copy(land = lands.first())
+            val lands = t.stops.mapNotNull { land(it.city.lat, it.city.lon) }.distinct()
+            when {
+                lands.isEmpty() || AutoTrips.known(t, lands.toSet(), existing) -> null
+                // Every trip of a place the user lived in is a stay there, its towns homes: a
+                // trip found inside it would turn into one.
+                v[lands.first()]?.state == com.marcusrosado.stamp.data.TravelState.Lived -> null
+                else -> t.copy(land = lands.first(), lands = lands)
+            }
         }
     }
 

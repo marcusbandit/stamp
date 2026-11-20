@@ -63,7 +63,7 @@ import com.marcusrosado.stamp.scan.Suggestion
 import java.time.LocalDate
 import java.time.ZoneId
 
-/** Trips asked about in this session, so Not now holds until the trip is opened again. */
+/** Trips the user said Not now to while they are open. */
 private val pickAsked = mutableSetOf<String>()
 
 /** A photo of the trip, with the stop it was taken at. */
@@ -73,19 +73,20 @@ private class Candidate(val shot: Suggestion, val stop: String)
  * Asks for the best few photos of a trip made from the photos: every photo on this phone from
  * each stop's days near that stop, with [BestPhotos.PREFERRED] picked already, up to
  * [BestPhotos.MAX]. [onKeep] gets the picks as memories of their stops; [onNone] means the user
- * wants none. Not now closes it until the trip is opened again.
+ * wants none. Not now closes it until the trip is closed and opened again.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PickBest(trip: Trip, visit: Visit, places: Places?, onKeep: (List<Memory>) -> Unit, onNone: () -> Unit) {
     val context = LocalContext.current
+    // Not now holds while the trip stays open; closing it and opening it again asks again.
+    androidx.compose.runtime.DisposableEffect(trip.id) { onDispose { pickAsked -= trip.id } }
     var closed by remember(trip.id) { mutableStateOf(trip.id in pickAsked) }
     if (closed) return
-    val allowed = remember {
-        val perms = if (Build.VERSION.SDK_INT >= 33) listOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED)
-            else listOf(Manifest.permission.READ_EXTERNAL_STORAGE)
-        perms.any { ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED }
-    }
+    fun granted(p: String) = ContextCompat.checkSelfPermission(context, p) == PackageManager.PERMISSION_GRANTED
+    // Access to every photo, as against a few the user selected, which may leave the trip's out.
+    val full = remember { granted(if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE) }
+    val allowed = remember { full || (Build.VERSION.SDK_INT >= 34 && granted(Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED)) }
     // Without photo access there is nothing to show; the trip asks again once there is.
     if (!allowed) return
     val found by produceState<List<Candidate>?>(null, trip.id) {
@@ -93,8 +94,9 @@ fun PickBest(trip: Trip, visit: Visit, places: Places?, onKeep: (List<Memory>) -
     }
     val all = found ?: return
     if (all.isEmpty()) {
-        // No photo of this trip on the phone, as for one read from a Google Photos export.
-        androidx.compose.runtime.LaunchedEffect(trip.id) { onNone() }
+        // No photo of this trip on the phone, as for one read from a Google Photos export. With
+        // only some photos shared, the trip's may be among the rest: it asks again later.
+        if (full) androidx.compose.runtime.LaunchedEffect(trip.id) { onNone() }
         return
     }
     val chosen = remember(all) {

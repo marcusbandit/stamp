@@ -389,7 +389,7 @@ class StampApp : Application(), androidx.work.Configuration.Provider {
             onPoints = { seen.add(it) },
             partsFile = File(filesDir, TAKEOUT_PARTS_FILE),
             places = { runCatching { places.await() }.getOrNull() },
-            visits = { loadedVisits()?.visits?.value.orEmpty() },
+            visits = { runCatching { visitsLoading.await().visits.value }.getOrDefault(emptyMap()) },
         )
     }
 

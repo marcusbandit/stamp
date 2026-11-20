@@ -464,8 +464,12 @@ class VisitStore(private val file: File) {
     fun addFoundTrips(found: List<FoundTrip>) {
         if (found.isEmpty()) return
         val made = found.filter { it.land.isNotEmpty() }.map { AutoTrips.toTrip(it, newTripId(), it.land) }
-        val lands = made.flatMapTo(HashSet()) { it.lands }
-        trips = trips.filterNot { it.isBlank && it.lands.size == 1 && it.lands[0] in lands } + made
+        // Only the one empty trip a marked country keeps on its own: a count the user gave of
+        // several stays as it is, and the found trips add to it.
+        val placeholders = made.map { it.lands[0] }.toSet().mapNotNull { land ->
+            trips.filter { it.lands.firstOrNull() == land }.singleOrNull()?.takeIf { it.isBlank }?.id
+        }.toSet()
+        trips = trips.filterNot { it.id in placeholders } + made
         save()
     }
 

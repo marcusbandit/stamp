@@ -22,6 +22,8 @@ data class FoundTrip(
     val photos: Int,
     /** The land it starts in, the way the review counts countries; empty until worked out. */
     val land: String = "",
+    /** Every land its stops are in, [land] first, counted the same way. */
+    val lands: List<String> = listOfNotNull(land.ifEmpty { null }),
 ) {
     /** Stays the same when the same photos are read again, so a tick in the review sticks to it. */
     val key: String get() = "trip-$startMs"
@@ -142,7 +144,8 @@ object AutoTrips {
                 .sortedByDescending { it.spots }.take(MAX_STOPS)
                 .sortedBy { it.first }
                 .map { FoundStop(it.city, it.first, it.last, it.spots) }
-            if (stops.isEmpty() || run.days.size > MAX_DAYS) null
+            // Long away is a stay, however few days of it have photos.
+            if (stops.isEmpty() || java.time.temporal.ChronoUnit.DAYS.between(run.days.first(), run.days.last()) >= MAX_DAYS) null
             else FoundTrip(run.away.first().ms, run.away.last().ms, stops, run.away.size)
         }
     }
@@ -170,21 +173,26 @@ object AutoTrips {
         entries.minByOrNull { abs(it.key - year) }?.value
 
     /**
-     * True when [trip] is one the user already has: one of [existing] sharing a land with it and
-     * dated inside it, or on its month or year when that is all the user said.
+     * True when [trip] is one the user already has: one of [existing] sharing a land with it
+     * whose dates overlap it. A date given as a month or a year covers all of it, and a trip's
+     * dates run from the earliest the user gave to the latest.
      */
     fun known(trip: FoundTrip, lands: Set<String>, existing: List<Trip>, zone: ZoneId = ZoneId.systemDefault()): Boolean {
         val from = Instant.ofEpochMilli(trip.startMs).atZone(zone).toLocalDate().minusDays(1)
         val to = Instant.ofEpochMilli(trip.endMs).atZone(zone).toLocalDate().plusDays(1)
-        fun inside(d: PartialDate): Boolean {
-            val m = d.month ?: return d.year in from.year..to.year
-            val day = d.day ?: return (d.year * 12 + m) in (from.year * 12 + from.monthValue)..(to.year * 12 + to.monthValue)
-            val at = LocalDate.of(d.year, m, day)
-            return !at.isBefore(from) && !at.isAfter(to)
+        fun first(d: PartialDate) = LocalDate.of(d.year, d.month ?: 1, d.day ?: 1)
+        fun last(d: PartialDate): LocalDate = when {
+            d.day != null -> first(d)
+            d.month != null -> first(d).withDayOfMonth(first(d).lengthOfMonth())
+            else -> LocalDate.of(d.year, 12, 31)
         }
         return existing.any { t ->
-            t.lands.any { it in lands } &&
-                (listOfNotNull(t.date, t.until) + t.arrived.values + t.left.values).any(::inside)
+            if (t.lands.none { it in lands }) return@any false
+            val dates = listOfNotNull(t.date, t.until) + t.arrived.values + t.left.values
+            if (dates.isEmpty()) return@any false
+            val start = dates.minOf(::first)
+            val end = dates.maxOf(::last)
+            !start.isAfter(to) && !end.isBefore(from)
         }
     }
 

@@ -423,8 +423,10 @@ private fun Review(
     fun ticked(id: String) = tickable(id) && (state.picks[id] ?: true)
     val open = state.found.map { it.country.id }.filter(::tickable)
     val newCount = open.count(::ticked)
-    // Found trips start ticked too, under their own key in the same picks.
-    fun tripTicked(t: FoundTrip) = state.picks[t.key] ?: true
+    // Found trips start ticked too, under their own key in the same picks. A trip goes only
+    // with its countries: one through a country the user unticked is unticked with it, since
+    // adding it would mark that country after all.
+    fun tripTicked(t: FoundTrip) = (state.picks[t.key] ?: true) && t.lands.all { !tickable(it) || ticked(it) }
     val tripCount = state.trips.count(::tripTicked)
     Column(Modifier.fillMaxSize()) {
         Row(
@@ -459,7 +461,10 @@ private fun Review(
             if (state.trips.isNotEmpty()) {
                 item(key = "trips") { SectionLabel(if (state.trips.size == 1) "1 trip" else "${state.trips.size} trips") }
                 items(state.trips, key = { it.key }) { t ->
-                    TripRow(t, tripTicked(t)) { onPick(mapOf(t.key to !tripTicked(t))) }
+                    TripRow(t, tripTicked(t)) {
+                        // Ticking a trip ticks the countries it goes to as well.
+                        onPick(if (tripTicked(t)) mapOf(t.key to false) else mapOf(t.key to true) + t.lands.associateWith { true })
+                    }
                 }
                 item(key = "countries") { SectionLabel(countries(state.found.size).replaceFirstChar { it.uppercase() }) }
             }
