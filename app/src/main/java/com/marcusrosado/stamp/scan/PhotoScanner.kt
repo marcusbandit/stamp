@@ -85,8 +85,6 @@ sealed interface ScanState {
         val parts: Parts? = null,
         /** The picked zips read into this review, by name and size, so one picked twice counts once. */
         val zips: Set<String> = emptySet(),
-        /** True until the user answers whether to add another zip. */
-        val askMore: Boolean = false,
         /** Why the last zip added could not be read, until the user has seen it. */
         val problem: String? = null,
         /** Picked files that were not parts of the export being read, left alone. */
@@ -146,14 +144,14 @@ class PhotoScanner(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                before.copy(askMore = false, problem = e.message ?: e.javaClass.simpleName)
+                before.copy(problem = e.message ?: e.javaClass.simpleName)
             }
         }
     }
 
-    /** The user answered whether to add another zip, or saw why one failed. */
-    fun answeredMore() {
-        _state.update { s -> if (s is ScanState.Done) s.copy(askMore = false, problem = null) else s }
+    /** The user saw why a zip could not be read. */
+    fun problemSeen() {
+        _state.update { s -> if (s is ScanState.Done) s.copy(problem = null) else s }
     }
 
     /**
@@ -190,7 +188,7 @@ class PhotoScanner(
                     // The parts read so far stay counted; the one that failed is named.
                     val kept = done ?: open ?: return@launch ScanState.Failed(e.message ?: e.javaClass.simpleName, ScanSource.Takeout)
                     return@launch kept.copy(
-                        picks = picks, askMore = false, skipped = skipped, problem = e.message ?: e.javaClass.simpleName,
+                        picks = picks, skipped = skipped, problem = e.message ?: e.javaClass.simpleName,
                         parts = kept.parts?.copy(uris = read),
                     )
                 }
@@ -200,7 +198,7 @@ class PhotoScanner(
             }
             val last = done
                 // Nothing picked was a part of this export: the review stays as it was.
-                ?: return@launch open?.copy(askMore = false, skipped = skipped, parts = open.parts?.copy(uris = emptyList()))
+                ?: return@launch open?.copy(skipped = skipped, parts = open.parts?.copy(uris = emptyList()))
                     ?: ScanState.Failed("None of those files is a part of this export.", ScanSource.Takeout)
             last.copy(picks = picks, skipped = skipped, parts = last.parts?.copy(uris = read))
         }
@@ -441,11 +439,9 @@ class PhotoScanner(
             coroutineContext.ensureActive()
             c.progress(checked, total)
         }
-        // A review with photos asks for the next zip; one with none says the files were wrong.
         return c.done(photos).copy(
             picks = before?.picks.orEmpty(),
             zips = read + zips.mapNotNull { keys[it] },
-            askMore = photos > 0,
         )
     }
 
@@ -461,7 +457,7 @@ class PhotoScanner(
         c.seed(before)
         fun parts(s: Takeout.Session, again: Boolean) =
             Parts(s.numbers, s.parts.size, number.takeIf { it > 0 }, again, uri.toString(), s.next)
-        if (before.has(key)) return c.done(before.photos, parts(before, again = true)).copy(askMore = true)
+        if (before.has(key)) return c.done(before.photos, parts(before, again = true))
         val job = coroutineContext[Job]
         var photos = 0
         var checked = 0
@@ -479,7 +475,7 @@ class PhotoScanner(
         val after = before.plus(key, number, photos, c.located, c.spans())
         pointsFile?.let { c.all.write(it) }
         Takeout.Session.write(file, after)
-        return c.done(after.photos, parts(after, again = false)).copy(askMore = true)
+        return c.done(after.photos, parts(after, again = false))
     }
 
     private fun displayName(uri: Uri): String? = runCatching {
