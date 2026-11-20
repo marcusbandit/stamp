@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <!-- Nothing on this page may reach the network: no fetch, no images, no fonts, no forms. -->
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; form-action 'none'">
-<title>Stamp for Google Photos</title>
+<title>Google Photos for Stamp</title>
 <style>
 :root {
   --bg: #F6F8FA; --panel: #FFFFFF; --line: #DDE2E7; --text: #1B1E22; --muted: #5B6570;
@@ -27,11 +27,11 @@ body {
 main { max-width: 640px; margin: 0 auto; padding: 40px 16px 64px; }
 h1 { font-size: 28px; line-height: 1.2; margin: 0 0 28px; }
 ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 16px; }
-li { display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 16px; }
+ol > li { display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 16px; }
 .n { width: 32px; height: 32px; border-radius: 50%; background: var(--soft); color: var(--on-soft); display: grid; place-items: center; font-weight: 600; }
 h2 { font-size: 17px; margin: 4px 0 4px; }
 p { margin: 0 0 12px; overflow-wrap: anywhere; }
-li > div > :last-child { margin-bottom: 0; }
+ol > li > div > :last-child { margin-bottom: 0; }
 button {
   font: inherit; font-weight: 600; border: 0; border-radius: 999px; padding: 10px 20px; cursor: pointer;
   background: var(--primary); color: var(--on-primary);
@@ -70,7 +70,7 @@ progress { width: 100%; height: 8px; accent-color: var(--primary); margin: 0 0 1
         <input id="input" type="file" accept=".zip,application/zip" multiple hidden>
       </div>
       <div id="work" hidden>
-        <progress id="bar" max="1" value="0"></progress>
+        <progress id="bar" max="0" value="0"></progress>
         <div class="stats">
           <div class="stat"><b id="zips">0</b><span>zips read</span></div>
           <div class="stat"><b id="photos">0</b><span>photos</span></div>
@@ -96,7 +96,7 @@ const SIDE_MAX = 64 * 1024;
 const $ = id => document.getElementById(id);
 const seen = new Map();          // "ts lat lon" -> [lat, lon, ts]; one per photo across albums
 const done = new Set();          // name + size of every zip read, so a repeat is skipped
-let photos = 0, zips = 0, queue = Promise.resolve();
+let photos = 0, zips = 0, pending = 0, queue = Promise.resolve();
 
 const u16 = (v, o) => v.getUint16(o, true);
 const u32 = (v, o) => v.getUint32(o, true);
@@ -111,9 +111,9 @@ async function directory(file) {
   for (let i = tail.byteLength - 22; i >= 0; i--) if (u32(tail, i) === 0x06054b50) { e = i; break; }
   if (e < 0) throw new Error("not a zip");
   let count = u16(tail, e + 10), size = u32(tail, e + 12), offset = u32(tail, e + 16);
-  if (count === 0xFFFF || size === 0xFFFFFFFF || offset === 0xFFFFFFFF) {
+  // A field at its maximum means zip64, unless no locator follows: exactly 65,535 entries fit as is.
+  if ((count === 0xFFFF || size === 0xFFFFFFFF || offset === 0xFFFFFFFF) && e >= 20 && u32(tail, e - 20) === 0x07064b50) {
     const l = e - 20;
-    if (l < 0 || u32(tail, l) !== 0x07064b50) throw new Error("broken zip64 record");
     const at = u64(tail, l + 8);
     const z = await bytes(file, at, at + 56);
     if (u32(z, 0) !== 0x06064b50) throw new Error("broken zip64 record");
@@ -171,7 +171,7 @@ function show() {
   $("zips").textContent = zips.toLocaleString();
   $("photos").textContent = photos.toLocaleString();
   $("places").textContent = seen.size.toLocaleString();
-  $("save").disabled = seen.size === 0;
+  $("save").disabled = seen.size === 0 || pending > 0;
 }
 
 async function read(file, state) {
@@ -204,6 +204,8 @@ function add(files) {
   $("work").hidden = false;
   const bar = $("bar");
   bar.max = Number(bar.max) + list.length;
+  pending += list.length;
+  show();
   for (const f of list) {
     const row = document.createElement("li");
     row.innerHTML = '<div><span class="name"></span><span class="state">waiting</span></div>';
@@ -213,7 +215,7 @@ function add(files) {
     queue = queue.then(() => read(f, state)).catch(err => {
       state.textContent = "could not read: " + err.message;
       state.classList.add("bad");
-    }).finally(() => { bar.value = Number(bar.value) + 1; show(); });
+    }).finally(() => { pending--; bar.value = Number(bar.value) + 1; show(); });
   }
 }
 
@@ -264,7 +266,7 @@ $("input").onchange = e => { add(e.target.files); e.target.value = ""; };
 const drop = $("drop");
 drop.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
 drop.ondragleave = () => drop.classList.remove("over");
-drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); add(e.dataTransfer.files); };
+drop.ondrop = e => { e.preventDefault(); e.stopPropagation(); drop.classList.remove("over"); add(e.dataTransfer.files); };
 document.ondragover = e => e.preventDefault();
 document.ondrop = e => { e.preventDefault(); add(e.dataTransfer.files); };
 $("save").onclick = () => {
