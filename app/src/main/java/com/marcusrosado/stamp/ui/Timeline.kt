@@ -120,6 +120,7 @@ import com.marcusrosado.stamp.data.Country
 import com.marcusrosado.stamp.data.Memory
 import com.marcusrosado.stamp.data.Note
 import com.marcusrosado.stamp.data.PartialDate
+import com.marcusrosado.stamp.data.PhotoStop
 import com.marcusrosado.stamp.data.Places
 import com.marcusrosado.stamp.data.Trip
 import com.marcusrosado.stamp.data.Visit
@@ -152,6 +153,12 @@ class TimelineActions(
     /** Says where the user slept at a stop: its own place or one of its day places. */
     val onSlept: (stop: String, place: String) -> Unit = { _, _ -> },
     val onAddStop: () -> Unit,
+    /** Opens the search for a stop that goes in as stop number [at], counted from 0. */
+    val onAddStopAt: (at: Int) -> Unit = {},
+    /** Adds a town the photos showed as stop number [at], with the days they were taken. */
+    val onAddPhotoStop: (at: Int, cityId: String, arrived: PartialDate?, left: PartialDate?) -> Unit = { _, _, _, _ -> },
+    /** Says a town the photos showed was no stop. */
+    val onNotAStop: (cityId: String) -> Unit = {},
     val onOpenPlace: (place: String) -> Unit,
     val onAddMemories: (List<Memory>) -> Unit,
     val onUpdateMemory: (Memory) -> Unit,
@@ -204,15 +211,31 @@ fun VisitTimeline(
     // Homes read in the order they were moved into; a trip's stops in the order travelled.
     val stops = remember(trip, lived) { if (lived) trip.homesInOrder else trip.cities }
     val order = listOf("start") + stops.map { "stop-$it" } + "end"
+    // Towns the photos show the user in during the trip that are not on it, by where they go.
+    // They are shown only for the trip they were worked out for, so an Add never acts on a
+    // place that the stop just added has moved.
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val seen = LocalSeen.current
+    val journeyNow = LocalJourney.current
+    val photoSpots = remember { java.util.concurrent.ConcurrentHashMap<String, Pair<Double, Double>>() }
+    val photoStopsFor by produceState<Pair<Trip, List<PhotoStop>>?>(null, trip, visit, seen, places, lived, journeyNow) {
+        value = trip to if (lived || places == null) emptyList()
+            else withContext(Dispatchers.IO) { photoStopsOf(context, trip, visit, places, seen, citiesCountry(country), journeyNow, photoSpots) }
+    }
+    val photoStopsAt = photoStopsFor?.takeIf { it.first == trip }?.second.orEmpty().groupBy { it.at }
     // Every item of the list in order, so a dot on the track scrolls to its stop by key.
     val itemKeys = buildList {
         add("hero"); add("start")
         val journeys = !lived && trip.cities.isNotEmpty()
+        fun photos(at: Int) = photoStopsAt[at]?.forEach { add("photo-${it.city.id}") }
+        if (stops.isNotEmpty()) photos(0)
         if (journeys) add("leg-start-${trip.cities.first()}")
         stops.forEachIndexed { i, p ->
             add("stop-$p")
+            photos(i + 1)
             if (!lived) stops.getOrNull(i + 1)?.let { add("leg-$p-$it") }
         }
+        if (stops.isEmpty()) photos(0)
         add("add-stop")
         if (journeys) add("leg-${trip.cities.last()}-end")
         add("end")
@@ -253,7 +276,7 @@ fun VisitTimeline(
         else -> placeOf(id, visit, places)?.name ?: journey.place(id)?.name ?: "the next stop"
     }
     @Composable
-    fun legRow(from: String, to: String, key: String) {
+    fun legRow(from: String, to: String, key: String, insertAt: Int? = null) {
         val l = trip.legBetween(from, to)
         LegLine(
             leg = l,
@@ -263,6 +286,8 @@ fun VisitTimeline(
             where = if (to == com.marcusrosado.stamp.data.Leg.END && trip.end == null) "home" else "to ${nameOf(to)}",
             lit = passed(key),
             onClick = { leg = from to to },
+            onInsert = insertAt?.let { at -> { actions.onAddStopAt(at) } },
+            insertLabel = "Add a stop before ${nameOf(to)}",
         )
     }
     // The stop a memory is being added to; "" is the visit as a whole.
@@ -360,9 +385,12 @@ fun VisitTimeline(
                         MemoryRow(loose, onOpen = { viewing = it.id }, onAdd = { adding = "" }, menu = memoryMenu)
                     }
                 }
+                photoStopsAt[0]?.takeIf { stops.isNotEmpty() }?.forEach { s ->
+                    item(key = "photo-${s.city.id}") { PhotoStopRow(s, actions) }
+                }
                 if (journeyed && trip.cities.isNotEmpty()) {
                     val first = trip.cities.first()
-                    item(key = "leg-start-$first") { legRow(com.marcusrosado.stamp.data.Leg.START, first, "leg-start-$first") }
+                    item(key = "leg-start-$first") { legRow(com.marcusrosado.stamp.data.Leg.START, first, "leg-start-$first", insertAt = 0) }
                 }
                 stops.forEachIndexed { i, place ->
                     item(key = "stop-$place") {
@@ -437,9 +465,15 @@ fun VisitTimeline(
                             MemoryRow(kept, onOpen = { viewing = it.id }, onAdd = { adding = place }, menu = memoryMenu)
                         }
                     }
-                    if (!lived) stops.getOrNull(i + 1)?.let { next ->
-                        item(key = "leg-$place-$next") { legRow(place, next, "leg-$place-$next") }
+                    photoStopsAt[i + 1]?.forEach { s ->
+                        item(key = "photo-${s.city.id}") { PhotoStopRow(s, actions) }
                     }
+                    if (!lived) stops.getOrNull(i + 1)?.let { next ->
+                        item(key = "leg-$place-$next") { legRow(place, next, "leg-$place-$next", insertAt = i + 1) }
+                    }
+                }
+                if (stops.isEmpty()) photoStopsAt[0]?.forEach { s ->
+                    item(key = "photo-${s.city.id}") { PhotoStopRow(s, actions) }
                 }
                 item(key = "add-stop") {
                     Node(
@@ -1653,6 +1687,146 @@ fun rangeLabel(from: PartialDate?, to: PartialDate?, now: Boolean = false): Stri
     from != null -> from.label
     to != null -> "Until ${to.label}"
     else -> null
+}
+
+/**
+ * The towns the user's photos show during [trip] that it does not stop at: the places seen in
+ * the trip's dates from the photo scan and a Google Photos import, and where its own photos
+ * were taken. Only towns in the trip's countries count, and nothing near home. A
+ * trip with no dates, or dates as loose as a whole year, has too wide a window to tell.
+ */
+private fun photoStopsOf(
+    context: android.content.Context,
+    trip: Trip,
+    visit: Visit,
+    places: Places,
+    seen: List<com.marcusrosado.stamp.data.SeenPoint>,
+    alpha2: String,
+    journey: Journey,
+    /** Where each of the trip's own photos was taken, by its uri, kept between runs. */
+    spots: MutableMap<String, Pair<Double, Double>>,
+): List<PhotoStop> {
+    val span = photoWindow(trip) ?: return emptyList()
+    val points = seen.filter { it.from != com.marcusrosado.stamp.data.SeenFrom.Hourly && it.ms in span.first..span.second }.toMutableList()
+    // The trip's own photos say where they were taken too, read from the phone once each.
+    for (m in trip.memories) {
+        val uri = m.media ?: continue
+        if (!m.isPhoto || m.takenMs <= 0) continue
+        val at = spots[uri] ?: runCatching { com.marcusrosado.stamp.scan.Memories.location(context, android.net.Uri.parse(uri)) }.getOrNull()
+            ?.also { spots[uri] = it } ?: continue
+        points += com.marcusrosado.stamp.data.SeenPoint(m.takenMs, at.first, at.second, com.marcusrosado.stamp.data.SeenFrom.Photo)
+    }
+    if (points.isEmpty()) return emptyList()
+    // A photo the scan saw and the trip keeps is one place, as the heat map counts it: the same
+    // 100 m square on the same day.
+    val distinct = points.distinctBy { Triple(kotlin.math.floor(it.lat * 1000).toInt(), kotlin.math.floor(it.lon * 1000).toInt(), it.ms / DAY_MS) }
+    val countries = (trip.places.mapNotNull { places.byId[placeIdOf(it)]?.country } + alpha2).filter { it.isNotEmpty() }.distinct()
+    val towns = countries.flatMap { places.citiesIn(it) }
+    val on = trip.places.map(::placeIdOf).toSet()
+    val stops = trip.cities.map { s ->
+        com.marcusrosado.stamp.data.PhotoStops.Stop(
+            trip.placesAt(s).mapNotNull { placeOf(it, visit, places) }.map { it.lat to it.lon },
+            // Midday of the day the user got there: a town passed on the way that morning still
+            // goes before it.
+            trip.arrived[s]?.let { window(it, it)?.first?.plus(26 * 3_600_000L) },
+        )
+    }
+    return com.marcusrosado.stamp.data.PhotoStops.find(
+        distinct, stops,
+        cityAt = { lat, lon -> com.marcusrosado.stamp.data.PhotoStops.townOf(lat, lon, towns) },
+        skip = { it.id in on || it.id in trip.notStops },
+        avoid = listOfNotNull(journey.startOf(trip), journey.endOf(trip)).map { it.lat to it.lon },
+    )
+}
+
+private const val DAY_MS = 86_400_000L
+
+/**
+ * When to look for a trip's photos: its dates, widened by the dates its stops and memories
+ * give. A trip with only one end said looks up to two weeks past it, since its other end is
+ * not known. Null with nothing to go by, or when the dates are too loose to tell one trip's
+ * photos from another's.
+ */
+private fun photoWindow(trip: Trip): Pair<Long, Long>? {
+    val stopDays = (trip.arrived.values + trip.left.values).mapNotNull { window(it, it) }
+    val taken = trip.memories.map { it.takenMs }.filter { it > 0 }
+    val known = listOfNotNull(window(trip.date, trip.until)) + stopDays + taken.map { it to it }
+    if (known.isEmpty()) return null
+    var from = known.minOf { it.first }
+    var to = known.maxOf { it.second }
+    if (trip.until == null && trip.date != null) to = maxOf(to, from + OPEN_END_MS)
+    if (trip.date == null && trip.until != null) from = minOf(from, to - OPEN_END_MS)
+    if (taken.isNotEmpty() && trip.date == null && trip.until == null) { from -= DAY_MS; to += DAY_MS }
+    return (from to to).takeIf { it.second - it.first <= PHOTO_STOP_SPAN_MS }
+}
+
+private const val OPEN_END_MS = 14 * DAY_MS
+
+/** A trip longer than this, or dated only by its year, could hold photos from anywhere. */
+private const val PHOTO_STOP_SPAN_MS = 62 * DAY_MS
+
+/**
+ * The day [ms] fell on where a photo at longitude [lon] was taken. The town's own time zone is
+ * not known, so its hour is worked out from the sun, 15 degrees an hour: close enough to put a
+ * photo on the right day where this phone's zone, set somewhere else now, would not.
+ */
+private fun dayOf(ms: Long, lon: Double): PartialDate {
+    val offset = java.time.ZoneOffset.ofHours(Math.round(lon / 15).toInt().coerceIn(-12, 14))
+    val d = java.time.Instant.ofEpochMilli(ms).atOffset(offset).toLocalDate()
+    return PartialDate(d.year, d.monthValue, d.dayOfMonth)
+}
+
+/**
+ * A town the photos show between two stops, on the line where it would go: its name, the days
+ * the photos were taken, and the buttons that add it or turn it down.
+ */
+@Composable
+private fun PhotoStopRow(stop: PhotoStop, actions: TimelineActions) {
+    val line = MaterialTheme.colorScheme.outlineVariant
+    val first = dayOf(stop.firstMs, stop.city.lon)
+    val last = dayOf(stop.lastMs, stop.city.lon).takeIf { it != first }
+    // One tap acts; the row goes once the trip has changed.
+    var done by remember(stop) { mutableStateOf(false) }
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 16.dp).drawBehind {
+            val x = 20.dp.toPx()
+            drawLine(line, Offset(x, 0f), Offset(x, size.height), strokeWidth = 2.dp.toPx())
+        },
+    ) {
+        Box(Modifier.width(40.dp), contentAlignment = Alignment.Center) {
+            Box(
+                Modifier.size(28.dp).clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.surface)
+                    .border(2.dp, line, CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Outlined.PhotoLibrary, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        Spacer(Modifier.width(12.dp))
+        @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+        androidx.compose.foundation.layout.FlowRow(
+            Modifier.weight(1f).padding(vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+            itemVerticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(stop.city.name, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Surface(shape = RoundedCornerShape(50), color = MaterialTheme.colorScheme.surfaceContainerHigh) {
+                Text(
+                    rangeLabel(first, last).orEmpty(),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                )
+            }
+        }
+        TextButton(enabled = !done, onClick = { done = true; actions.onAddPhotoStop(stop.at, stop.city.id, first, last) }) { Text("Add") }
+        IconButton(enabled = !done, onClick = { done = true; actions.onNotAStop(stop.city.id) }, modifier = Modifier.size(40.dp)) {
+            Icon(Icons.Filled.Close, contentDescription = "Not a stop", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
 }
 
 /** The span of time a loose date range covers, in epoch ms, for finding photos from it. */
