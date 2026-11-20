@@ -183,7 +183,13 @@ private fun AddAnother(parts: Parts?, onChoose: () -> Unit, onDone: () -> Unit) 
                 TextButton(onClick = { onDone(); onChoose() }) { Text("Choose a zip") }
             }
         },
-        dismissButton = { TextButton(onClick = onDone) { Text("Not now") } },
+        dismissButton = {
+            Row {
+                TextButton(onClick = onDone) { Text("Not now") }
+                // A part already on the phone needs no trip to Google.
+                if (parts != null) TextButton(onClick = { onDone(); onChoose() }) { Text("On this phone") }
+            }
+        },
     )
 }
 
@@ -373,7 +379,7 @@ private fun Review(
 ) {
     val context = LocalContext.current
     val parts = state.parts
-    parts?.let { DeletePart(it.uri) }
+    parts?.uris?.forEach { androidx.compose.runtime.key(it) { DeletePart(it) } }
     val nextPart = { openUrl(context, Takeout.MANAGE_URL) }
     if (state.found.isEmpty() && parts != null) {
         Message(
@@ -452,7 +458,7 @@ private fun Review(
                 )
             }
         }
-        if (parts != null && partsGone[parts.uri] == false) {
+        if (parts != null && parts.uris.any { partsGone[it] == false }) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("${parts.last?.let { "Part $it" } ?: "The part"} is still on the phone.", Modifier.weight(1f))
                 TextButton(onClick = {

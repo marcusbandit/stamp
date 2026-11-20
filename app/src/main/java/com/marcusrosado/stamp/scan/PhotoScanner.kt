@@ -42,7 +42,16 @@ data class Found(val country: Country, val evidence: PhotoEvidence)
  * Where a part-by-part Takeout import stands: the part numbers read so far, the part just
  * handed over and whether it had been read before. [uri] is that part, to delete once read.
  */
-data class Parts(val numbers: List<Int>, val count: Int, val last: Int?, val again: Boolean, val uri: String, val next: Int)
+data class Parts(
+    val numbers: List<Int>,
+    val count: Int,
+    val last: Int?,
+    val again: Boolean,
+    val uri: String,
+    val next: Int,
+    /** Every part read in this go, [uri] last: several can be picked at once. */
+    val uris: List<String> = listOf(uri),
+)
 
 sealed interface ScanState {
     data object Idle : ScanState
@@ -102,6 +111,8 @@ class PhotoScanner(
      * they add to it, ticks and all.
      */
     fun importTakeout(zips: List<Uri>) {
+        // Picked while parts are being read, they are more parts.
+        if ((_state.value as? ScanState.Done)?.parts != null) { importTakeoutParts(zips); return }
         val before = (_state.value as? ScanState.Done)?.takeIf { it.source == ScanSource.Takeout && it.parts == null }
         launch(ScanSource.Takeout) { c -> readTakeout(zips, c, before) }
     }
@@ -115,12 +126,22 @@ class PhotoScanner(
      * Reads one part of a Takeout export, handed over as the user downloads it, and adds what
      * it holds to the parts read before. False when another read is still running.
      */
-    fun importTakeoutPart(part: Uri): Boolean {
+    fun importTakeoutPart(part: Uri): Boolean = importTakeoutParts(listOf(part))
+
+    private fun importTakeoutParts(parts: List<Uri>): Boolean {
         if (job?.isActive == true) return false
         // One review across all the parts: ticks changed after an earlier part stay.
         val picks = (_state.value as? ScanState.Done)?.takeIf { it.parts != null }?.picks.orEmpty()
         reading = true
-        launch(ScanSource.Takeout) { c -> readPart(part, c).let { if (it is ScanState.Done) it.copy(picks = picks) else it } }
+        launch(ScanSource.Takeout) { c ->
+            var last: ScanState? = null
+            for (p in parts) {
+                last = readPart(p, c)
+                if (last !is ScanState.Done) return@launch last
+            }
+            val done = last as ScanState.Done
+            done.copy(picks = picks, parts = done.parts?.copy(uris = parts.map { it.toString() }))
+        }
         return true
     }
 
