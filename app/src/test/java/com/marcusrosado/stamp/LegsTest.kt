@@ -154,9 +154,9 @@ class LegsTest {
         s.addCity("JPN", id, "nara")
         val t = trip(store())
         assertEquals(listOf("kobe", "osaka", "nara"), t.cities)
-        assertEquals(listOf(Travel.Plane), t.waysBetween("kobe", "osaka"))
+        assertEquals(listOf(Travel.Plane), t.waysBetween(Leg.START, "kobe"))
         assertEquals(listOf(Travel.Ferry), t.waysBetween("nara", Leg.END))
-        assertEquals(emptyList<Travel>(), t.waysBetween(Leg.START, "kobe"))
+        assertEquals(emptyList<Travel>(), t.waysBetween("kobe", "osaka"))
     }
 
     @Test fun aPinCanGoBetweenStopsToo() {

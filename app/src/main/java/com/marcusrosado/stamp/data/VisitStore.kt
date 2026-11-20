@@ -391,7 +391,7 @@ class VisitStore(private val file: File) {
     @Synchronized
     fun duplicateTrip(tripId: String): String? {
         val t = trips.firstOrNull { it.id == tripId } ?: return null
-        val copy = t.copy(id = newTripId(), name = "", date = null, until = null, now = false, arrived = emptyMap(), left = emptyMap(), memories = emptyList(), cover = null)
+        val copy = t.copy(id = newTripId(), name = "", date = null, until = null, now = false, arrived = emptyMap(), left = emptyMap(), memories = emptyList(), cover = null, notStops = emptySet())
         val at = trips.indexOf(t)
         trips = trips.take(at + 1) + copy + trips.drop(at + 1)
         save()
@@ -484,19 +484,24 @@ class VisitStore(private val file: File) {
 
     /**
      * [stop] put in as stop number [at], or last when null. The leg told across the gap it fills
-     * is told again from the new stop to the one after it, so the way the user reached that stop,
-     * or went home, is still said. The old leg stays, unseen, the way a reorder leaves one, and is
-     * back if the new stop goes again.
+     * is told again, so the way the user reached the stop after it, or went home, is still said:
+     * from the new stop to the next, except the way from home, which still starts from home and
+     * now reaches the new first stop. The old leg stays, unseen, the way a reorder leaves one,
+     * and is back if the new stop goes again.
      */
     private fun Trip.withStop(stop: String, at: Int?): Trip {
         val i = at?.coerceIn(0, cities.size) ?: cities.size
         val before = cities.getOrNull(i - 1) ?: Leg.START
         val after = cities.getOrNull(i) ?: Leg.END
         val across = legs.firstOrNull { it.from == before && it.to == after }
+        val told = when {
+            across == null -> null
+            before == Leg.START -> across.copy(to = stop)
+            else -> across.copy(from = stop)
+        }
         return copy(
             cities = cities.take(i) + stop + cities.drop(i),
-            legs = if (across == null) legs
-                else legs.filterNot { it.from == stop && it.to == after } + across.copy(from = stop),
+            legs = if (told == null) legs else legs.filterNot { it.from == told.from && it.to == told.to } + told,
         )
     }
 
