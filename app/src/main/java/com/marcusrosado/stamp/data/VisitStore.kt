@@ -1123,6 +1123,52 @@ class VisitStore(private val file: File) {
         flush()
         return true
     }
+
+    /**
+     * Adds what [text] holds that this phone does not, and changes nothing that is here: a place
+     * marked in the file and not on the phone comes in with its mark, and a trip whose id the
+     * phone lacks comes in with the pins it goes to. A place the phone has keeps its mark, its
+     * notes and its trips as they are; a pin the phone has keeps its spot. A trip in the file
+     * that says nothing beyond being there is left out where the phone already has a trip to
+     * that place, since all it says is said. The stay lived in now stays the phone's: one in the
+     * file comes in as a past stay. Returns how many places and trips came in, or null
+     * and changes nothing when the text cannot be read.
+     */
+    @Synchronized
+    fun merge(text: String): Int? {
+        val read = runCatching { parse(text) }.getOrNull() ?: return null
+        val newMarks = read.marks.filterKeys { it !in marks }
+        val haveIds = trips.mapTo(HashSet()) { it.id }
+        val reached = trips.flatMapTo(HashSet()) { it.lands }
+        // One home at a time: with a stay lived in now on the phone, the file's is a past one here.
+        val livingHere = trips.any { it.now }
+        val newTrips = read.trips.filter { t ->
+            t.id !in haveIds && !(t.isBlank && t.lands.isNotEmpty() && t.lands.all { it in reached })
+        }.map { if (livingHere && it.now) it.copy(now = false) else it }
+        val used = newTrips.flatMapTo(HashSet()) { it.places + listOfNotNull(it.start, it.end) }
+        val newPins = read.pins.filterKeys { it in used && it !in pins }
+        if (newMarks.isEmpty() && newTrips.isEmpty() && newPins.isEmpty()) return 0
+        marks = marks + newMarks
+        trips = trips + newTrips
+        pins = pins + newPins
+        // A place coming back cancels what was waiting to be taken off it.
+        pendingDrops = pendingDrops.filterKeys { it !in newMarks }
+        save()
+        flush()
+        return newMarks.size + newTrips.size
+    }
+}
+
+/**
+ * Merges a backup's [text] into [visits] and [seen]: what the phone lacks comes in, and nothing
+ * here changes. Returns how many places, trips and heat map points came in, so a backup that adds
+ * only points still says it added something; null and nothing changed when it is no Stamp backup.
+ */
+fun mergeBackup(visits: VisitStore, seen: Seen, text: String): Int? {
+    val n = visits.merge(text) ?: return null
+    // The marks are in; a place file that cannot be written leaves the heat map as it was.
+    val points = runCatching { JSONObject(text).optJSONArray("seen")?.let { seen.merge(it) } }.getOrNull() ?: 0
+    return n + points
 }
 
 /** The save file layout this app writes, and the newest it reads. */

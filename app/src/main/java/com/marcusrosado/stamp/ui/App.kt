@@ -210,6 +210,7 @@ fun Root(app: StampApp, launches: kotlinx.coroutines.flow.MutableStateFlow<com.m
     var replaying by rememberSaveable { mutableStateOf(false) }
     val home by app.visits.home.collectAsStateWithLifecycle()
     val lookId by app.look.collectAsStateWithLifecycle()
+    val backupFolder by app.backupFolder.collectAsStateWithLifecycle()
 
     Surface(Modifier.fillMaxSize()) {
         val a = atlas ?: return@Surface
@@ -227,6 +228,8 @@ fun Root(app: StampApp, launches: kotlinx.coroutines.flow.MutableStateFlow<com.m
                 heatLocked = !proOwned,
                 onBuyPro = { a -> buyPro(app, a) },
                 proPrice = app.pro.price.collectAsStateWithLifecycle().value,
+                backupFolder = backupFolder?.name,
+                onBackupFolder = app::setBackupFolder,
                 onTakeout = {
                     if (app.scanner.state.value !is ScanState.Running) app.scanner.cancel()
                     app.flags.set(FLAG_ONBOARDED, true)
@@ -269,6 +272,8 @@ fun Root(app: StampApp, launches: kotlinx.coroutines.flow.MutableStateFlow<com.m
                         heatLocked = !proOwned,
                         onBuyPro = { a -> buyPro(app, a) },
                         proPrice = app.pro.price.collectAsStateWithLifecycle().value,
+                        backupFolder = backupFolder?.name,
+                        onBackupFolder = app::setBackupFolder,
                         onTakeout = {
                             if (app.scanner.state.value !is ScanState.Running) app.scanner.cancel()
                             replaying = false
