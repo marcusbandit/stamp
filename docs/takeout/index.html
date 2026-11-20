@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Nothing on this page may reach the network: no fetch, no images, no fonts, no forms. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; form-action 'none'">
+<title>Stamp for Google Photos</title>
+<style>
+:root {
+  --bg: #F6F8FA; --panel: #FFFFFF; --line: #DDE2E7; --text: #1B1E22; --muted: #5B6570;
+  --primary: #0C8F6A; --on-primary: #FFFFFF; --soft: #C3F5E4; --on-soft: #00382A; --bad: #C92A2A;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14171B; --panel: #1E2227; --line: #2C3139; --text: #E6E9ED; --muted: #9AA3AD;
+    --primary: #20C997; --on-primary: #00261B; --soft: #0B3D30; --on-soft: #B2F2DD; --bad: #FF8787;
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+main { max-width: 640px; margin: 0 auto; padding: 40px 16px 64px; }
+h1 { font-size: 28px; line-height: 1.2; margin: 0 0 28px; }
+ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 16px; }
+li { display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 16px; }
+.n { width: 32px; height: 32px; border-radius: 50%; background: var(--soft); color: var(--on-soft); display: grid; place-items: center; font-weight: 600; }
+h2 { font-size: 17px; margin: 4px 0 4px; }
+p { margin: 0 0 12px; overflow-wrap: anywhere; }
+li > div > :last-child { margin-bottom: 0; }
+button {
+  font: inherit; font-weight: 600; border: 0; border-radius: 999px; padding: 10px 20px; cursor: pointer;
+  background: var(--primary); color: var(--on-primary);
+}
+button.quiet { background: transparent; color: var(--primary); border: 1px solid var(--line); }
+button:disabled { opacity: .45; cursor: default; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; }
+.drop { border: 2px dashed var(--line); border-radius: 12px; padding: 20px; text-align: center; margin-bottom: 12px; }
+.drop.over { border-color: var(--primary); background: var(--soft); color: var(--on-soft); }
+.stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0 0 12px; }
+.stat { border: 1px solid var(--line); border-radius: 12px; padding: 10px; min-width: 0; }
+.stat b { display: block; font-size: 22px; font-variant-numeric: tabular-nums; }
+.stat span { color: var(--muted); font-size: 14px; }
+progress { width: 100%; height: 8px; accent-color: var(--primary); margin: 0 0 12px; }
+.files { margin: 0 0 12px; padding: 0; list-style: none; display: grid; gap: 4px; font-size: 14px; }
+.files div { display: flex; gap: 8px; justify-content: space-between; min-width: 0; }
+.files .name { overflow-wrap: anywhere; min-width: 0; }
+.files .state { color: var(--muted); white-space: nowrap; }
+.files .bad { color: var(--bad); }
+[hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Google Photos for Stamp</h1>
+  <ol>
+    <li><span class="n">1</span><div>
+      <h2>Download the Takeout zips to this computer</h2>
+      <p>Open Google's email and download the parts. All at once, or a few at a time if the disk is small: add them below, delete them, then download the next few.</p>
+    </div></li>
+    <li><span class="n">2</span><div>
+      <h2>Add the zips</h2>
+      <div class="drop" id="drop">Drop zips here</div>
+      <div class="row" style="margin-bottom:12px">
+        <button id="pick">Choose zips</button>
+        <input id="input" type="file" accept=".zip,application/zip" multiple hidden>
+      </div>
+      <div id="work" hidden>
+        <progress id="bar" max="1" value="0"></progress>
+        <div class="stats">
+          <div class="stat"><b id="zips">0</b><span>zips read</span></div>
+          <div class="stat"><b id="photos">0</b><span>photos</span></div>
+          <div class="stat"><b id="places">0</b><span>with a place</span></div>
+        </div>
+        <ul class="files" id="files"></ul>
+      </div>
+    </div></li>
+    <li><span class="n">3</span><div>
+      <h2>Save the file for your phone</h2>
+      <p>Send it to the phone any way you like, then in Stamp open Settings, Memories, Import from Google Photos and choose it in the last step.</p>
+      <div class="row"><button id="save" disabled>Save stamp-google-photos.zip</button></div>
+    </div></li>
+  </ol>
+</main>
+<script>
+"use strict";
+// Reads Google Takeout zips without loading them: only each zip's central directory and its
+// small JSON sidecars are read, a few megabytes out of every 2 GB part. The places found are
+// written as one small zip of sidecars, which every Stamp version imports like a Takeout part.
+
+const SIDE_MAX = 64 * 1024;
+const $ = id => document.getElementById(id);
+const seen = new Map();          // "ts lat lon" -> [lat, lon, ts]; one per photo across albums
+const done = new Set();          // name + size of every zip read, so a repeat is skipped
+let photos = 0, zips = 0, queue = Promise.resolve();
+
+const u16 = (v, o) => v.getUint16(o, true);
+const u32 = (v, o) => v.getUint32(o, true);
+const u64 = (v, o) => Number(v.getBigUint64(o, true));
+const bytes = async (file, from, to) => new DataView(await file.slice(from, to).arrayBuffer());
+const utf8 = new TextDecoder();
+
+async function directory(file) {
+  const tailFrom = Math.max(0, file.size - (65535 + 22 + 20));
+  const tail = await bytes(file, tailFrom, file.size);
+  let e = -1;
+  for (let i = tail.byteLength - 22; i >= 0; i--) if (u32(tail, i) === 0x06054b50) { e = i; break; }
+  if (e < 0) throw new Error("not a zip");
+  let count = u16(tail, e + 10), size = u32(tail, e + 12), offset = u32(tail, e + 16);
+  if (count === 0xFFFF || size === 0xFFFFFFFF || offset === 0xFFFFFFFF) {
+    const l = e - 20;
+    if (l < 0 || u32(tail, l) !== 0x07064b50) throw new Error("broken zip64 record");
+    const at = u64(tail, l + 8);
+    const z = await bytes(file, at, at + 56);
+    if (u32(z, 0) !== 0x06064b50) throw new Error("broken zip64 record");
+    count = u64(z, 32); size = u64(z, 40); offset = u64(z, 48);
+  }
+  const cd = await bytes(file, offset, offset + size);
+  const out = [];
+  for (let p = 0, k = 0; k < count && p + 46 <= cd.byteLength; k++) {
+    if (u32(cd, p) !== 0x02014b50) throw new Error("broken directory");
+    const method = u16(cd, p + 10), nl = u16(cd, p + 28), xl = u16(cd, p + 30), cl = u16(cd, p + 32);
+    let comp = u32(cd, p + 20), full = u32(cd, p + 24), local = u32(cd, p + 42);
+    const name = utf8.decode(new Uint8Array(cd.buffer, cd.byteOffset + p + 46, nl));
+    for (let x = p + 46 + nl, end = x + xl; x + 4 <= end;) {
+      const id = u16(cd, x), len = u16(cd, x + 2);
+      if (id === 0x0001) {
+        let f = x + 4;
+        if (full === 0xFFFFFFFF) { full = u64(cd, f); f += 8; }
+        if (comp === 0xFFFFFFFF) { comp = u64(cd, f); f += 8; }
+        if (local === 0xFFFFFFFF) { local = u64(cd, f); }
+      }
+      x += 4 + len;
+    }
+    if (/\.json$/i.test(name) && full <= SIDE_MAX && (method === 0 || method === 8)) out.push({ name, method, comp, local, nl, xl });
+    p += 46 + nl + xl + cl;
+  }
+  return out;
+}
+
+async function sidecar(file, e) {
+  let span = 30 + e.nl + e.xl + 256 + e.comp;
+  let v = await bytes(file, e.local, e.local + span);
+  if (u32(v, 0) !== 0x04034b50) return null;
+  const start = 30 + u16(v, 26) + u16(v, 28);
+  if (start + e.comp > v.byteLength) v = await bytes(file, e.local, e.local + start + e.comp);
+  const raw = new Uint8Array(v.buffer, v.byteOffset + start, e.comp);
+  if (e.method === 0) return utf8.decode(raw);
+  const stream = new Blob([raw]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+  return await new Response(stream).text();
+}
+
+// The same rule as the app's Takeout.parseSidecar: Google's place first, then the camera's.
+function place(text) {
+  let o; try { o = JSON.parse(text); } catch { return undefined; }
+  if (!o || typeof o !== "object" || !o.photoTakenTime) return undefined;
+  const ts = parseInt(o.photoTakenTime.timestamp, 10) || 0;
+  for (const k of ["geoData", "geoDataExif"]) {
+    const g = o[k];
+    const lat = g && Number(g.latitude), lon = g && Number(g.longitude);
+    if (g && Number.isFinite(lat) && Number.isFinite(lon) && !(lat === 0 && lon === 0)) return [lat, lon, ts];
+  }
+  return null;
+}
+
+function show() {
+  $("zips").textContent = zips.toLocaleString();
+  $("photos").textContent = photos.toLocaleString();
+  $("places").textContent = seen.size.toLocaleString();
+  $("save").disabled = seen.size === 0;
+}
+
+async function read(file, state) {
+  const key = file.name + " " + file.size;
+  if (done.has(key)) { state.textContent = "already read"; return; }
+  const entries = await directory(file);
+  let i = 0, n = 0, last = 0;
+  const worker = async () => {
+    while (i < entries.length) {
+      const e = entries[i++];
+      const p = place(await sidecar(file, e).catch(() => null));
+      if (p !== undefined) photos++;
+      if (p) seen.set(p[2] + " " + p[0].toFixed(5) + " " + p[1].toFixed(5), p);
+      n++;
+      if (performance.now() - last > 150) {
+        last = performance.now();
+        state.textContent = Math.floor(100 * n / entries.length) + "%";
+        show();
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: 16 }, worker));
+  done.add(key); zips++;
+  state.textContent = "done";
+}
+
+function add(files) {
+  const list = [...files].filter(f => /\.zip$/i.test(f.name));
+  if (!list.length) return;
+  $("work").hidden = false;
+  const bar = $("bar");
+  bar.max = Number(bar.max) + list.length;
+  for (const f of list) {
+    const row = document.createElement("li");
+    row.innerHTML = '<div><span class="name"></span><span class="state">waiting</span></div>';
+    row.querySelector(".name").textContent = f.name;
+    const state = row.querySelector(".state");
+    $("files").append(row);
+    queue = queue.then(() => read(f, state)).catch(err => {
+      state.textContent = "could not read: " + err.message;
+      state.classList.add("bad");
+    }).finally(() => { bar.value = Number(bar.value) + 1; show(); });
+  }
+}
+
+// One stored (uncompressed) zip of slim sidecars, zip64 when it passes 65,535 entries.
+const CRC = new Uint32Array(256).map((_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
+const crc32 = b => { let c = ~0; for (let i = 0; i < b.length; i++) c = CRC[(c ^ b[i]) & 0xFF] ^ (c >>> 8); return ~c >>> 0; };
+
+function writeZip(points) {
+  const enc = new TextEncoder(), parts = [], dir = [];
+  let at = 0;
+  const head = size => new DataView(new ArrayBuffer(size));
+  points.forEach(([lat, lon, ts], k) => {
+    const name = enc.encode("Takeout/Google Photos/Stamp/" + String(k + 1).padStart(6, "0") + ".json");
+    const body = enc.encode(JSON.stringify({ photoTakenTime: { timestamp: String(ts) }, geoData: { latitude: lat, longitude: lon } }));
+    const crc = crc32(body);
+    const h = head(30);
+    h.setUint32(0, 0x04034b50, true); h.setUint16(4, 20, true); h.setUint16(6, 0x0800, true);
+    h.setUint32(14, crc, true); h.setUint32(18, body.length, true); h.setUint32(22, body.length, true);
+    h.setUint16(26, name.length, true);
+    parts.push(h, name, body);
+    const c = head(46);
+    c.setUint32(0, 0x02014b50, true); c.setUint16(4, 20, true); c.setUint16(6, 20, true); c.setUint16(8, 0x0800, true);
+    c.setUint32(16, crc, true); c.setUint32(20, body.length, true); c.setUint32(24, body.length, true);
+    c.setUint16(28, name.length, true); c.setUint32(42, at, true);
+    dir.push(c, name);
+    at += 30 + name.length + body.length;
+  });
+  const cdSize = dir.reduce((s, d) => s + d.byteLength, 0), n = points.length, big = n > 0xFFFF;
+  const tail = [];
+  if (big) {
+    const z = head(56);
+    z.setUint32(0, 0x06064b50, true); z.setBigUint64(4, 44n, true); z.setUint16(12, 45, true); z.setUint16(14, 45, true);
+    z.setBigUint64(24, BigInt(n), true); z.setBigUint64(32, BigInt(n), true);
+    z.setBigUint64(40, BigInt(cdSize), true); z.setBigUint64(48, BigInt(at), true);
+    const l = head(20);
+    l.setUint32(0, 0x07064b50, true); l.setBigUint64(8, BigInt(at + cdSize), true); l.setUint32(16, 1, true);
+    tail.push(z, l);
+  }
+  const e = head(22);
+  e.setUint32(0, 0x06054b50, true);
+  e.setUint16(8, big ? 0xFFFF : n, true); e.setUint16(10, big ? 0xFFFF : n, true);
+  e.setUint32(12, cdSize, true); e.setUint32(16, at, true);
+  return new Blob([...parts, ...dir, ...tail, e], { type: "application/zip" });
+}
+
+$("pick").onclick = () => $("input").click();
+$("input").onchange = e => { add(e.target.files); e.target.value = ""; };
+const drop = $("drop");
+drop.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
+drop.ondragleave = () => drop.classList.remove("over");
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); add(e.dataTransfer.files); };
+document.ondragover = e => e.preventDefault();
+document.ondrop = e => { e.preventDefault(); add(e.dataTransfer.files); };
+$("save").onclick = () => {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(writeZip([...seen.values()].sort((x, y) => x[2] - y[2])));
+  a.download = "stamp-google-photos.zip";
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+};
+</script>
+</body>
+</html>

@@ -73,4 +73,11 @@ object Takeout {
 
     /** Google Takeout, opened on the export page with only Google Photos selected. */
     const val TAKEOUT_URL = "https://takeout.google.com/settings/takeout/custom/photos"
+
+    /**
+     * Stamp's page for exports too big for the phone (docs/takeout). It reads the zips on a
+     * computer, in the browser, and saves the places as one small zip of sidecars that
+     * [readZip] reads like any Takeout part.
+     */
+    const val COMPUTER_URL = "https://marcusbandit.github.io/stamp/takeout/"
 }

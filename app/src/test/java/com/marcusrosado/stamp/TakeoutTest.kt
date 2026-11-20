@@ -53,6 +53,14 @@ class TakeoutTest {
         assertEquals(listOf(GeoPoint(35.67, 139.65, 100_000)), points.filterNotNull())
     }
 
+    /** The file docs/takeout/index.html saves on a computer, made from an invented export. */
+    @Test fun readsTheComputerPagesFile() {
+        val zip = File(javaClass.getResource("/takeout/stamp-google-photos.zip")!!.toURI())
+        val points = mutableListOf<GeoPoint>()
+        Files.newByteChannel(zip.toPath()).use { ch -> Takeout.readZip(ch) { e -> e.point?.let { points += it } } }
+        assertEquals(listOf(GeoPoint(35.68, 139.69, 1_680_000_000_000), GeoPoint(48.85, 2.35, 1_690_000_000_000)), points)
+    }
+
     @Test fun evidenceMergeWidensTheSpan() {
         val a = PhotoEvidence(firstMs = 200, lastMs = 500)
         assertEquals(PhotoEvidence(100, 500), a.merge(PhotoEvidence(100, 300)))
