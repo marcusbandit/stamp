@@ -78,6 +78,10 @@ sealed interface ScanState {
         val zips: Set<String> = emptySet(),
         /** True until the user answers whether to add another zip. */
         val askMore: Boolean = false,
+        /** Why the last zip added could not be read, until the user has seen it. */
+        val problem: String? = null,
+        /** Picked files that were not parts of the export being read, left alone. */
+        val skipped: Int = 0,
     ) : ScanState
 
     data class Failed(val message: String, val source: ScanSource = ScanSource.Device) : ScanState
@@ -111,36 +115,74 @@ class PhotoScanner(
      * they add to it, ticks and all.
      */
     fun importTakeout(zips: List<Uri>) {
-        // Picked while parts are being read, they are more parts.
-        if ((_state.value as? ScanState.Done)?.parts != null) { importTakeoutParts(zips); return }
+        // Picked while parts are being read, they are more parts of the same export.
+        if ((_state.value as? ScanState.Done)?.parts != null) { importTakeoutParts(zips, sameExport = true); return }
         val before = (_state.value as? ScanState.Done)?.takeIf { it.source == ScanSource.Takeout && it.parts == null }
-        launch(ScanSource.Takeout) { c -> readTakeout(zips, c, before) }
+        launch(ScanSource.Takeout) { c ->
+            if (before == null) return@launch readTakeout(zips, c)
+            // A zip that cannot be read leaves the review it was added to as it was.
+            try {
+                readTakeout(zips, c, before)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                before.copy(askMore = false, problem = e.message ?: e.javaClass.simpleName)
+            }
+        }
     }
 
-    /** The user answered whether to add another zip; the review stops asking. */
+    /** The user answered whether to add another zip, or saw why one failed. */
     fun answeredMore() {
-        _state.update { s -> if (s is ScanState.Done) s.copy(askMore = false) else s }
+        _state.update { s -> if (s is ScanState.Done) s.copy(askMore = false, problem = null) else s }
     }
 
     /**
      * Reads one part of a Takeout export, handed over as the user downloads it, and adds what
      * it holds to the parts read before. False when another read is still running.
      */
-    fun importTakeoutPart(part: Uri): Boolean = importTakeoutParts(listOf(part))
+    fun importTakeoutPart(part: Uri): Boolean = importTakeoutParts(listOf(part), sameExport = false)
 
-    private fun importTakeoutParts(parts: List<Uri>): Boolean {
+    /**
+     * Reads [picked] one after another as parts. With [sameExport], only parts of the export
+     * being read count: anything else is left alone, never read into the session or deleted.
+     */
+    private fun importTakeoutParts(picked: List<Uri>, sameExport: Boolean): Boolean {
         if (job?.isActive == true) return false
         // One review across all the parts: ticks changed after an earlier part stay.
-        val picks = (_state.value as? ScanState.Done)?.takeIf { it.parts != null }?.picks.orEmpty()
+        val open = (_state.value as? ScanState.Done)?.takeIf { it.parts != null }
+        val picks = open?.picks.orEmpty()
         reading = true
         launch(ScanSource.Takeout) { c ->
-            var last: ScanState? = null
-            for (p in parts) {
-                last = readPart(p, c)
-                if (last !is ScanState.Done) return@launch last
+            val export = partsFile?.let { Takeout.Session.read(it).export }
+            val parts = if (!sameExport) picked else picked.filter { u ->
+                val name = displayName(u)
+                name != null && Takeout.partNumber(name) != null && Takeout.exportOf(name) == export
             }
-            val done = last as ScanState.Done
-            done.copy(picks = picks, parts = done.parts?.copy(uris = parts.map { it.toString() }))
+            val skipped = picked.size - parts.size
+            var done: ScanState.Done? = null
+            val read = ArrayList<String>()
+            for (p in parts) {
+                val r = try {
+                    readPart(p, c)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    // The parts read so far stay counted; the one that failed is named.
+                    val kept = done ?: open ?: return@launch ScanState.Failed(e.message ?: e.javaClass.simpleName, ScanSource.Takeout)
+                    return@launch kept.copy(
+                        picks = picks, askMore = false, skipped = skipped, problem = e.message ?: e.javaClass.simpleName,
+                        parts = kept.parts?.copy(uris = read),
+                    )
+                }
+                if (r !is ScanState.Done) return@launch r
+                done = r
+                read += p.toString()
+            }
+            val last = done
+                // Nothing picked was a part of this export: the review stays as it was.
+                ?: return@launch open?.copy(askMore = false, skipped = skipped, parts = open.parts?.copy(uris = emptyList()))
+                    ?: ScanState.Failed("None of those files is a part of this export.", ScanSource.Takeout)
+            last.copy(picks = picks, skipped = skipped, parts = last.parts?.copy(uris = read))
         }
         return true
     }
@@ -225,7 +267,9 @@ class PhotoScanner(
         /** Starts from a review the new zips add to. */
         fun seed(done: ScanState.Done) {
             done.found.forEach { f ->
-                val span = spans.getOrPut(f.country.id) { longArrayOf(Long.MAX_VALUE, Long.MIN_VALUE) }
+                // Kept the way the first zip counted; with separate land masses off now, an
+                // island's span joins its country's.
+                val span = spans.getOrPut(if (split()) f.country.id else atlas.countryOf(f.country.id)) { longArrayOf(Long.MAX_VALUE, Long.MIN_VALUE) }
                 if (f.evidence.firstMs > 0) span[0] = minOf(span[0], f.evidence.firstMs)
                 if (f.evidence.lastMs > 0) span[1] = maxOf(span[1], f.evidence.lastMs)
             }
