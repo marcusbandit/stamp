@@ -243,7 +243,13 @@ object AutoTrips {
      * no date gets the first day it covers. Days the user gave never change, and a town they said
      * was no stop, or one the trip already has, is left out.
      */
-    fun update(trip: Trip, found: FoundTrip, zone: ZoneId = ZoneId.systemDefault()): TripUpdate? {
+    fun update(
+        trip: Trip,
+        found: FoundTrip,
+        zone: ZoneId = ZoneId.systemDefault(),
+        /** Towns on the user's other trips of those days, which stay where they are. */
+        elsewhere: Set<String> = emptySet(),
+    ): TripUpdate? {
         var work = trip
         val fillArrived = LinkedHashMap<String, PartialDate>()
         val fillLeft = LinkedHashMap<String, PartialDate>()
@@ -271,7 +277,7 @@ object AutoTrips {
                 }
                 continue
             }
-            if (same.isNotEmpty() || f.city.id in have || f.city.id in trip.notStops) continue
+            if (same.isNotEmpty() || f.city.id in have || f.city.id in trip.notStops || f.city.id in elsewhere) continue
             val at = slot(work, pd(a), pd(b)) ?: continue
             work = work.copy(
                 cities = work.cities.take(at) + f.city.id + work.cities.drop(at),

@@ -310,7 +310,10 @@ class PhotoScanner(
             }
             val before = filled[mine.id]
             val base = before?.let { applied(mine, it) } ?: mine
-            val u = AutoTrips.update(base, t)?.let { u -> u.copy(lands = u.stops.mapNotNull { land(it.city.lat, it.city.lon) }.distinct()) } ?: continue
+            // A town the user put on another trip of those days stays on it.
+            val elsewhere = visits.filter { it.id != mine.id && AutoTrips.known(t, t.lands.toSet(), listOf(it)) }
+                .flatMapTo(HashSet()) { o -> o.places.map(::placeIdOf) }
+            val u = AutoTrips.update(base, t, elsewhere = elsewhere)?.let { u -> u.copy(lands = u.stops.mapNotNull { land(it.city.lat, it.city.lon) }.distinct()) } ?: continue
             filled[mine.id] = if (before == null) u else before.copy(
                 stops = before.stops + u.stops,
                 arrived = before.arrived + u.arrived,

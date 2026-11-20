@@ -250,4 +250,9 @@ class AutoTripsTest {
         assertEquals("Add 2 countries, update 3 trips", addLabel(2, 0, 3))
         assertEquals("Update 1 trip", addLabel(0, 0, 1))
     }
+
+    @Test fun aTownOnAnotherTripOfThoseDaysStaysThere() {
+        val mine = Trip("t", date = day(2023, 5, 1), cities = listOf("2"), arrived = mapOf("2" to day(2023, 5, 1)), left = mapOf("2" to day(2023, 5, 2)), lands = listOf("BB"))
+        assertEquals(null, AutoTrips.update(mine, foundOf(Triple(bay, 1, 2), Triple(hill, 3, 4)), utc, elsewhere = setOf("3")))
+    }
 }
