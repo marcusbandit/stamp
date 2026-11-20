@@ -34,7 +34,12 @@ on it.
   through a Google Takeout export and reads the zips they pick, on the phone: only the location
   files inside, never the images. The places go to `seen.tsv` for the heat map and the countries
   through the scan's review, and they stay when the photos or the zips are deleted. Stamp never
-  signs in to Google.
+  signs in to Google. A big export can come part by part (owner's ask, 2026-11-20): Stamp opens
+  zips handed to it, reads each part on top of the ones before (`takeout-parts.json`, outside the
+  backup), deletes it with Android's consent and sends the user to the next, with one review at the
+  end. An export can also be read on a computer instead (owner's
+  call, 2026-11-20): `docs/takeout/index.html`, served by GitHub Pages, reads the zips in the
+  browser with no network allowed and saves one small zip of sidecars that the same import reads.
 - **Memories may use the system photo picker.** Attaching photos and videos to a visit's stops
   offers suggestions from this phone (taken on those dates near that place) plus the system
   gallery picker, with a lasting read grant. Videos never autoplay inside the app.
