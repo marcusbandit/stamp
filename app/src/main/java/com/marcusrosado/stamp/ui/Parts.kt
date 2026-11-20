@@ -327,6 +327,8 @@ fun CountryDetail(
                 onAddMemories = { actions.onAddMemories(tripId, it) },
                 onUpdateMemory = { actions.onUpdateMemory(tripId, it) },
                 onRemoveMemory = { actions.onRemoveMemory(tripId, it) },
+                onCover = { actions.onCover(tripId, it) },
+                onMoveMemory = { m, stop -> actions.onMoveMemory(tripId, m, stop) },
                 onDuplicate = if (v.state == TravelState.Lived) null else {
                     { actions.onDuplicateTrip(tripId)?.let { copyFor = it } }
                 },

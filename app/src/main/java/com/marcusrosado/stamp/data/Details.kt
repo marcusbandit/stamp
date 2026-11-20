@@ -106,7 +106,16 @@ data class Trip(
      * stop's own place: the hotel just over the border from the town the trip was about.
      */
     val slept: Map<String, String> = emptyMap(),
+    /**
+     * The photo the user picked for the trip's header, by memory id. Null, or a memory that has
+     * gone since, falls back to the first photo, which is what every trip showed before.
+     */
+    val cover: String? = null,
 ) {
+    /** The photo the trip's header shows: the one the user picked, else its first photo. */
+    val coverPhoto: Memory?
+        get() = memories.firstOrNull { it.id == cover && it.isPhoto } ?: memories.firstOrNull { it.isPhoto }
+
     /** Every place the trip went, each once: its stops' places and the day places from them. */
     val places: List<String>
         get() = cities.flatMap { placesAt(it) }.distinct()
@@ -191,7 +200,10 @@ data class Memory(
     val text: String = "",
     /** When the photo was taken or the moment written, in epoch ms. 0 is unknown. */
     val takenMs: Long = 0,
-)
+) {
+    /** A still picture, the only kind that can head a trip: a video would need to play. */
+    val isPhoto: Boolean get() = media != null && !video
+}
 
 /** How the user feels about a city: a heart and a star rating. */
 data class Note(

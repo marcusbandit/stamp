@@ -496,6 +496,9 @@ private sealed interface StopSlot {
     data class After(val at: Int) : StopSlot
 }
 
+/** What the stop search asks: every value is taken when the key is made. */
+private data class StopAsk(val query: String, val near: List<Pair<Double, Double>>, val airports: Airports?, val places: Places?)
+
 /** One stop to pick: an airport, by its code, or a town. */
 private class StopHit(val id: String, val tag: String?, val name: String, val where: String)
 
@@ -508,12 +511,18 @@ private fun StopSearch(title: String, airports: Airports?, places: Places?, near
     var query by remember { mutableStateOf("") }
     val focus = remember { androidx.compose.ui.focus.FocusRequester() }
     LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
-    val found = remember(query, near, airports, places) {
+    // Typing searches every town in the world, so it runs off the main thread; the airports
+    // near the step, before anything is typed, are found on the spot.
+    val search = rememberSearch(StopAsk(query, near, airports, places), quick = query.isBlank()) { ask, check ->
         fun ap(a: Airport) = StopHit(Step.airport(a.code), a.code, a.name, listOf(a.town, a.country).filter { it.isNotBlank() }.joinToString(", "))
-        if (query.isBlank()) near.flatMap { airports?.near(it, 4).orEmpty() }.distinctBy { it.code }.map(::ap)
-        else airports?.search(query, 8).orEmpty().map(::ap) +
-            places?.searchAll(query, 12).orEmpty().map { c -> StopHit(c.id, null, c.name, c.country) }
+        if (ask.query.isBlank()) ask.near.flatMap { ask.airports?.near(it, 4).orEmpty() }.distinctBy { it.code }.map(::ap)
+        else ask.airports?.search(ask.query, 8).orEmpty().map(::ap) +
+            ask.places?.searchAll(ask.query, 12, check).orEmpty().map { c -> StopHit(c.id, null, c.name, c.country) }
     }
+    val answer = search.found
+    val found = answer?.items.orEmpty()
+    // The first world search sorts every city; start it before the first letter waits on it.
+    LaunchedEffect(places) { places?.let { p -> kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { p.prepareWorldSearch() } } }
     SeamAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
@@ -528,14 +537,14 @@ private fun StopSearch(title: String, airports: Airports?, places: Places?, near
                     // Enter takes the top match, as in the city picker; with nothing typed there is none.
                     keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Search),
                     keyboardActions = androidx.compose.foundation.text.KeyboardActions(
-                        onSearch = { if (query.isNotBlank()) found.firstOrNull()?.let { onPick(it.id) } },
+                        onSearch = { if (query.isNotBlank()) search.whenAnswered { now -> now.firstOrNull()?.let { onPick(it.id) } } },
                     ),
                     modifier = Modifier.fillMaxWidth().focusRequester(focus),
                 )
                 Spacer(Modifier.height(8.dp))
                 when {
                     airports == null && found.isEmpty() -> Text("Loading airports", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(8.dp))
-                    query.isNotBlank() && found.isEmpty() -> Text("Nothing called \"${query.trim()}\"", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(8.dp))
+                    query.isNotBlank() && found.isEmpty() && answer?.fresh == true -> Text("Nothing called \"${query.trim()}\"", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(8.dp))
                 }
                 // A plain column: the dialog already scrolls, and a lazy list inside a scroll
                 // has no height to measure against.

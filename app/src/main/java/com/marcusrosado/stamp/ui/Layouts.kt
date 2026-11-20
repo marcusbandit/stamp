@@ -1,5 +1,6 @@
 package com.marcusrosado.stamp.ui
 
+import kotlinx.coroutines.flow.conflate
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.Velocity
@@ -556,20 +557,33 @@ private fun StampMap(
         )
     }
     val rv = state.regionView
-    // The cities view's dots: every city of some size, and every one on a visit or wanted.
+    // The cities view's dots: every city of some size, built the first time the view opens and
+    // kept from then on, so leaving the view and coming back, or marking a city, builds and
+    // sends none of the 31,000 again. The map hides them in the other views.
     val cityView = !light && state.mapView == com.marcusrosado.stamp.data.MapView.Cities
-    val allCities by androidx.compose.runtime.produceState(emptyList<CityDot>(), cityView, state.places, state.visits) {
+    val allCities by androidx.compose.runtime.produceState<Pair<com.marcusrosado.stamp.data.Places?, String?>>(null to null, cityView, state.places) {
         val p = state.places
-        if (!cityView || p == null) { value = emptyList(); return@produceState }
-        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
-            val mine = state.visits.values.flatMap { it.cities + it.wantCities }.toSet()
-            p.byId.values.filter { it.population >= 15_000 || it.id in mine }
-                .map { CityDot(it.id, it.lat, it.lon, it.population, it.id in mine, it.name) }
+        if (!cityView || p == null || value.first === p) return@produceState
+        value = p to kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            citiesJson(p.byId.values.filter { it.population >= CITY_DOT_FLOOR })
         }
     }
-    val heat by androidx.compose.runtime.produceState(emptyList<com.marcusrosado.stamp.data.HeatCell>(), state.seen, state.heatMap) {
-        value = if (!state.heatMap || light) emptyList()
-        else kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { com.marcusrosado.stamp.data.Seen.cells(state.seen) }
+    // Every city on a visit or wanted, whatever its size: a few, so a mark change sends only these.
+    val myCities = remember(cityView, state.visits, state.places) {
+        val p = state.places
+        if (!cityView || p == null) null
+        else citiesJson(state.visits.values.flatMap { it.cities + it.wantCities }.distinct().mapNotNull { p.byId[it] })
+    }
+    // A scan adds places in batches, several a second: the heat map takes them about once a
+    // second, not laid out again for each batch. A count that has started always finishes;
+    // batches that land meanwhile wait as one, the newest.
+    val seenNow by androidx.compose.runtime.rememberUpdatedState(state.seen)
+    val heat by androidx.compose.runtime.produceState(emptyList<com.marcusrosado.stamp.data.HeatCell>(), state.heatMap, light) {
+        if (!state.heatMap || light) { value = emptyList(); return@produceState }
+        androidx.compose.runtime.snapshotFlow { seenNow }.conflate().collect { points ->
+            value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { com.marcusrosado.stamp.data.Seen.cells(points) }
+            kotlinx.coroutines.delay(HEAT_EVERY_MS)
+        }
     }
     val wantCities = remember(state.visits, state.places) {
         state.visits.values.flatMap { v -> v.wantCities.mapNotNull { placeOf(it, v, state.places) } }.map { it.lat to it.lon }.distinct()
@@ -578,10 +592,11 @@ private fun StampMap(
         animate = animate,
         regionLayer = if (light || rv.countries.isEmpty()) null else RegionLayer(rv.shapes, rv.marks, rv.countryMarks),
         complete = if (light) emptySet() else rv.complete,
-        plain = !light && state.mapView == com.marcusrosado.stamp.data.MapView.Cities,
+        plain = cityView,
         wantCities = wantCities,
         onRegion = if (selectable) { cid, rid -> state.onSpot(Spot.Region(cid, rid)) } else null,
-        allCities = allCities,
+        allCities = allCities.second,
+        myCities = myCities,
         selectedRegion = (state.spot as? Spot.Region)?.regionId.takeIf { !light },
         selectedCity = (state.spot as? Spot.City)?.let { it.lat to it.lon }.takeIf { !light },
         selectedArea = state.spotArea.takeIf { state.spot is Spot.City && !light },
@@ -978,3 +993,6 @@ fun Split(
         ) { second() }
     }
 }
+
+/** The least time between two heat maps sent while places keep coming, in milliseconds. */
+private const val HEAT_EVERY_MS = 1_000L

@@ -24,6 +24,7 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -84,7 +85,12 @@ fun TripEndPicker(
     onDismiss: () -> Unit,
 ) {
     var query by remember { mutableStateOf("") }
-    val found = remember(query, places) { if (query.isBlank() || places == null) emptyList() else places.searchAll(query, 30) }
+    // Every town in the world: searched off the main thread, so typing never waits on it.
+    val found = rememberSearch(query to places, quick = query.isBlank()) { (q, p), check ->
+        if (q.isBlank() || p == null) emptyList() else p.searchAll(q, 30, check)
+    }.found?.items.orEmpty()
+    // The first world search sorts every city; start it before the first letter waits on it.
+    LaunchedEffect(places) { places?.let { p -> kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { p.prepareWorldSearch() } } }
     SeamAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },

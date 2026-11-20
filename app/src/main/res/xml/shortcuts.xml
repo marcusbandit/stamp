@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The app icon's shortcuts. Each opens ShortcutActivity, which hands the SHORTCUT extra on
+     to MainActivity for Launch.of to read; the targetPackage is the application id, the same in
+     the Play build. -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="new_trip"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_trip"
+        android:shortcutShortLabel="@string/shortcut_trip"
+        android:shortcutLongLabel="@string/shortcut_trip">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.marcusrosado.stamp"
+            android:targetClass="com.marcusrosado.stamp.ShortcutActivity">
+            <extra android:name="com.marcusrosado.stamp.SHORTCUT" android:value="trip" />
+        </intent>
+    </shortcut>
+    <shortcut
+        android:shortcutId="find_city"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_find"
+        android:shortcutShortLabel="@string/shortcut_find_short"
+        android:shortcutLongLabel="@string/shortcut_find">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.marcusrosado.stamp"
+            android:targetClass="com.marcusrosado.stamp.ShortcutActivity">
+            <extra android:name="com.marcusrosado.stamp.SHORTCUT" android:value="find" />
+        </intent>
+    </shortcut>
+    <shortcut
+        android:shortcutId="scan_photos"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_scan"
+        android:shortcutShortLabel="@string/shortcut_scan_short"
+        android:shortcutLongLabel="@string/shortcut_scan">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.marcusrosado.stamp"
+            android:targetClass="com.marcusrosado.stamp.ShortcutActivity">
+            <extra android:name="com.marcusrosado.stamp.SHORTCUT" android:value="scan" />
+        </intent>
+    </shortcut>
+    <shortcut
+        android:shortcutId="where_am_i"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_here"
+        android:shortcutShortLabel="@string/shortcut_here"
+        android:shortcutLongLabel="@string/shortcut_here">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.marcusrosado.stamp"
+            android:targetClass="com.marcusrosado.stamp.ShortcutActivity">
+            <extra android:name="com.marcusrosado.stamp.SHORTCUT" android:value="here" />
+        </intent>
+    </shortcut>
+</shortcuts>
