@@ -234,17 +234,24 @@ fun TakeoutGuide(onPick: () -> Unit) {
                 style = MaterialTheme.typography.bodyMedium,
             )
         }
-        Step(3, "Download the zips on this phone") {
+        Step(3, "Download the zips") {
             Text(
-                "Open the email here and tap Download for every part. Stamp reads only the small location " +
-                    "files inside, so a large export still goes quickly.",
+                "A small export can come to this phone: open the email here and tap Download for every part. " +
+                    "For one too big for the phone, download the parts on a computer and open Stamp's Google " +
+                    "Photos page there. It reads them in the browser and saves one small file for this phone.",
                 style = MaterialTheme.typography.bodyMedium,
             )
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(onClick = {
+                val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, Takeout.COMPUTER_URL)
+                runCatching { context.startActivity(Intent.createChooser(send, null)) }
+            }) { Text("Send the page to a computer") }
         }
         Step(4, "Choose them here") {
             Text(
-                "Select every zip at once. Only the place and date of each photo are kept, and they stay " +
-                    "after you delete the zips. The countries go through the same review as a phone scan.",
+                "Select every zip at once, or the stamp-google-photos.zip the computer saved. Only the place " +
+                    "and date of each photo are kept, and they stay after you delete the zips. The countries " +
+                    "go through the same review as a phone scan.",
                 style = MaterialTheme.typography.bodyMedium,
             )
             Spacer(Modifier.height(8.dp))

@@ -4,7 +4,7 @@ title: Stamp privacy policy
 
 # Stamp privacy policy
 
-Last updated 16 November 2026, for the heat map, the Google Photos import and city outlines.
+Last updated 20 November 2026, for reading a Google Photos export on a computer.
 
 Stamp keeps everything you enter on your phone. It has no account, no ads and no analytics, and
 it never sends your marks, trips, places or photos anywhere.
@@ -26,6 +26,11 @@ show it later. The file stays where it is in your gallery.
 When you import from Google Photos, you download a Google Takeout export yourself and choose its
 zip files in Stamp. Stamp reads only the small location files inside, the place and date of each
 photo, and never the pictures. Stamp never signs in to your Google account.
+
+An export too big for the phone can be read on a computer instead, on Stamp's page at
+marcusbandit.github.io/stamp/takeout. The page reads the zips inside your browser, uploads
+nothing and is not allowed to reach the network. It saves the place and date of each photo as
+one small file, which you move to the phone and choose in Stamp.
 
 If you turn on the hourly look for the heat map, Stamp asks the phone's own location service
 for its rough position about once an hour, at a random moment, also while Stamp is closed. The
