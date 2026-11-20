@@ -68,6 +68,10 @@ on it.
   save a backup by itself, but only to a folder on the phone's own storage; a cloud folder is
   turned down, since it would upload the whole map every week with nobody pressing anything. A
   backup saved by hand may still go wherever the user chooses.
+- **Scans make trips (owner's ask, 2026-11-20).** The photo scan and the Takeout import group the
+  places into trips: days away from home in a row, with the towns in order and their dates. The
+  review offers them ticked, and a trip made this way asks for its best photos the first time it
+  is opened, 4 picked for the user and 12 at most, from the photos on this phone.
 - Every input beyond the country itself is optional: dates (year, month or day), ratings,
   visit counts, cities. A country with no other details is a complete entry.
 - Onboarding introduces every feature that needs setup: the photo scan, and the photo access

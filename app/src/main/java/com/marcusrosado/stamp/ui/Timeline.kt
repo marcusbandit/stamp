@@ -165,6 +165,8 @@ class TimelineActions(
     val onRemoveMemory: (String) -> Unit,
     /** Picks the photo the trip's header shows, by memory id. */
     val onCover: (String) -> Unit = {},
+    /** The user picked the photos of a trip made from them, or turned them down. */
+    val onPhotosPicked: () -> Unit = {},
     /** Moves a memory to a stop of the trip, or to the trip as a whole when the stop is null. */
     val onMoveMemory: (memoryId: String, stop: String?) -> Unit = { _, _ -> },
     /** Copies the trip, route and all, with no dates; null when it cannot be. */
@@ -249,6 +251,10 @@ fun VisitTimeline(
     val at = (reached?.takeIf { it.startsWith("stop-") }?.removePrefix("stop-")
         ?: stops.lastOrNull()?.takeIf { reached == "end" } ?: stops.firstOrNull())
         ?.let { placeOf(it, visit, places) }?.let { it.lat to it.lon }
+    // A trip made from the photos asks for its best few the first time it is opened.
+    if (trip.pickPhotos && !lived) {
+        PickBest(trip, visit, places, onKeep = { actions.onAddMemories(it); actions.onPhotosPicked() }, onNone = actions.onPhotosPicked)
+    }
     var editingDates by remember { mutableStateOf(false) }
     var naming by remember { mutableStateOf(false) }
     var stopDates by remember { mutableStateOf<String?>(null) }

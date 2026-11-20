@@ -651,6 +651,7 @@ private fun App(
                 onUpdateMemory = app.visits::updateMemory,
                 onRemoveMemory = { a, b -> undo.run("Memory removed") { app.visits.removeMemory(a, b) } },
                 onCover = app.visits::setCover,
+                onPhotosPicked = app.visits::photosPicked,
                 onMoveMemory = app.visits::moveMemory,
                 onAddPlaceMemories = app.visits::addPlaceMemories,
                 onUpdatePlaceMemory = app.visits::updatePlaceMemory,
@@ -851,9 +852,10 @@ private fun App(
                     visits = visits,
                     home = home,
                     onStartDevice = { app.flags.set(FLAG_SCANNED, true); app.scanner.start() },
-                    onAdd = { found, mark ->
-                        if (mark.isEmpty()) app.visits.addFromPhotos(found, mark)
-                        else undo.run(if (mark.size == 1) "1 country added" else "${mark.size} countries added") { app.visits.addFromPhotos(found, mark) }
+                    onAdd = { found, mark, trips ->
+                        val add = { app.visits.addFromPhotos(found, mark); app.visits.addFoundTrips(trips) }
+                        if (mark.isEmpty() && trips.isEmpty()) add()
+                        else undo.run(addedLine(mark.size, trips.size)) { add() }
                         // Only a part-by-part review ends its parts; any other scan leaves them waiting.
                         if ((app.scanner.state.value as? ScanState.Done)?.parts != null) app.scanner.endParts()
                         app.scanner.cancel()
@@ -873,6 +875,13 @@ private fun App(
     }
     }
 }
+
+/** "2 countries and 3 trips added". */
+private fun addedLine(countries: Int, trips: Int): String =
+    listOfNotNull(
+        countries.takeIf { it > 0 }?.let { if (it == 1) "1 country" else "$it countries" },
+        trips.takeIf { it > 0 }?.let { if (it == 1) "1 trip" else "$it trips" },
+    ).joinToString(" and ") + " added"
 
 /** Centre on the country's label point, zoomed so most of it fits. */
 /** Keeps the open region's or city's card across a recreation, an unfold or a theme change. */

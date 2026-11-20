@@ -115,6 +115,7 @@ class DetailActions(
     val onRemoveMemory: (tripId: String, memoryId: String) -> Unit,
     /** Picks the photo a trip's header shows. */
     val onCover: (tripId: String, memoryId: String) -> Unit = { _, _ -> },
+    val onPhotosPicked: (tripId: String) -> Unit = {},
     /** Moves a trip's memory to one of its stops, or to the trip as a whole when null. */
     val onMoveMemory: (tripId: String, memoryId: String, stop: String?) -> Unit = { _, _, _ -> },
     /** Keeps memories with a place of a country, or the country itself when the place is null. */
