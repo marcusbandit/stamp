@@ -33,6 +33,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -332,33 +333,75 @@ private fun PinMap(
         }
     }
 
-    // Keyed on the towns too: they may still be loading when the dialog opens.
-    LaunchedEffect(map, cities) {
+    // The style goes on once per map, at once: land and borders show while the towns load.
+    var style by remember { mutableStateOf<Style?>(null) }
+    val goToNow by rememberUpdatedState(goTo)
+    LaunchedEffect(map) {
         val m = map ?: return@LaunchedEffect
-        m.setStyle(Style.Builder().fromJson(pinStyle(palette, country.country))) { style ->
-            style.getSourceAs<GeoJsonSource>("towns")?.setGeoJson(
-                FeatureCollection.fromFeatures(
-                    cities.map { c ->
-                        Feature.fromGeometry(Point.fromLngLat(c.lon, c.lat)).apply { addNumberProperty("pop", c.population) }
-                    },
-                ),
-            )
+        m.setStyle(Style.Builder().fromJson(pinStyle(palette, country.country))) { loaded ->
+            style = loaded
             // Frame the country's biggest piece, so France opens on France, not on French Guiana.
-            // Not when the map was opened on a town: framing would undo flying there.
-            if (goTo == null) mainBounds(country)?.let { b ->
-                mapView.post { m.moveCamera(CameraUpdateFactory.newLatLngBounds(b, with(density) { 48.dp.roundToPx() })) }
+            // Not when the map was opened on a town, or has been sent to one since: framing would
+            // undo flying there.
+            if (goToNow == null) mainBounds(country)?.let { b ->
+                mapView.post { if (goToNow == null) m.moveCamera(CameraUpdateFactory.newLatLngBounds(b, with(density) { 48.dp.roundToPx() })) }
             }
         }
-        val pad = with(density) { 6.dp.toPx() }
-        val gap = with(density) { LABEL_GAP.dp.toPx() }
-        val charW = with(density) { 7.dp.toPx() }
-        val lineH = with(density) { 18.dp.toPx() }
-        fun report() {
+    }
+
+    // The town labels follow the map. Which towns get a name is worked out about 30 times a second
+    // while it moves, since that asks the map where hundreds of towns are; in between, only the
+    // names already chosen move with it, every frame. The listeners are added once per map.
+    val townsNow by rememberUpdatedState(cities)
+    val onMoveNow by rememberUpdatedState(onMove)
+    val densityNow by rememberUpdatedState(density)
+    var relabel by remember { mutableStateOf<(() -> Unit)?>(null) }
+    DisposableEffect(map) {
+        val m = map ?: return@DisposableEffect onDispose { }
+        var last = 0L
+        var chosen: List<MapLabel> = emptyList()
+        fun report(force: Boolean) {
             val target = m.cameraPosition.target ?: return
-            onMove(target, placeLabels(m, cities, charW, lineH, pad, gap))
+            val now = android.os.SystemClock.uptimeMillis()
+            chosen = if (force || now - last >= 33) {
+                last = now
+                with(densityNow) {
+                    placeLabels(m, townsNow, 7.dp.toPx(), 18.dp.toPx(), 6.dp.toPx(), LABEL_GAP.dp.toPx())
+                }
+            } else {
+                chosen.map { l ->
+                    val p = m.projection.toScreenLocation(LatLng(l.lat, l.lon))
+                    MapLabel(l.name, p.x, p.y, l.big, l.lat, l.lon)
+                }
+            }
+            onMoveNow(target, chosen)
         }
-        m.addOnCameraMoveListener { report() }
-        m.addOnCameraIdleListener { report() }
+        val move = MapLibreMap.OnCameraMoveListener { report(force = false) }
+        val idle = MapLibreMap.OnCameraIdleListener { report(force = true) }
+        m.addOnCameraMoveListener(move)
+        m.addOnCameraIdleListener(idle)
+        relabel = { report(force = true) }
+        onDispose {
+            relabel = null
+            m.removeOnCameraMoveListener(move)
+            m.removeOnCameraIdleListener(idle)
+        }
+    }
+
+    // The towns may still be loading when the dialog opens. They are built off the main thread, a
+    // big country has thousands, and swapped in without touching the style or the camera; their
+    // names are placed straight after, even if the map has stopped moving.
+    LaunchedEffect(style, cities) {
+        val s = style ?: return@LaunchedEffect
+        val towns = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            FeatureCollection.fromFeatures(
+                cities.map { c ->
+                    Feature.fromGeometry(Point.fromLngLat(c.lon, c.lat)).apply { addNumberProperty("pop", c.population) }
+                },
+            )
+        }
+        s.getSourceAs<GeoJsonSource>("towns")?.setGeoJson(towns)
+        relabel?.invoke()
     }
 
     LaunchedEffect(map, goTo) {
