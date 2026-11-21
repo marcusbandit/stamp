@@ -9,7 +9,18 @@ import android.os.Build
 import android.provider.MediaStore
 import androidx.exifinterface.media.ExifInterface
 import com.marcusrosado.stamp.data.Atlas
+import com.marcusrosado.stamp.data.AutoTrips
 import com.marcusrosado.stamp.data.Country
+import com.marcusrosado.stamp.data.FoundTrip
+import com.marcusrosado.stamp.data.Homes
+import com.marcusrosado.stamp.data.PartialDate
+import com.marcusrosado.stamp.data.PhotoPoints
+import com.marcusrosado.stamp.data.Places
+import com.marcusrosado.stamp.data.TownIndex
+import com.marcusrosado.stamp.data.Trip
+import com.marcusrosado.stamp.data.TripUpdate
+import com.marcusrosado.stamp.data.Visit
+import com.marcusrosado.stamp.data.placeIdOf
 import com.marcusrosado.stamp.data.PhotoEvidence
 import com.marcusrosado.stamp.data.SeenFrom
 import com.marcusrosado.stamp.data.SeenPoint
@@ -42,7 +53,16 @@ data class Found(val country: Country, val evidence: PhotoEvidence)
  * Where a part-by-part Takeout import stands: the part numbers read so far, the part just
  * handed over and whether it had been read before. [uri] is that part, to delete once read.
  */
-data class Parts(val numbers: List<Int>, val count: Int, val last: Int?, val again: Boolean, val uri: String, val next: Int)
+data class Parts(
+    val numbers: List<Int>,
+    val count: Int,
+    val last: Int?,
+    val again: Boolean,
+    val uri: String,
+    val next: Int,
+    /** Every part read in this go, [uri] last: several can be picked at once. */
+    val uris: List<String> = listOf(uri),
+)
 
 sealed interface ScanState {
     data object Idle : ScanState
@@ -65,6 +85,16 @@ sealed interface ScanState {
         val picks: Map<String, Boolean> = emptyMap(),
         /** Set when the export is being read one part at a time. */
         val parts: Parts? = null,
+        /** The picked zips read into this review, by name and size, so one picked twice counts once. */
+        val zips: Set<String> = emptySet(),
+        /** Why the last zip added could not be read, until the user has seen it. */
+        val problem: String? = null,
+        /** Picked files that were not parts of the export being read, left alone. */
+        val skipped: Int = 0,
+        /** Trips the photos show that the user does not have yet, oldest first. */
+        val trips: List<FoundTrip> = emptyList(),
+        /** What the photos fill in on trips the user has already. */
+        val updates: List<TripUpdate> = emptyList(),
     ) : ScanState
 
     data class Failed(val message: String, val source: ScanSource = ScanSource.Device) : ScanState
@@ -85,7 +115,16 @@ class PhotoScanner(
     private val onPoints: (List<SeenPoint>) -> Unit = {},
     /** Where an export read one part at a time is kept between parts. */
     private val partsFile: java.io.File? = null,
+    /** The bundled cities, for the towns trips stop at; null leaves trips out. */
+    private val places: suspend () -> Places? = { null },
+    /** The user's marks: where they live, and the trips they have already. */
+    private val visits: suspend () -> Map<String, Visit> = { emptyMap() },
 ) {
+    /** Every photo place of the review that is open, so a zip added to it finds trips across both. */
+    private var reviewPoints = PhotoPoints()
+    private var towns: TownIndex? = null
+    private val pointsFile get() = partsFile?.let { java.io.File(it.path.removeSuffix(".json") + "-points.bin") }
+
     private val _state = MutableStateFlow<ScanState>(ScanState.Idle)
     val state: StateFlow<ScanState> = _state.asStateFlow()
     private var job: Job? = null
@@ -93,19 +132,80 @@ class PhotoScanner(
     /** Scans the photos on this phone. */
     fun start() = launch(ScanSource.Device) { scanDevice(it) }
 
-    /** Reads the Google Takeout zips the user picked. */
-    fun importTakeout(zips: List<Uri>) = launch(ScanSource.Takeout) { readTakeout(zips, it) }
+    /**
+     * Reads the Google Takeout zips the user picked. With a review of picked zips still open,
+     * they add to it, ticks and all.
+     */
+    fun importTakeout(zips: List<Uri>) {
+        // Picked while parts are being read, they are more parts of the same export.
+        if ((_state.value as? ScanState.Done)?.parts != null) { importTakeoutParts(zips, sameExport = true); return }
+        val before = (_state.value as? ScanState.Done)?.takeIf { it.source == ScanSource.Takeout && it.parts == null }
+        launch(ScanSource.Takeout) { c ->
+            if (before == null) return@launch readTakeout(zips, c)
+            // A zip that cannot be read leaves the review it was added to as it was.
+            try {
+                readTakeout(zips, c, before)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                before.copy(problem = e.message ?: e.javaClass.simpleName)
+            }
+        }
+    }
+
+    /** The user saw why a zip could not be read. */
+    fun problemSeen() {
+        _state.update { s -> if (s is ScanState.Done) s.copy(problem = null) else s }
+    }
 
     /**
      * Reads one part of a Takeout export, handed over as the user downloads it, and adds what
      * it holds to the parts read before. False when another read is still running.
      */
-    fun importTakeoutPart(part: Uri): Boolean {
+    fun importTakeoutPart(part: Uri): Boolean = importTakeoutParts(listOf(part), sameExport = false)
+
+    /**
+     * Reads [picked] one after another as parts. With [sameExport], only parts of the export
+     * being read count: anything else is left alone, never read into the session or deleted.
+     */
+    private fun importTakeoutParts(picked: List<Uri>, sameExport: Boolean): Boolean {
         if (job?.isActive == true) return false
         // One review across all the parts: ticks changed after an earlier part stay.
-        val picks = (_state.value as? ScanState.Done)?.takeIf { it.parts != null }?.picks.orEmpty()
+        val open = (_state.value as? ScanState.Done)?.takeIf { it.parts != null }
+        val picks = open?.picks.orEmpty()
         reading = true
-        launch(ScanSource.Takeout) { c -> readPart(part, c).let { if (it is ScanState.Done) it.copy(picks = picks) else it } }
+        launch(ScanSource.Takeout) { c ->
+            val export = partsFile?.let { Takeout.Session.read(it).export }
+            val parts = if (!sameExport) picked else picked.filter { u ->
+                val name = displayName(u)
+                name != null && Takeout.partNumber(name) != null && Takeout.exportOf(name) == export
+            }
+            val skipped = picked.size - parts.size
+            var done: ScanState.Done? = null
+            val read = ArrayList<String>()
+            for (p in parts) {
+                val r = try {
+                    readPart(p, c)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    // The parts read so far stay counted; the one that failed is named.
+                    val kept = done ?: open ?: return@launch ScanState.Failed(e.message ?: e.javaClass.simpleName, ScanSource.Takeout)
+                    return@launch kept.copy(
+                        picks = picks, skipped = skipped, problem = e.message ?: e.javaClass.simpleName,
+                        parts = kept.parts?.copy(uris = read),
+                    )
+                }
+                if (r !is ScanState.Done) return@launch r
+                done = r
+                read += p.toString()
+            }
+            val last = done
+                // Nothing picked was a part of this export: the review stays as it was.
+                ?: return@launch open?.copy(skipped = skipped, parts = open.parts?.copy(uris = emptyList()))
+                    ?: ScanState.Failed("None of those files is a part of this export.", ScanSource.Takeout)
+            last.copy(picks = picks, skipped = skipped, parts = last.parts?.copy(uris = read))
+        }
         return true
     }
 
@@ -116,6 +216,7 @@ class PhotoScanner(
     /** Forgets the parts read so far, once their countries are added. */
     fun endParts() {
         partsFile?.delete()
+        pointsFile?.delete()
     }
 
     /** Stops a running scan, or clears a finished or failed one, back to Idle. */
@@ -139,7 +240,22 @@ class PhotoScanner(
         _state.value = ScanState.Running(0, 0, emptyList())
         job = scope.launch(Dispatchers.IO) {
             val result = try {
-                body(Collector(atlas(), gen, source))
+                val a = atlas()
+                val c = Collector(a, gen, source)
+                when (val r = body(c)) {
+                    // Nothing read, as when no file picked was a part of the export: the review
+                    // comes back as it was, trips and all.
+                    is ScanState.Done -> if (c.all.size == 0) r else {
+                        reviewPoints = c.all
+                        val (trips, updates) = runCatching { findTrips(c.all, a) }.getOrElse { e ->
+                            if (e is CancellationException) throw e
+                            android.util.Log.w("Stamp", "Could not find trips", e)
+                            emptyList<FoundTrip>() to emptyList()
+                        }
+                        r.copy(trips = trips, updates = updates)
+                    }
+                    else -> r
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -150,6 +266,77 @@ class PhotoScanner(
         }
     }
 
+    /** The trips in [points] the user does not have yet, and what the rest add to trips they have. */
+    private suspend fun findTrips(points: PhotoPoints, atlas: Atlas): Pair<List<FoundTrip>, List<TripUpdate>> {
+        val p = places() ?: return emptyList<FoundTrip>() to emptyList()
+        val index = towns ?: TownIndex(p.byId.values).also { towns = it }
+        val v = visits()
+        val homes = Homes.all(v)
+        fun spot(place: String, visit: Visit): Pair<Double, Double>? =
+            visit.pins[place]?.let { it.lat to it.lon } ?: p.byId[placeIdOf(place)]?.let { it.lat to it.lon }
+        // A home the user gave counts on the days it holds; one with no dates only where the
+        // photos show no home of their own.
+        val dated = homes.filter { it.from != null || it.to != null }
+        val homeAt = { d: java.time.LocalDate ->
+            val day = PartialDate(d.year, d.monthValue, d.dayOfMonth)
+            dated.firstOrNull { h -> (h.from == null || !day.endsBefore(h.from)) && (h.to == null || !h.to.endsBefore(day)) }
+                ?.let { spot(it.place, it.visit) }
+        }
+        val now = homes.firstOrNull { it.now }?.let { spot(it.place, it.visit) }
+        val existing = v.values.flatMap { it.trips }.distinctBy { it.id }
+        fun land(lat: Double, lon: Double) = atlas.locate(lat, lon)?.id?.let { if (split()) it else atlas.countryOf(it) }
+        val found = AutoTrips.find(points.toList(), index, homeAt = homeAt, fallback = now).mapNotNull { t ->
+            val lands = t.stops.mapNotNull { land(it.city.lat, it.city.lon) }.distinct()
+            when {
+                lands.isEmpty() -> null
+                // Every trip of a place the user lived in is a stay there, its towns homes: a
+                // trip found inside it would turn into one.
+                v[lands.first()]?.state == com.marcusrosado.stamp.data.TravelState.Lived -> null
+                else -> t.copy(land = lands.first(), lands = lands)
+            }
+        }
+        // One the user has already is filled in instead: towns that fit between its stops, and
+        // the dates they left out. Two found trips on one of theirs fill it in one after the other.
+        val fresh = ArrayList<FoundTrip>()
+        val filled = LinkedHashMap<String, TripUpdate>()
+        // A stay in a place the user lived is never filled in: its towns are homes.
+        val stays = v.values.filter { it.state == com.marcusrosado.stamp.data.TravelState.Lived }.flatMapTo(HashSet()) { it.trips.map { t -> t.id } }
+        val visits = existing.filter { it.id !in stays }
+        for (t in found) {
+            val mine = AutoTrips.overlapping(t, t.lands.toSet(), visits)
+            if (mine == null) {
+                if (!AutoTrips.known(t, t.lands.toSet(), existing)) fresh += t
+                continue
+            }
+            val before = filled[mine.id]
+            val base = before?.let { applied(mine, it) } ?: mine
+            // A town the user put on another trip of those days stays on it.
+            val elsewhere = visits.filter { it.id != mine.id && AutoTrips.known(t, t.lands.toSet(), listOf(it)) }
+                .flatMapTo(HashSet()) { o -> o.places.map(::placeIdOf) }
+            val u = AutoTrips.update(base, t, elsewhere = elsewhere)?.let { u -> u.copy(lands = u.stops.mapNotNull { land(it.city.lat, it.city.lon) }.distinct()) } ?: continue
+            filled[mine.id] = if (before == null) u else before.copy(
+                stops = before.stops + u.stops,
+                arrived = before.arrived + u.arrived,
+                left = before.left + u.left,
+                date = before.date ?: u.date,
+                lands = (before.lands + u.lands).distinct(),
+            )
+        }
+        return fresh to filled.values.toList()
+    }
+
+    /** [trip] with [u] in, only as far as working out the next update needs. */
+    private fun applied(trip: Trip, u: TripUpdate): Trip {
+        var cities = trip.cities
+        for (s in u.stops) cities = cities.take(s.at) + s.city.id + cities.drop(s.at)
+        return trip.copy(
+            cities = cities,
+            arrived = trip.arrived + u.arrived + u.stops.associate { it.city.id to it.arrived },
+            left = trip.left + u.left + u.stops.associate { it.city.id to it.left },
+            date = trip.date ?: u.date,
+        )
+    }
+
     private fun publish(gen: Int, s: ScanState) {
         if (gen == generation) _state.value = s
     }
@@ -158,6 +345,8 @@ class PhotoScanner(
     private inner class Collector(private val atlas: Atlas, private val gen: Int, private val source: ScanSource) {
         private val spans = HashMap<String, LongArray>()
         private val points = ArrayList<SeenPoint>()
+        /** This read's photo places on top of [base], for trips. */
+        val all = PhotoPoints()
         private val from = if (source == ScanSource.Takeout) SeenFrom.GooglePhotos else SeenFrom.Photo
 
         /** Hands the positions found so far to be kept. */
@@ -184,6 +373,24 @@ class PhotoScanner(
                 span[1] = maxOf(span[1], s.second)
             }
             located = session.located
+            // Several parts read in one go share this collector: the file is read once.
+            if (!pointsRead) pointsFile?.let { all.addAll(PhotoPoints.read(it)) }
+            pointsRead = true
+        }
+
+        private var pointsRead = false
+
+        /** Starts from a review the new zips add to. */
+        fun seed(done: ScanState.Done) {
+            done.found.forEach { f ->
+                // Kept the way the first zip counted; with separate land masses off now, an
+                // island's span joins its country's.
+                val span = spans.getOrPut(if (split()) f.country.id else atlas.countryOf(f.country.id)) { longArrayOf(Long.MAX_VALUE, Long.MIN_VALUE) }
+                if (f.evidence.firstMs > 0) span[0] = minOf(span[0], f.evidence.firstMs)
+                if (f.evidence.lastMs > 0) span[1] = maxOf(span[1], f.evidence.lastMs)
+            }
+            located = done.located
+            all.addAll(reviewPoints)
         }
 
         fun spans(): Map<String, Pair<Long, Long>> = spans.mapValues { (_, s) -> s[0] to s[1] }
@@ -191,6 +398,7 @@ class PhotoScanner(
         fun add(lat: Double, lon: Double, ms: Long) {
             located++
             points += SeenPoint(ms, lat, lon, from)
+            if (ms > 0) all.add(ms, lat, lon)
             val key = (lat * 1000).roundToInt().toLong() * 1_000_000 + (lon * 1000).roundToInt()
             val id = if (cache.containsKey(key)) cache[key] else atlas.locate(lat, lon)?.id.also { cache[key] = it }
             id ?: return
@@ -252,12 +460,16 @@ class PhotoScanner(
         return c.done(photos.size)
     }
 
-    private suspend fun readTakeout(zips: List<Uri>, c: Collector): ScanState {
+    private suspend fun readTakeout(picked: List<Uri>, c: Collector, before: ScanState.Done? = null): ScanState {
         val job = coroutineContext[Job]
+        before?.let(c::seed)
+        val keys = picked.associateWith { "${displayName(it)} ${size(it)}" }
+        val read = before?.zips.orEmpty()
+        val zips = picked.filter { keys[it] !in read }.distinctBy { keys[it] }
         // First pass reads only the central directories, so progress has a real total.
         val total = zips.sumOf { uri -> withChannel(uri) { Takeout.countJson(it) } }
         var checked = 0
-        var photos = 0
+        var photos = before?.total ?: 0
         for (uri in zips) {
             withChannel(uri) { ch ->
                 Takeout.readZip(ch) { entry ->
@@ -272,7 +484,10 @@ class PhotoScanner(
             coroutineContext.ensureActive()
             c.progress(checked, total)
         }
-        return c.done(photos)
+        return c.done(photos).copy(
+            picks = before?.picks.orEmpty(),
+            zips = read + zips.mapNotNull { keys[it] },
+        )
     }
 
     private suspend fun readPart(uri: Uri, c: Collector): ScanState {
@@ -282,7 +497,8 @@ class PhotoScanner(
         val number = name?.let(Takeout::partNumber) ?: 0
         val export = name?.let(Takeout::exportOf).orEmpty()
         // A part of another export starts over, so an old unfinished one never mixes in.
-        val before = Takeout.Session.read(file).takeIf { it.export == export } ?: Takeout.Session(export = export)
+        val before = Takeout.Session.read(file).takeIf { it.export == export }
+            ?: Takeout.Session(export = export).also { pointsFile?.delete() }
         c.seed(before)
         fun parts(s: Takeout.Session, again: Boolean) =
             Parts(s.numbers, s.parts.size, number.takeIf { it > 0 }, again, uri.toString(), s.next)
@@ -302,6 +518,7 @@ class PhotoScanner(
         }
         coroutineContext.ensureActive()
         val after = before.plus(key, number, photos, c.located, c.spans())
+        pointsFile?.let { c.all.write(it) }
         Takeout.Session.write(file, after)
         return c.done(after.photos, parts(after, again = false))
     }

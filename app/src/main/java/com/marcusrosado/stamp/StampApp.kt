@@ -382,7 +382,16 @@ class StampApp : Application(), androidx.work.Configuration.Provider {
         // One writer at a time, so two quick picks land in the order they were made.
         scope.launch(lookWriter) { runCatching { java.io.File(filesDir, LOOK_FILE).writeText(look.value) } }
     }
-    val scanner by lazy { PhotoScanner(this, scope, { atlas.await() }, { split.on.value }, onPoints = { seen.add(it) }, partsFile = File(filesDir, TAKEOUT_PARTS_FILE)) }
+
+    val scanner by lazy {
+        PhotoScanner(
+            this, scope, { atlas.await() }, { split.on.value },
+            onPoints = { seen.add(it) },
+            partsFile = File(filesDir, TAKEOUT_PARTS_FILE),
+            places = { runCatching { places.await() }.getOrNull() },
+            visits = { runCatching { visitsLoading.await().visits.value }.getOrDefault(emptyMap()) },
+        )
+    }
 
     override fun onCreate() {
         super.onCreate()

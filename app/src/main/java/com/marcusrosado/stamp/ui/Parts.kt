@@ -148,8 +148,9 @@ fun CountryDetail(
     val undoable = LocalUndo.current != null
     // A change of mark that would throw something away, waiting for the user to say yes.
     var asking by remember(country.id) { mutableStateOf<Pair<TravelState?, Loss>?>(null) }
-    // The visit a city is being picked for.
+    // The visit a city is being picked for, and where on it the stop goes: null is last.
     var pickingFor by remember(country.id) { mutableStateOf<String?>(null) }
+    var pickingAt by remember(country.id) { mutableStateOf<Int?>(null) }
     // The city open in its dialog, and the visit it was opened from, if any.
     var openCity by remember(country.id) { mutableStateOf<Pair<String, String?>?>(null) }
     var pickingRegion by remember(country.id) { mutableStateOf(false) }
@@ -247,7 +248,7 @@ fun CountryDetail(
                 cityName = cityName,
                 onAdd = { actions.onAddTrip(country.id) },
                 onRemove = { actions.onRemoveTrip(country.id, it.id) },
-                onPickCity = { pickingFor = it.id },
+                onPickCity = { pickingFor = it.id; pickingAt = null },
                 onOpenTimeline = { timelineFor = it.id },
             )
             if (places != null) {
@@ -322,12 +323,19 @@ fun CountryDetail(
                 onAddDayPlace = { stop -> dayFor = tripId to stop },
                 onRemoveDayPlace = { stop, p -> actions.onRemoveDayPlace(tripId, stop, p) },
                 onSlept = { stop, p -> actions.onSlept(tripId, stop, p) },
-                onAddStop = { pickingFor = tripId },
+                onAddStop = { pickingFor = tripId; pickingAt = null },
+                onAddStopAt = { at -> pickingFor = tripId; pickingAt = at },
+                onAddPhotoStop = { at, cityId, arrived, left ->
+                    actions.onAddCity(country.id, tripId, cityId, at)
+                    actions.onStopDates(tripId, cityId, arrived, left)
+                },
+                onNotAStop = { actions.onNotAStop(tripId, it) },
                 onOpenPlace = { openCity = it to tripId },
                 onAddMemories = { actions.onAddMemories(tripId, it) },
                 onUpdateMemory = { actions.onUpdateMemory(tripId, it) },
                 onRemoveMemory = { actions.onRemoveMemory(tripId, it) },
                 onCover = { actions.onCover(tripId, it) },
+                onPhotosPicked = { actions.onPhotosPicked(tripId) },
                 onMoveMemory = { m, stop -> actions.onMoveMemory(tripId, m, stop) },
                 onDuplicate = if (v.state == TravelState.Lived) null else {
                     { actions.onDuplicateTrip(tripId)?.let { copyFor = it } }
@@ -356,8 +364,14 @@ fun CountryDetail(
             already = trip.cities.map(::placeIdOf).toSet(),
             // The country's other cities first: the ones on this trip are there already.
             mine = visit?.cities.orEmpty().filterNot { it in trip.cities.map(::placeIdOf) },
+            // Put between two stops, the picker says which.
+            title = pickingAt?.takeIf { it in trip.cities.indices }?.let { at ->
+                val next = placeOf(trip.cities[at], visit, places)?.name ?: "the next stop"
+                trip.cities.getOrNull(at - 1)?.let { "Between ${placeOf(it, visit, places)?.name ?: "the stop before"} and $next" }
+                    ?: "Before $next"
+            },
             onPick = { c ->
-                actions.onAddCity(country.id, trip.id, c.id)
+                actions.onAddCity(country.id, trip.id, c.id, pickingAt)
                 pickingFor = null
             },
             onPin = { q ->
@@ -374,7 +388,7 @@ fun CountryDetail(
             cities = places?.citiesIn(citiesCountry(country)).orEmpty(),
             initialName = name,
             onAttach = { pin ->
-                actions.onAddPin(country.id, tripId, pin)
+                actions.onAddPin(country.id, tripId, pin, pickingAt)
                 pinning = null
             },
             onDismiss = { pinning = null },

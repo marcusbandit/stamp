@@ -1,5 +1,6 @@
 package com.marcusrosado.stamp
 
+import com.marcusrosado.stamp.data.Leg
 import com.marcusrosado.stamp.data.LegPath
 import com.marcusrosado.stamp.data.Step
 import com.marcusrosado.stamp.data.Travel
@@ -124,5 +125,49 @@ class LegsTest {
         assertEquals(listOf(Travel.Train, Travel.Bus, Travel.Walk), parts.map { it.second })
         assertEquals(10.0, parts[0].first.last().second, 1e-9)
         assertEquals(20.0, parts[2].first.first().second, 1e-9)
+    }
+
+    @Test fun aStopPutBetweenTwoGoesThereAndTheWayOnIsKept() {
+        val s = store()
+        s.set("JPN", TravelState.Visited)
+        val id = trip(s).id
+        for (c in listOf("tokyo", "kyoto")) s.addCity("JPN", id, c)
+        s.setLeg(id, "tokyo", "kyoto", listOf(Step(Travel.Train)))
+        s.addCity("JPN", id, "nagoya", at = 1)
+        val t = trip(store())
+        assertEquals(listOf("tokyo", "nagoya", "kyoto"), t.cities)
+        assertEquals(listOf(Travel.Train), t.waysBetween("nagoya", "kyoto"))
+        assertEquals(emptyList<Travel>(), t.waysBetween("tokyo", "nagoya"))
+        // Taken off again, the trip is as it was.
+        s.removeCity(id, "nagoya")
+        assertEquals(listOf(Travel.Train), trip(store()).waysBetween("tokyo", "kyoto"))
+    }
+
+    @Test fun aStopAddedFirstOrLastKeepsTheWayThereAndHome() {
+        val s = store()
+        s.set("JPN", TravelState.Visited)
+        val id = trip(s).id
+        s.addCity("JPN", id, "osaka")
+        s.setLeg(id, Leg.START, "osaka", listOf(Step(Travel.Plane)))
+        s.setLeg(id, "osaka", Leg.END, listOf(Step(Travel.Ferry)))
+        s.addCity("JPN", id, "kobe", at = 0)
+        s.addCity("JPN", id, "nara")
+        val t = trip(store())
+        assertEquals(listOf("kobe", "osaka", "nara"), t.cities)
+        assertEquals(listOf(Travel.Plane), t.waysBetween(Leg.START, "kobe"))
+        assertEquals(listOf(Travel.Ferry), t.waysBetween("nara", Leg.END))
+        assertEquals(emptyList<Travel>(), t.waysBetween("kobe", "osaka"))
+    }
+
+    @Test fun aPinCanGoBetweenStopsToo() {
+        val s = store()
+        s.set("JPN", TravelState.Visited)
+        val id = trip(s).id
+        for (c in listOf("tokyo", "kyoto")) s.addCity("JPN", id, c)
+        s.addPin("JPN", id, com.marcusrosado.stamp.data.Pin("Lakeside camp", 35.3, 138.7), at = 1)
+        val t = trip(store())
+        assertEquals(3, t.cities.size)
+        assertEquals("tokyo", t.cities.first())
+        assertEquals("kyoto", t.cities.last())
     }
 }

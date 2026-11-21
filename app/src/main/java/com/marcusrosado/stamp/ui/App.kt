@@ -638,6 +638,7 @@ private fun App(
                     focus = Focus(lat, lon, CITY_ZOOM)
                 },
                 onStopDates = app.visits::setStopDates,
+                onNotAStop = app.visits::notAStop,
                 onStopOrder = app.visits::setStopOrder,
                 onLeg = { t, from, to, steps, around -> app.visits.setLeg(t, from, to, steps, around) },
                 onTripStart = app.visits::setTripStart,
@@ -650,6 +651,7 @@ private fun App(
                 onUpdateMemory = app.visits::updateMemory,
                 onRemoveMemory = { a, b -> undo.run("Memory removed") { app.visits.removeMemory(a, b) } },
                 onCover = app.visits::setCover,
+                onPhotosPicked = app.visits::photosPicked,
                 onMoveMemory = app.visits::moveMemory,
                 onAddPlaceMemories = app.visits::addPlaceMemories,
                 onUpdatePlaceMemory = app.visits::updatePlaceMemory,
@@ -791,7 +793,7 @@ private fun App(
             if (value.isEmpty() && journey.lines != null) value = draw(Journey(journey.visits, journey.places, journey.airports))
             value = draw(journey)
         }
-        androidx.compose.runtime.CompositionLocalProvider(LocalJourney provides journey, LocalMapRoutes provides mapRoutes) {
+        androidx.compose.runtime.CompositionLocalProvider(LocalJourney provides journey, LocalMapRoutes provides mapRoutes, LocalSeen provides seen) {
             when (state.posture) {
                 Posture.Portrait -> PortraitLayout(state)
                 // One layout for the big screen, flat or bent, so bending it never swaps the tree.
@@ -850,9 +852,14 @@ private fun App(
                     visits = visits,
                     home = home,
                     onStartDevice = { app.flags.set(FLAG_SCANNED, true); app.scanner.start() },
-                    onAdd = { found, mark ->
-                        if (mark.isEmpty()) app.visits.addFromPhotos(found, mark)
-                        else undo.run(if (mark.size == 1) "1 country added" else "${mark.size} countries added") { app.visits.addFromPhotos(found, mark) }
+                    onAdd = { found, mark, trips, updates ->
+                        val add = {
+                            app.visits.addFromPhotos(found, mark)
+                            app.visits.addFoundTrips(trips)
+                            app.visits.applyTripUpdates(updates)
+                        }
+                        if (mark.isEmpty() && trips.isEmpty() && updates.isEmpty()) add()
+                        else undo.run(addedLine(mark.size, trips.size, updates.size)) { add() }
                         // Only a part-by-part review ends its parts; any other scan leaves them waiting.
                         if ((app.scanner.state.value as? ScanState.Done)?.parts != null) app.scanner.endParts()
                         app.scanner.cancel()
@@ -863,12 +870,27 @@ private fun App(
                     onReset = { app.scanner.cancel() },
                     onClose = { onScanOpen(false); onScanTakeout(false) },
                     onImportTakeout = { app.scanner.importTakeout(it) },
+                    onProblemSeen = { app.scanner.problemSeen() },
                     startInTakeout = scanTakeout,
                 )
             }
         }
         UndoHost(undo, aboveBar = if (state.posture == Posture.Portrait) 80.dp else 0.dp)
     }
+    }
+}
+
+/** "2 countries and 3 trips added", or "2 trips updated". */
+private fun addedLine(countries: Int, trips: Int, updates: Int): String {
+    val added = listOfNotNull(
+        countries.takeIf { it > 0 }?.let { if (it == 1) "1 country" else "$it countries" },
+        trips.takeIf { it > 0 }?.let { if (it == 1) "1 trip" else "$it trips" },
+    )
+    val updated = if (updates == 1) "1 trip updated" else "$updates trips updated"
+    return when {
+        added.isNotEmpty() && updates > 0 -> added.joinToString(" and ") + " added, " + updated
+        added.isNotEmpty() -> added.joinToString(" and ") + " added"
+        else -> updated
     }
 }
 

@@ -1,5 +1,9 @@
 package com.marcusrosado.stamp.ui
 
+import androidx.compose.material.icons.outlined.AddLocationAlt
+import androidx.compose.material.icons.outlined.Luggage
+import com.marcusrosado.stamp.data.FoundTrip
+import com.marcusrosado.stamp.data.TripUpdate
 import android.Manifest
 import android.content.Intent
 import android.net.Uri
@@ -50,6 +54,7 @@ import androidx.compose.material3.TriStateCheckbox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -121,7 +126,7 @@ fun ScanScreen(
     visits: Map<String, Visit>,
     home: String?,
     onStartDevice: () -> Unit,
-    onAdd: (found: Map<String, PhotoEvidence>, mark: Set<String>) -> Unit,
+    onAdd: (found: Map<String, PhotoEvidence>, mark: Set<String>, trips: List<FoundTrip>, updates: List<TripUpdate>) -> Unit,
     onReset: () -> Unit,
     onClose: () -> Unit,
     /** Ticks changed in the review, by country id, to keep with the finished scan. */
@@ -130,6 +135,8 @@ fun ScanScreen(
     onImportTakeout: (List<Uri>) -> Unit = {},
     /** Opens straight on the Google Photos steps, as Settings and the introduction do. */
     startInTakeout: Boolean = false,
+    /** The user saw why a zip could not be read. */
+    onProblemSeen: () -> Unit = {},
 ) {
     var mode by rememberSaveable { mutableStateOf(if (startInTakeout) Mode.Takeout else Mode.Choose) }
     val ask = rememberPhotoAccess(onGranted = { mode = Mode.Choose; onStartDevice() }, onDenied = { mode = Mode.Denied })
@@ -163,6 +170,14 @@ fun ScanScreen(
                 else -> Choose(onDevice = ask, onTakeout = { mode = Mode.Takeout }, onSkip = onClose)
             }
         }
+    }
+    if (state is ScanState.Done && state.problem != null) {
+        SeamAlertDialog(
+            onDismissRequest = onProblemSeen,
+            title = { Text("That zip could not be read") },
+            text = { Text(state.problem) },
+            confirmButton = { TextButton(onClick = onProblemSeen) { Text("OK") } },
+        )
     }
 }
 
@@ -346,18 +361,18 @@ private fun Review(
     state: ScanState.Done,
     visits: Map<String, Visit>,
     home: String?,
-    onAdd: (found: Map<String, PhotoEvidence>, mark: Set<String>) -> Unit,
+    onAdd: (found: Map<String, PhotoEvidence>, mark: Set<String>, trips: List<FoundTrip>, updates: List<TripUpdate>) -> Unit,
     onPick: (Map<String, Boolean>) -> Unit,
     onAgain: () -> Unit,
 ) {
     val context = LocalContext.current
     val parts = state.parts
-    parts?.let { DeletePart(it.uri) }
+    parts?.let { DeleteParts(it.uris) }
     val nextPart = { openUrl(context, Takeout.MANAGE_URL) }
     if (state.found.isEmpty() && parts != null) {
         Message(
-            partsLine(parts), "No photo in the parts so far has a location.", nextLabel(parts), nextPart,
-            secondary = "Finish" to { onAdd(emptyMap(), emptySet()) },
+            partsLine(parts, state.skipped), "No photo in the parts so far has a location.", nextLabel(parts), nextPart,
+            secondary = "Finish" to { onAdd(emptyMap(), emptySet(), emptyList(), emptyList()) },
         )
         return
     }
@@ -384,6 +399,14 @@ private fun Review(
     fun ticked(id: String) = tickable(id) && (state.picks[id] ?: true)
     val open = state.found.map { it.country.id }.filter(::tickable)
     val newCount = open.count(::ticked)
+    // Found trips start ticked too, under their own key in the same picks. A trip goes only
+    // with its countries: one through a country the user unticked is unticked with it, since
+    // adding it would mark that country after all.
+    fun tripTicked(t: FoundTrip) = (state.picks[t.key] ?: true) && t.lands.all { !tickable(it) || ticked(it) }
+    val tripCount = state.trips.count(::tripTicked)
+    // Trips the user has that the photos fill in go in too, unless unticked here.
+    fun updateTicked(u: TripUpdate) = (state.picks[u.key] ?: true) && u.lands.all { !tickable(it) || ticked(it) }
+    val updateCount = state.updates.count(::updateTicked)
     Column(Modifier.fillMaxSize()) {
         Row(
             // The end padding lines the box up with the row boxes under it.
@@ -391,7 +414,7 @@ private fun Review(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                (parts?.let { partsLine(it) + " " } ?: "") +
+                (parts?.let { partsLine(it, state.skipped) + " " } ?: "") +
                     "Found ${countries(state.found.size)} in %,d photos with a location.".format(state.located),
                 modifier = Modifier.weight(1f),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -414,6 +437,26 @@ private fun Review(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
+            if (state.trips.isNotEmpty()) {
+                item(key = "trips") { SectionLabel(if (state.trips.size == 1) "1 trip" else "${state.trips.size} trips") }
+                items(state.trips, key = { it.key }) { t ->
+                    TripRow(t, tripTicked(t)) {
+                        // Ticking a trip ticks the countries it goes to as well.
+                        onPick(if (tripTicked(t)) mapOf(t.key to false) else mapOf(t.key to true) + t.lands.associateWith { true })
+                    }
+                }
+            }
+            if (state.updates.isNotEmpty()) {
+                item(key = "updates") { SectionLabel("Your trips") }
+                items(state.updates, key = { it.key }) { u ->
+                    UpdateRow(u, updateTicked(u)) {
+                        onPick(if (updateTicked(u)) mapOf(u.key to false) else mapOf(u.key to true) + u.lands.associateWith { true })
+                    }
+                }
+            }
+            if (state.trips.isNotEmpty() || state.updates.isNotEmpty()) {
+                item(key = "countries") { SectionLabel(countries(state.found.size).replaceFirstChar { it.uppercase() }) }
+            }
             items(state.found, key = { it.country.id }) { f ->
                 val existing = visits[f.country.id]
                 val note = when {
@@ -431,9 +474,17 @@ private fun Review(
                 )
             }
         }
-        if (parts != null && partsGone[parts.uri] == false) {
+        val stuck = parts?.uris?.count { partsGone[it] == false } ?: 0
+        if (parts != null && stuck > 0) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("${parts.last?.let { "Part $it" } ?: "The part"} is still on the phone.", Modifier.weight(1f))
+                Text(
+                    when {
+                        stuck > 1 -> "$stuck parts are still on the phone."
+                        parts.uris.size == 1 && parts.last != null -> "Part ${parts.last} is still on the phone."
+                        else -> "A part is still on the phone."
+                    },
+                    Modifier.weight(1f),
+                )
                 TextButton(onClick = {
                     runCatching { context.startActivity(Intent(android.app.DownloadManager.ACTION_VIEW_DOWNLOADS)) }
                 }) { Text("Open Downloads") }
@@ -443,25 +494,44 @@ private fun Review(
             OutlinedButton(onClick = nextPart, modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 16.dp)) {
                 Text(nextLabel(parts))
             }
+        } else if (state.source == ScanSource.Takeout) {
+            OutlinedButton(onClick = onAgain, modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 16.dp)) {
+                Text("Add another zip")
+            }
         }
         Button(
             onClick = {
                 // Dates go onto every found country that is or will be marked.
                 val mark = open.filter(::ticked).toSet()
-                onAdd(state.found.associate { it.country.id to it.evidence }, mark)
+                onAdd(
+                    state.found.associate { it.country.id to it.evidence }, mark,
+                    state.trips.filter(::tripTicked), state.updates.filter(::updateTicked),
+                )
             },
             modifier = Modifier.fillMaxWidth().padding(16.dp),
         ) {
-            Text(if (newCount == 0) "Done" else if (newCount == 1) "Add 1 country" else "Add $newCount countries")
+            Text(addLabel(newCount, tripCount, updateCount))
         }
     }
 }
 
-/** "Part 3 read." or, for a part handed over twice, "Part 3 was read before." */
-private fun partsLine(p: Parts): String {
-    val which = p.last?.let { "Part $it" } ?: "That part"
-    val read = if (p.again) "$which was read before." else "$which read."
-    return if (p.count > 1) "$read ${p.count} parts so far." else read
+/**
+ * "Part 3 read." or, for a part handed over twice, "Part 3 was read before." Several picked at
+ * once read "3 parts read."
+ */
+private fun partsLine(p: Parts, skipped: Int = 0): String {
+    val read = when {
+        p.uris.size > 1 -> "${p.uris.size} parts read."
+        p.uris.isEmpty() -> ""
+        else -> (p.last?.let { "Part $it" } ?: "That part").let { if (p.again) "$it was read before." else "$it read." }
+    }
+    val so = if (p.count > 1) "${p.count} parts so far." else ""
+    val other = when (skipped) {
+        0 -> ""
+        1 -> "1 file was not part of this export."
+        else -> "$skipped files were not part of this export."
+    }
+    return listOf(read, so, other).filter { it.isNotEmpty() }.joinToString(" ").ifEmpty { "Nothing new was read." }
 }
 
 private fun nextLabel(p: Parts): String =
@@ -499,28 +569,134 @@ private fun mediaFile(context: android.content.Context, u: Uri): Uri? {
  * may not delete itself, a download another app saved, gets Android's own delete question.
  */
 @Composable
-private fun DeletePart(uri: String) {
+private fun DeleteParts(uris: List<String>) {
     val context = LocalContext.current
-    val ask = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) {
-        partsGone[uri] = it.resultCode == android.app.Activity.RESULT_OK
+    // Parts Android has to ask about, all in one question rather than one sheet each.
+    var asking by remember { mutableStateOf(emptyList<String>()) }
+    val ask = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { r ->
+        asking.forEach { partsGone[it] = r.resultCode == android.app.Activity.RESULT_OK }
     }
-    androidx.compose.runtime.LaunchedEffect(uri) {
-        if (!partsAsked.add(uri)) return@LaunchedEffect
-        val u = Uri.parse(uri)
+    androidx.compose.runtime.LaunchedEffect(uris) {
+        val fresh = uris.filter { partsAsked.add(it) }
+        if (fresh.isEmpty()) return@LaunchedEffect
         val resolver = context.contentResolver
-        val gone = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            (android.provider.DocumentsContract.isDocumentUri(context, u) &&
-                runCatching { android.provider.DocumentsContract.deleteDocument(resolver, u) }.getOrDefault(false)) ||
-                runCatching { resolver.delete(u, null, null) > 0 }.getOrDefault(false)
+        val left = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            fresh.filterNot { uri ->
+                val u = Uri.parse(uri)
+                val gone = (android.provider.DocumentsContract.isDocumentUri(context, u) &&
+                    runCatching { android.provider.DocumentsContract.deleteDocument(resolver, u) }.getOrDefault(false)) ||
+                    runCatching { resolver.delete(u, null, null) > 0 }.getOrDefault(false)
+                if (gone) partsGone[uri] = true
+                gone
+            }
         }
-        if (gone) { partsGone[uri] = true; return@LaunchedEffect }
-        val item = if (Build.VERSION.SDK_INT >= 30) mediaFile(context, u) else null
-        val asked = item != null && runCatching {
-            val sender = android.provider.MediaStore.createDeleteRequest(resolver, listOf(item)).intentSender
+        if (left.isEmpty()) return@LaunchedEffect
+        val items = if (Build.VERSION.SDK_INT >= 30) left.associateWith { mediaFile(context, Uri.parse(it)) } else emptyMap()
+        left.filter { items[it] == null }.forEach { partsGone[it] = false }
+        val askable = left.filter { items[it] != null }
+        if (askable.isEmpty()) return@LaunchedEffect
+        val asked = runCatching {
+            val sender = android.provider.MediaStore.createDeleteRequest(resolver, askable.mapNotNull { items[it] }).intentSender
+            asking = askable
             ask.launch(androidx.activity.result.IntentSenderRequest.Builder(sender).build())
         }.isSuccess
-        if (!asked) partsGone[uri] = false
+        if (!asked) askable.forEach { partsGone[it] = false }
     }
+}
+
+/**
+ * "Add 3 countries and 2 trips", "Update 1 trip" when only trips the user has are filled in,
+ * or "Done" when nothing is ticked.
+ */
+internal fun addLabel(countries: Int, trips: Int, updates: Int = 0): String {
+    val parts = listOfNotNull(
+        countries.takeIf { it > 0 }?.let { if (it == 1) "1 country" else "$it countries" },
+        trips.takeIf { it > 0 }?.let { if (it == 1) "1 trip" else "$it trips" },
+    )
+    val update = if (updates == 1) "update 1 trip" else "update $updates trips"
+    return when {
+        parts.isNotEmpty() && updates > 0 -> "Add " + parts.joinToString(" and ") + ", " + update
+        parts.isNotEmpty() -> "Add " + parts.joinToString(" and ")
+        updates > 0 -> update.replaceFirstChar { it.uppercase() }
+        else -> "Done"
+    }
+}
+
+/** A trip the user has that the photos fill in: the towns it gains, and which trip. */
+@Composable
+private fun UpdateRow(u: TripUpdate, checked: Boolean, onToggle: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onToggle)
+            .padding(vertical = 8.dp, horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.Outlined.AddLocationAlt, contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.width(36.dp),
+        )
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                if (u.stops.isEmpty()) "Dates" else townsLine(u.stops.map { it.city.name }),
+                fontWeight = FontWeight.Medium,
+            )
+            Text(
+                listOfNotNull(u.trip.name.ifBlank { null }, (u.trip.date ?: u.date)?.label).joinToString(" · "),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Checkbox(checked = checked, onCheckedChange = { onToggle() })
+    }
+}
+
+@Composable
+private fun SectionLabel(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(start = 4.dp, top = 12.dp, bottom = 4.dp),
+    )
+}
+
+/** A trip the photos show: its towns in order, and when. */
+@Composable
+private fun TripRow(t: FoundTrip, checked: Boolean, onToggle: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onToggle)
+            .padding(vertical = 8.dp, horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.Outlined.Luggage, contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.width(36.dp),
+        )
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(townsLine(t.stops.map { it.city.name }), fontWeight = FontWeight.Medium)
+            Text(
+                evidenceLine(PhotoEvidence(t.startMs, t.endMs)),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Checkbox(checked = checked, onCheckedChange = { onToggle() })
+    }
+}
+
+/** "Baytown, Hillville and 3 more": the first towns, then how many others. */
+internal fun townsLine(names: List<String>): String = when {
+    names.size <= 3 -> names.joinToString(", ")
+    else -> names.take(2).joinToString(", ") + " and ${names.size - 2} more"
 }
 
 @Composable

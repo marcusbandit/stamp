@@ -111,6 +111,10 @@ data class Trip(
      * gone since, falls back to the first photo, which is what every trip showed before.
      */
     val cover: String? = null,
+    /** Made from the photos and not yet shown them: opening it asks which few to keep. */
+    val pickPhotos: Boolean = false,
+    /** Towns the user's photos showed on this trip that they said were no stop, by city id. */
+    val notStops: Set<String> = emptySet(),
 ) {
     /** The photo the trip's header shows: the one the user picked, else its first photo. */
     val coverPhoto: Memory?
